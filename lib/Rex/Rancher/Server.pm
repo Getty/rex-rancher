@@ -17,6 +17,7 @@ use vars qw(@EXPORT);
 
 @EXPORT = qw(
   install_server
+  update_registries
   get_kubeconfig
   get_token
 );
@@ -130,6 +131,48 @@ sub install_server {
   Rex::Logger::info("$distribution server installation complete");
 
   return 1;
+}
+
+=method update_registries(%opts)
+
+Update the registries.yaml on an existing node and restart containerd
+to pick up the new configuration. Use this after deploying a registry
+into the cluster to make it available to all nodes.
+
+  update_registries(
+    distribution => 'rke2',
+    registries   => {
+      mirrors => {
+        'docker.io'         => { endpoint => ['http://registry.internal:5000'] },
+        'registry.internal' => { endpoint => ['http://registry.internal:5000'] },
+      },
+    },
+  );
+
+=cut
+
+sub update_registries {
+  my (%opts) = @_;
+
+  my $distribution = $opts{distribution} // 'rke2';
+  my $registries   = $opts{registries} or die "update_registries requires 'registries' option\n";
+  my $paths        = _paths($distribution);
+
+  Rex::Logger::info("Updating registries.yaml for $distribution");
+
+  _generate_registries_yaml($paths->{config_dir}, $registries);
+
+  # Restart containerd to pick up new config
+  if ($distribution eq 'rke2') {
+    run "systemctl restart rke2-server.service 2>/dev/null || systemctl restart rke2-agent.service 2>/dev/null",
+      auto_die => 0;
+  }
+  else {
+    run "systemctl restart k3s.service 2>/dev/null || systemctl restart k3s-agent.service 2>/dev/null",
+      auto_die => 0;
+  }
+
+  Rex::Logger::info("Registries updated, containerd restarted");
 }
 
 =method get_kubeconfig($distribution)
