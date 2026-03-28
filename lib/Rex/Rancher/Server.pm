@@ -268,7 +268,10 @@ sub _install_rke2 {
 
   # Enable and start the service
   run "systemctl enable " . $paths->{service}, auto_die => 1;
-  run "systemctl start " . $paths->{service}, auto_die => 1;
+  # --no-block: return immediately; RKE2 first start pulls many images and
+  # exceeds systemctl's default 90s activation timeout. _wait_for_service
+  # polls for actual readiness via kubectl get nodes.
+  run "systemctl start --no-block " . $paths->{service}, auto_die => 1;
 
   _wait_for_service($paths);
 }
@@ -313,15 +316,15 @@ sub _wait_for_service {
   my $kubectl = $paths->{kubectl};
   my $kubeconfig = $paths->{kubeconfig};
 
-  # Wait up to 120 seconds for the node to be ready
+  # Wait up to 5 minutes for the node to be ready (first start pulls images)
   my $ready = 0;
-  for my $i (1..24) {
+  for my $i (1..60) {
     my $output = run "$kubectl --kubeconfig=$kubeconfig get nodes 2>&1", auto_die => 0;
     if ($output && $output =~ /\bReady\b/ && $output !~ /\bNotReady\b/) {
       $ready = 1;
       last;
     }
-    Rex::Logger::info("  Not ready yet, waiting... ($i/24)");
+    Rex::Logger::info("  Not ready yet, waiting... ($i/60)");
     run "sleep 5", auto_die => 0;
   }
 
