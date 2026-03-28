@@ -316,23 +316,23 @@ sub _wait_for_service {
   my $kubectl = $paths->{kubectl};
   my $kubeconfig = $paths->{kubeconfig};
 
-  # Wait up to 5 minutes for the node to be ready (first start pulls images)
-  my $ready = 0;
+  # Wait up to 5 minutes for the API server to respond.
+  # The node will be NotReady until the CNI (Cilium) is installed — that's
+  # expected. We only need the API server up so that install_cilium can run.
+  my $api_up = 0;
   for my $i (1..60) {
     my $output = run "$kubectl --kubeconfig=$kubeconfig get nodes 2>&1", auto_die => 0;
-    if ($output && $output =~ /\bReady\b/ && $output !~ /\bNotReady\b/) {
-      $ready = 1;
+    if ($? == 0 && $output) {
+      $api_up = 1;
+      Rex::Logger::info("  API server is up (node status: " . ($output =~ /NotReady/ ? 'NotReady — CNI pending' : 'Ready') . ")");
       last;
     }
-    Rex::Logger::info("  Not ready yet, waiting... ($i/60)");
+    Rex::Logger::info("  API server not yet responding, waiting... ($i/60)");
     run "sleep 5", auto_die => 0;
   }
 
-  if ($ready) {
-    Rex::Logger::info($paths->{service} . " is ready");
-  }
-  else {
-    Rex::Logger::info($paths->{service} . " may not be fully ready yet — check manually", "warn");
+  unless ($api_up) {
+    Rex::Logger::info($paths->{service} . " API server did not respond — check manually", "warn");
   }
 }
 
