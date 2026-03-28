@@ -261,8 +261,13 @@ sub _install_rke2 {
 
   Rex::Logger::info("Installing RKE2 via install script...");
 
-  # Download and run the RKE2 install script
-  run "curl -sfL " . $paths->{install_url} . " | sh -", auto_die => 1;
+  # Download and run the RKE2 install script.
+  # auto_die => 0: the script emits GPG key import info on STDERR which can
+  # cause a non-zero exit on some distros (Rocky 10). Verify via rpm/dpkg instead.
+  run "curl -sfL " . $paths->{install_url} . " | sh -", auto_die => 0;
+  my $check = run "command -v rke2 2>/dev/null", auto_die => 0;
+  die "RKE2 install script failed — rke2 binary not found\n"
+    unless $check && $check =~ /rke2/;
 
   # Enable and start the service
   run "systemctl enable " . $paths->{service}, auto_die => 1;
