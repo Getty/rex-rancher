@@ -198,6 +198,6 @@ node preparation.
 
 =head1 SEE ALSO
 
-L<Rex::Rancher>, L<Rex::Rancher::GPU>, L<Rex>
+L<Rex::Rancher>, L<Rex::GPU>, L<Rex>
 
 =cut

@@ -47,16 +47,6 @@ my %PATHS = (
 
 =cut
 
-=method _paths($distribution)
-
-Returns a hashref of paths for the given distribution (C<rke2> or C<k3s>).
-Keys: C<config_dir>, C<service>, C<install_url>, C<kubeconfig>, C<kubectl>,
-C<token_file>.
-
-Dies if the distribution is not recognized.
-
-=cut
-
 sub _paths {
   my ($distribution) = @_;
   $distribution //= 'rke2';
@@ -85,7 +75,7 @@ Options:
 
 =item C<node_labels> — node labels (arrayref of C<key=value> strings)
 
-=item C<registries> — private registry config (hashref, see L</_generate_registries_yaml>)
+=item C<registries> — private registry mirror config (hashref). Structure: C<< { mirrors => { "docker.io" => { endpoint => ["https://registry.example.com"] } }, configs => { ... } } >>. Written to C<registries.yaml> in the config directory.
 
 =item C<cilium> — use Cilium as CNI (default: C<1>). Sets C<cni: none> and C<disable-kube-proxy: true>. Set to C<0> to keep RKE2's built-in Canal CNI.
 
@@ -343,34 +333,6 @@ sub _wait_for_service {
   }
 }
 
-=method _generate_registries_yaml($config_dir, $registries)
-
-Generate a C<registries.yaml> file for private container registry
-configuration. Shared between Server and Agent modules.
-
-C<$registries> is a hashref:
-
-  {
-    mirrors => {
-      "docker.io" => {
-        endpoint => ["https://registry.example.com"],
-      },
-    },
-    configs => {
-      "registry.example.com" => {
-        auth => {
-          username => "user",
-          password => "pass",
-        },
-        tls => {
-          insecure_skip_verify => 1,
-        },
-      },
-    },
-  }
-
-=cut
-
 sub _generate_registries_yaml {
   my ($config_dir, $registries) = @_;
 
@@ -426,6 +388,6 @@ C</etc/rancher/E<lt>distE<gt>/> and the same registries.yaml format.
 
 =head1 SEE ALSO
 
-L<Rex>, L<Rex::GPU>
+L<Rex::Rancher>, L<Rex::Rancher::Node>, L<Rex::Rancher::Agent>, L<Rex::Rancher::Cilium>, L<Rex>
 
 =cut
