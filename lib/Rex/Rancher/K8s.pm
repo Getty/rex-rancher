@@ -161,7 +161,7 @@ sub _wait_for_gpu_resource {
   my ($api) = @_;
 
   for my $i (1..24) {
-    eval {
+    my $found = eval {
       my $nodes = $api->list('Node');
       for my $node (@{ $nodes->items }) {
         my $cap = $node->status->capacity;
@@ -169,10 +169,12 @@ sub _wait_for_gpu_resource {
           Rex::Logger::info("  [ok] nvidia.com/gpu: "
             . $cap->{'nvidia.com/gpu'} . " on "
             . $node->metadata->name);
-          return 1;
+          return 1;  # returns 1 as value of the eval block
         }
       }
+      0;
     };
+    return 1 if $found;  # exit the sub once GPU capacity is confirmed
     Rex::Logger::info("  No GPU capacity yet ($i/24), waiting...");
     sleep 5;
   }
