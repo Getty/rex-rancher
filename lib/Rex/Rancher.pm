@@ -11,6 +11,7 @@ use Rex::Rancher::Node;
 use Rex::Rancher::Server;
 use Rex::Rancher::Agent;
 use Rex::Rancher::Cilium;
+use Rex::Rancher::K8s;
 use Rex::Logger;
 
 require Rex::Exporter;
@@ -29,7 +30,10 @@ Full control plane deployment: prepare node, install Rancher K8s
 distribution, and set up Cilium CNI.
 
 If C<gpu =E<gt> 1> is passed and L<Rex::GPU> is installed, GPU detection
-and driver installation is performed automatically.
+and driver installation is performed automatically. After Cilium is
+installed, the NVIDIA device plugin DaemonSet is deployed via the
+Kubernetes API and the cluster waits for C<nvidia.com/gpu> resources
+to appear on the node.
 
 Options:
 
@@ -49,7 +53,12 @@ Options:
 
 =item C<token> — Cluster token
 
-=item C<tls_san> — Additional TLS SAN for API server cert
+=item C<tls_san> — Additional TLS SAN for API server cert. The first entry
+is also used as the server address in the saved local kubeconfig.
+
+=item C<kubeconfig_file> — Local path to save the cluster kubeconfig after
+the server is up (optional). If not given, no kubeconfig is saved locally
+and the NVIDIA device plugin step is skipped even with C<gpu =E<gt> 1>.
 
 =back
 
@@ -73,7 +82,8 @@ sub _check_connection {
 
 sub rancher_deploy_server {
   my (%opts) = @_;
-  my $distribution = $opts{distribution} // 'rke2';
+  my $distribution    = $opts{distribution}    // 'rke2';
+  my $kubeconfig_file = $opts{kubeconfig_file};
 
   _check_connection();
   prepare_node(%opts);
@@ -82,7 +92,16 @@ sub rancher_deploy_server {
 
   install_server(%opts);
 
+  # Save kubeconfig locally so we can drive the K8s API from here
+  my $local_kc = _save_kubeconfig_locally($distribution, $kubeconfig_file, %opts);
+
   install_cilium(distribution => $distribution);
+
+  # After Cilium, deploy NVIDIA device plugin via K8s API (no kubectl needed)
+  if ($opts{gpu} && $local_kc) {
+    wait_for_api(kubeconfig => $local_kc);
+    deploy_nvidia_device_plugin(kubeconfig => $local_kc);
+  }
 
   Rex::Logger::info("$distribution server deployment complete");
 }
@@ -132,6 +151,45 @@ sub _gpu_setup_if_requested {
   );
 }
 
+sub _save_kubeconfig_locally {
+  my ($distribution, $output_file, %opts) = @_;
+
+  return unless $output_file;
+
+  my $content = eval { get_kubeconfig($distribution) };
+  unless ($content) {
+    Rex::Logger::info("Could not fetch kubeconfig from remote — skipping local save", "warn");
+    return;
+  }
+
+  # RKE2/K3s writes 127.0.0.1 in the kubeconfig; patch to the real address
+  my $server_addr = _kubeconfig_server_addr(%opts);
+  if ($server_addr) {
+    $content =~ s{https://127\.0\.0\.1:(\d+)}{https://$server_addr:$1}g;
+  }
+
+  open(my $fh, '>', $output_file)
+    or do {
+      Rex::Logger::info("Could not write kubeconfig to $output_file: $!", "warn");
+      return;
+    };
+  print $fh $content;
+  close $fh;
+
+  Rex::Logger::info("Kubeconfig saved to $output_file");
+  return $output_file;
+}
+
+sub _kubeconfig_server_addr {
+  my (%opts) = @_;
+  return $opts{kubeconfig_server} if $opts{kubeconfig_server};
+  my $tls_san = $opts{tls_san};
+  return unless $tls_san;
+  my @sans = ref $tls_san eq 'ARRAY' ? @{$tls_san} : split(/,/, $tls_san);
+  return $sans[0] if @sans;
+  return;
+}
+
 1;
 
 =head1 SYNOPSIS
@@ -142,11 +200,26 @@ sub _gpu_setup_if_requested {
   # Deploy RKE2 control plane (no GPU)
   task "deploy_server", sub {
     rancher_deploy_server(
-      distribution => 'rke2',
-      hostname     => 'cp-01',
-      domain       => 'k8s.example.com',
-      token        => 'my-secret',
-      tls_san      => 'k8s.example.com',
+      distribution    => 'rke2',
+      hostname        => 'cp-01',
+      domain          => 'k8s.example.com',
+      token           => 'my-secret',
+      tls_san         => 'k8s.example.com',
+      kubeconfig_file => "$ENV{HOME}/.kube/mycluster.yaml",
+    );
+  };
+
+  # Deploy RKE2 control plane with GPU support
+  task "deploy_gpu_server", sub {
+    rancher_deploy_server(
+      distribution    => 'rke2',
+      gpu             => 1,    # requires Rex::GPU installed
+      reboot          => 1,    # reboot after driver install
+      hostname        => 'gpu-cp-01',
+      domain          => 'k8s.example.com',
+      token           => 'my-secret',
+      tls_san         => 'gpu-cp-01.k8s.example.com',
+      kubeconfig_file => "$ENV{HOME}/.kube/gpu-cluster.yaml",
     );
   };
 
@@ -171,6 +244,23 @@ framework.
 GPU support is optional — pass C<gpu =E<gt> 1> and install L<Rex::GPU>
 separately. Without it, Rex::Rancher works perfectly for non-GPU nodes.
 
+When deploying a GPU server node, the full pipeline runs automatically:
+
+=over
+
+=item 1. Node preparation (hostname, timezone, swap off)
+
+=item 2. GPU driver install + NVIDIA Container Toolkit (via L<Rex::GPU>)
+
+=item 3. RKE2/K3s server install + Cilium CNI
+
+=item 4. NVIDIA device plugin DaemonSet (via L<Rex::Rancher::K8s>)
+
+=back
+
+Pass C<kubeconfig_file> to save the cluster kubeconfig locally. This is
+required for the NVIDIA device plugin step (step 4) to work.
+
 For fine-grained control, use the individual modules directly:
 
 =over
@@ -183,10 +273,12 @@ For fine-grained control, use the individual modules directly:
 
 =item L<Rex::Rancher::Cilium> — Cilium CNI management
 
+=item L<Rex::Rancher::K8s> — Kubernetes API operations
+
 =back
 
 =head1 SEE ALSO
 
-L<Rex>, L<Rex::GPU>
+L<Rex>, L<Rex::GPU>, L<Rex::Rancher::K8s>
 
 =cut
