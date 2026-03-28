@@ -9,6 +9,8 @@ use Rex::Commands::File;
 use Rex::Commands::Fs;
 use Rex::Commands::Run;
 use Rex::Logger;
+use YAML::PP;
+use JSON::MaybeXS;
 
 require Rex::Exporter;
 use base qw(Rex::Exporter);
@@ -85,6 +87,8 @@ Options:
 
 =item C<registries> — private registry config (hashref, see L</_generate_registries_yaml>)
 
+=item C<cilium> — use Cilium as CNI (default: C<1>). Sets C<cni: none> and C<disable-kube-proxy: true>. Set to C<0> to keep RKE2's built-in Canal CNI.
+
 =back
 
   install_server(
@@ -101,11 +105,12 @@ sub install_server {
 
   my $distribution = $opts{distribution} // 'rke2';
   my $paths        = _paths($distribution);
-  my $token        = $opts{token} // die "install_server requires a 'token' option\n";
+  my $token        = $opts{token} // _generate_token();
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
   my $node_labels  = $opts{node_labels};
   my $registries   = $opts{registries};
+  my $cilium       = exists $opts{cilium} ? $opts{cilium} : 1;
 
   Rex::Logger::info("Installing $distribution server (control plane)...");
 
@@ -113,7 +118,7 @@ sub install_server {
   file $paths->{config_dir}, ensure => 'directory';
 
   # Write config.yaml
-  _write_config($paths, $token, $server, $tls_san, $node_labels);
+  _write_config($paths, $token, $server, $tls_san, $node_labels, $cilium);
 
   # Write registries.yaml if configured
   if ($registries) {
@@ -213,43 +218,50 @@ sub get_token {
   return $content;
 }
 
+sub _generate_token {
+  my $token = run "head -c 36 /dev/urandom | base64 | tr -d '\\n/+='  | head -c 48",
+    auto_die => 0;
+  chomp $token;
+  die "Failed to generate random token\n" unless $token && length($token) >= 32;
+  Rex::Logger::info("Generated cluster token (auto)");
+  return $token;
+}
+
 #
 # Config file generation
 #
 
 sub _write_config {
-  my ($paths, $token, $server, $tls_san, $node_labels) = @_;
+  my ($paths, $token, $server, $tls_san, $node_labels, $cilium) = @_;
 
-  my @lines;
+  my %config = (
+    'token' => $token,
+  );
 
-  push @lines, "token: $token";
-
-  if ($server) {
-    push @lines, "server: $server";
+  if ($cilium) {
+    $config{'cni'}                = 'none';
+    $config{'disable-kube-proxy'} = JSON()->true;
   }
+
+  $config{'disable'} = ['rke2-ingress-nginx'];
+
+  $config{server} = $server if $server;
 
   if ($tls_san) {
     my @sans = ref $tls_san eq 'ARRAY' ? @{$tls_san} : split(/,/, $tls_san);
-    push @lines, "tls-san:";
-    for my $san (@sans) {
-      $san =~ s/^\s+|\s+$//g;
-      push @lines, "  - $san";
-    }
+    $config{'tls-san'} = \@sans;
   }
 
   if ($node_labels) {
     my @labels = ref $node_labels eq 'ARRAY' ? @{$node_labels} : ($node_labels);
-    push @lines, "node-label:";
-    for my $label (@labels) {
-      push @lines, "  - \"$label\"";
-    }
+    $config{'node-label'} = \@labels;
   }
 
   my $config_file = $paths->{config_dir} . "config.yaml";
   Rex::Logger::info("Writing config to $config_file");
 
   file $config_file,
-    content => join("\n", @lines) . "\n";
+    content => YAML::PP->new(boolean => 'JSON::PP')->dump_string(\%config);
 }
 
 #
@@ -362,57 +374,11 @@ C<$registries> is a hashref:
 sub _generate_registries_yaml {
   my ($config_dir, $registries) = @_;
 
-  my @lines;
-
-  if ($registries->{mirrors}) {
-    push @lines, "mirrors:";
-    for my $mirror (sort keys %{$registries->{mirrors}}) {
-      push @lines, "  \"$mirror\":";
-      my $conf = $registries->{mirrors}{$mirror};
-      if ($conf->{endpoint}) {
-        push @lines, "    endpoint:";
-        for my $ep (@{$conf->{endpoint}}) {
-          push @lines, "      - \"$ep\"";
-        }
-      }
-    }
-  }
-
-  if ($registries->{configs}) {
-    push @lines, "configs:";
-    for my $registry (sort keys %{$registries->{configs}}) {
-      push @lines, "  \"$registry\":";
-      my $conf = $registries->{configs}{$registry};
-      if ($conf->{auth}) {
-        push @lines, "    auth:";
-        for my $key (sort keys %{$conf->{auth}}) {
-          push @lines, "      $key: \"$conf->{auth}{$key}\"";
-        }
-      }
-      if ($conf->{tls}) {
-        push @lines, "    tls:";
-        for my $key (sort keys %{$conf->{tls}}) {
-          my $val = $conf->{tls}{$key};
-          # Booleans
-          if ($val eq '1' || $val eq 'true') {
-            push @lines, "      $key: true";
-          }
-          elsif ($val eq '0' || $val eq 'false') {
-            push @lines, "      $key: false";
-          }
-          else {
-            push @lines, "      $key: \"$val\"";
-          }
-        }
-      }
-    }
-  }
-
   my $registries_file = $config_dir . "registries.yaml";
   Rex::Logger::info("Writing registries config to $registries_file");
 
   file $registries_file,
-    content => join("\n", @lines) . "\n";
+    content => YAML::PP->new(boolean => 'JSON::PP')->dump_string($registries);
 }
 
 1;

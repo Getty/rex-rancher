@@ -206,9 +206,6 @@ cni:
   binPath: $paths->{cni_bin}
   confPath: $paths->{cni_conf}
   exclusive: $cni_exclusive
-containerRuntime:
-  integration: containerd
-  socketPath: $paths->{socket_path}
 ipam:
   mode: kubernetes
 YAML

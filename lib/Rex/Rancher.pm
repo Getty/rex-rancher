@@ -53,10 +53,27 @@ Options:
 
 =cut
 
+sub _check_connection {
+  my $conn = Rex::get_current_connection() or return;
+  return if Rex::is_local();
+
+  my $type = eval { $conn->{conn}->get_connection_type() } // '';
+  return if $type eq 'LibSSH';
+
+  my $sftp = eval { Rex::get_sftp() };
+  return if $sftp && eval { $sftp->stat('/'); 1 };
+
+  die "This host has no SFTP subsystem and you are not using the LibSSH "
+    . "connection backend.\n"
+    . "Add 'set connection => \"LibSSH\"' to your Rexfile and install "
+    . "Rex::LibSSH to deploy to SFTP-less hosts.\n";
+}
+
 sub rancher_deploy_server {
   my (%opts) = @_;
   my $distribution = $opts{distribution} // 'rke2';
 
+  _check_connection();
   prepare_node(%opts);
 
   _gpu_setup_if_requested($distribution, %opts);

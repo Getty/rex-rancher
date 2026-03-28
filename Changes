@@ -1,0 +1,12 @@
+Revision history for Rex-Rancher
+
+{{$NEXT}}
+  - Initial release
+  - RKE2 and K3s server/agent installation
+  - Node preparation (hostname, NTP, sysctl, kernel modules, swap)
+  - Cilium CNI installation and upgrades
+  - Registry mirror configuration (registries.yaml)
+  - Post-deploy registry update support
+  - Optional GPU support via Rex::GPU (gpu => 1)
+  - Recommends Rex::LibSSH for deployment to SFTP-less hosts
+  - Clear error when connecting to SFTP-less host without LibSSH backend
