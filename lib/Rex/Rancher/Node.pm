@@ -23,21 +23,44 @@ use vars qw(@EXPORT);
 
 =method prepare_node
 
-Prepare a Linux node for Kubernetes. Installs base packages, configures
-kernel modules, sysctl parameters, disables swap, and optionally sets
-hostname, timezone, locale, and NTP.
+Prepare a Linux node for Kubernetes. Performs all OS-level configuration
+required before installing RKE2 or K3s:
+
+=over
+
+=item * Install C<curl> and C<ca-certificates>
+
+=item * Set hostname via C<hostnamectl> or C</etc/hostname> (optional)
+
+=item * Add FQDN entry to C</etc/hosts> (when both C<hostname> and C<domain> given)
+
+=item * Set timezone via C<timedatectl> or symlink (default: C<UTC>)
+
+=item * Set locale via C<localectl> or C</etc/default/locale> (default: C<en_US.UTF-8>)
+
+=item * Install and start C<chrony> for NTP synchronisation (default: enabled)
+
+=item * Disable and remove swap entries from C</etc/fstab>
+
+=item * Load C<br_netfilter> and C<overlay> kernel modules and persist to
+C</etc/modules-load.d/kubernetes.conf>
+
+=item * Write C</etc/sysctl.d/99-kubernetes.conf> with C<net.ipv4.ip_forward>,
+C<net.bridge.bridge-nf-call-iptables>, and C<net.bridge.bridge-nf-call-ip6tables>,
+then apply with C<sysctl --system>
+
+=back
 
   prepare_node(
-    hostname => 'worker-01',   # optional — short hostname
-    domain   => 'k8s.local',   # optional — domain for FQDN
-    timezone => 'Europe/Berlin', # optional, default: UTC
-    locale   => 'en_US.UTF-8',  # optional, default: en_US.UTF-8
-    ntp      => 1,               # optional, default: 1
+    hostname => 'worker-01',      # optional — short hostname
+    domain   => 'k8s.local',      # optional — domain suffix for FQDN
+    timezone => 'Europe/Berlin',  # optional, default: UTC
+    locale   => 'en_US.UTF-8',    # optional, default: en_US.UTF-8
+    ntp      => 1,                 # optional, default: 1 (enable chrony)
   );
 
-If C<hostname> and C<domain> are both provided, the node's hostname is set
-and an /etc/hosts entry is created. If omitted, hostname configuration is
-skipped entirely.
+If C<hostname> is provided without C<domain>, the hostname is still set
+but no C</etc/hosts> entry is written.
 
 =cut
 
@@ -71,7 +94,9 @@ sub prepare_node {
 
 sub _install_base_packages {
   Rex::Logger::info("Installing base packages");
-  update_package_db if is_debian();
+  # apt-get update returns non-zero on warnings (snap repos, apt-daily lock, etc.)
+  # on Ubuntu 24.04 — use auto_die => 0 so Rex::Pkg::Base does not abort.
+  run "apt-get update -q", auto_die => 0 if is_debian();
   pkg ["curl", "ca-certificates"], ensure => "present";
 }
 
@@ -163,41 +188,46 @@ sub _configure_sysctl {
     timezone => 'Europe/Berlin',
   );
 
-  # Without hostname (e.g. cloud instances with pre-configured hostnames)
+  # Minimal preparation — leave hostname and locale at OS defaults
+  prepare_node();
+
+  # Skip NTP (e.g. host is a VM with hypervisor time sync)
   prepare_node(
-    timezone => 'UTC',
-    locale   => 'en_US.UTF-8',
+    hostname => 'vm-01',
+    domain   => 'k8s.local',
+    ntp      => 0,
   );
 
 =head1 DESCRIPTION
 
-L<Rex::Rancher::Node> provides Linux node preparation for Rancher
-Kubernetes distributions (RKE2/K3s). It handles the base system
-configuration needed before installing a Kubernetes distribution:
+L<Rex::Rancher::Node> prepares a Linux node for Rancher Kubernetes
+distributions (RKE2 and K3s). It is distribution-agnostic — the same
+L</prepare_node> call works on Debian, Ubuntu, RHEL/Rocky/Alma, and
+openSUSE Leap.
+
+The module sets OS-level configuration that Kubernetes requires:
 
 =over
 
-=item * Base package installation (curl, ca-certificates)
+=item * B<Swap disabled> — Kubernetes does not function correctly with swap
+enabled.
 
-=item * Hostname and /etc/hosts configuration (optional)
+=item * B<Kernel modules> — C<br_netfilter> is needed for iptables to see
+bridged traffic; C<overlay> is required for containerd's overlay filesystem.
 
-=item * Timezone and locale setup
+=item * B<Sysctl parameters> — IP forwarding and bridge netfilter settings
+required by Kubernetes networking and CNI plugins.
 
-=item * NTP via chrony
-
-=item * Swap disabled
-
-=item * Required kernel modules (br_netfilter, overlay)
-
-=item * Sysctl parameters for Kubernetes networking
+=item * B<NTP> — Time skew between nodes causes certificate validation
+failures and etcd instability. C<chrony> is installed and started.
 
 =back
 
-This module is distribution-agnostic and works for both RKE2 and K3s
-node preparation.
+Called automatically by L<Rex::Rancher/rancher_deploy_server> and
+L<Rex::Rancher/rancher_deploy_agent>.
 
 =head1 SEE ALSO
 
-L<Rex::Rancher>, L<Rex::GPU>, L<Rex>
+L<Rex::Rancher>, L<Rex::Rancher::Server>, L<Rex::Rancher::Agent>, L<Rex>
 
 =cut

@@ -41,18 +41,54 @@ sub _paths {
 
 =method install_agent
 
-Install and configure a Rancher Kubernetes agent (worker node) and join
-an existing cluster.
+Write the agent configuration, optionally write C<registries.yaml>, run the
+distribution installer, enable and start the agent service.
+
+Required options:
+
+=over
+
+=item C<server>
+
+URL of the server to join. For RKE2: C<https://SERVER_IP:9345>. For K3s:
+C<https://SERVER_IP:6443>.
+
+=item C<token>
+
+Node join token. Obtain from the running server with
+L<Rex::Rancher::Server/get_token>.
+
+=back
+
+Optional options:
+
+=over
+
+=item C<distribution>
+
+C<rke2> (default) or C<k3s>.
+
+=item C<version>
+
+Pinned version string, e.g. C<v1.28.4+rke2r1> for RKE2 or C<v1.28.4+k3s1>
+for K3s. If omitted, the latest stable release is installed.
+
+=item C<node_name>
+
+Override the Kubernetes node name. If omitted, the system hostname is used.
+
+=item C<registries>
+
+Private registry mirror configuration hashref. Same structure as
+L<Rex::Rancher::Server/install_server>'s C<registries> option. Written to
+C<registries.yaml> in the distribution config directory.
+
+=back
 
   install_agent(
-    distribution   => 'rke2',                   # 'rke2' (default) or 'k3s'
-    server         => 'https://10.0.0.1:9345',  # server URL (required)
-    token          => 'K10...',                  # join token (required)
-    version        => 'v1.28.4+rke2r1',         # optional, auto-detected
-    node_name      => 'worker-01',              # optional
-    registry_cache => 'http://cache:5000',      # optional pull-through cache
-    registry_upstream => 'https://registry-1.docker.io',  # optional
-    registry_name  => 'docker.io',              # optional
+    distribution => 'rke2',
+    server       => 'https://10.0.0.1:9345',
+    token        => 'K10abc123...',
   );
 
 =cut
@@ -170,13 +206,28 @@ sub _enable_service {
 
 =head1 DESCRIPTION
 
-L<Rex::Rancher::Agent> installs and configures a Rancher Kubernetes
-agent (worker node) for either RKE2 or K3s. It handles writing the
-agent configuration, setting up registry mirrors, running the
-distribution installer, and enabling the agent service.
+L<Rex::Rancher::Agent> installs and configures a Rancher Kubernetes worker
+node for either RKE2 or K3s. It handles:
 
-Registry configuration is shared with L<Rex::Rancher::Server> via
-C<_generate_registries_yaml()>.
+=over
+
+=item * Writing C<config.yaml> with the server URL, token, and optional node name
+
+=item * Writing C<registries.yaml> for private registry mirrors (optional)
+
+=item * Running the official distribution installer via C<curl | sh>
+
+=item * Enabling and starting the agent systemd service
+
+=back
+
+For RKE2 the installer is fetched from L<https://get.rke2.io> with
+C<INSTALL_RKE2_TYPE=agent>. For K3s the installer from L<https://get.k3s.io>
+is used with C<K3S_URL> and C<K3S_TOKEN> environment variables.
+
+Registry configuration uses the same YAML structure and helper as
+L<Rex::Rancher::Server>, so mirrors configured for the server are directly
+reusable for agents.
 
 =head1 SEE ALSO
 

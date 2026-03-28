@@ -23,10 +23,27 @@ use constant DEVICE_PLUGIN_VERSION => 'v0.17.0';
 
 =method wait_for_api(%opts)
 
-Wait for the Kubernetes API server to become reachable. Returns 1 when the
-API is up, 0 if it did not respond within the timeout.
+Wait for the Kubernetes API server to become reachable by polling
+C<list(Node)> via L<Kubernetes::REST>. Runs from the local machine — no
+SSH connection to the cluster is needed.
 
-  wait_for_api(kubeconfig => '/path/to/kubeconfig');
+Polls up to 60 times with a 5-second delay between attempts (5-minute
+total timeout). Returns C<1> as soon as the API responds, or C<0> if it
+does not respond within the timeout.
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Absolute path to the kubeconfig file saved locally. This file must have the
+real server address (not C<127.0.0.1>) — L<Rex::Rancher/rancher_deploy_server>
+patches the address automatically.
+
+=back
+
+  wait_for_api(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
 
 =cut
 
@@ -56,18 +73,59 @@ sub wait_for_api {
 
 =method deploy_nvidia_device_plugin(%opts)
 
-Deploy the NVIDIA Kubernetes device plugin DaemonSet and wait for
-C<nvidia.com/gpu> resources to appear on GPU nodes.
+Deploy the NVIDIA Kubernetes device plugin DaemonSet to C<kube-system> and
+wait for C<nvidia.com/gpu> capacity to appear on at least one node.
 
-The DaemonSet is created with C<runtimeClassName: nvidia> so it can
-enumerate GPUs without needing a privileged container.
+All operations run locally via L<Kubernetes::REST> — no C<kubectl> or SSH
+to the cluster is needed.
 
-Options:
+The DaemonSet is created with:
 
-  deploy_nvidia_device_plugin(
-    kubeconfig => '/path/to/kubeconfig',
-    version    => 'v0.17.0',           # optional, default: DEVICE_PLUGIN_VERSION
-  );
+=over
+
+=item * C<runtimeClassName: nvidia> — uses the NVIDIA container runtime
+(registered by L<Rex::GPU::NVIDIA/configure_containerd>) to enumerate devices.
+
+=item * C<priorityClassName: system-node-critical> — ensures the plugin
+pod is scheduled even under resource pressure.
+
+=item * A C<nvidia.com/gpu:NoSchedule> toleration — allows the pod to run
+on nodes that still have the GPU taint.
+
+=item * C<FAIL_ON_INIT_ERROR=false> — the plugin starts even if CDI or
+driver initialisation fails, reporting partial GPU availability rather
+than crash-looping.
+
+=back
+
+If the DaemonSet already exists it is updated (C<resourceVersion> is
+fetched from the cluster before the update to satisfy the optimistic
+concurrency requirement).
+
+After applying, polls up to 24 times (2-minute timeout) for
+C<nvidia.com/gpu> capacity to appear in any node's C<status.capacity>.
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+Optional options:
+
+=over
+
+=item C<version>
+
+NVIDIA device plugin image tag. Default: C<v0.17.0>.
+
+=back
+
+  deploy_nvidia_device_plugin(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
 
 =cut
 
@@ -149,12 +207,33 @@ sub deploy_nvidia_device_plugin {
 
 =method untaint_node(%opts)
 
-Remove C<node-role.kubernetes.io/control-plane> and
-C<node-role.kubernetes.io/master> taints from all nodes. Use this on
-single-node clusters so that workloads can be scheduled on the control
-plane.
+Remove C<node-role.kubernetes.io/control-plane:NoSchedule> and
+C<node-role.kubernetes.io/master:NoSchedule> taints from all nodes in the
+cluster.
 
-  untaint_node(kubeconfig => '/path/to/kubeconfig');
+Kubernetes adds these taints to control-plane nodes to prevent general
+workloads from being scheduled there. On single-node clusters (where the
+control plane is also the only worker) these taints must be removed so that
+pods can run.
+
+Each node is fetched fresh before patching (to get the current
+C<resourceVersion> for optimistic concurrency), and only patched if it
+actually has one of the taints. Nodes that are already untainted are
+skipped silently.
+
+All operations run locally via L<Kubernetes::REST>.
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+  untaint_node(kubeconfig => "$ENV{HOME}/.kube/single-node.yaml");
 
 =cut
 
@@ -226,21 +305,46 @@ sub _wait_for_gpu_resource {
 
   use Rex::Rancher::K8s;
 
-  # Wait for API after cluster start
-  wait_for_api(kubeconfig => '/etc/rancher/rke2/rke2.yaml');
+  # Wait for API to become available after cluster installation
+  wait_for_api(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
 
-  # Deploy NVIDIA device plugin
-  deploy_nvidia_device_plugin(kubeconfig => '~/.kube/rexdemo.yaml');
+  # Deploy NVIDIA device plugin and wait for gpu resource to appear
+  deploy_nvidia_device_plugin(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    version    => 'v0.17.0',
+  );
+
+  # Remove control-plane taints on a single-node cluster
+  untaint_node(kubeconfig => "$ENV{HOME}/.kube/single.yaml");
 
 =head1 DESCRIPTION
 
 L<Rex::Rancher::K8s> provides Kubernetes API operations for L<Rex::Rancher>
-using L<Kubernetes::REST> and L<IO::K8s>. All operations run from the local
-machine against the cluster API — no C<kubectl> binary required on the remote
-host.
+using L<Kubernetes::REST> and L<IO::K8s>. All three public functions run
+entirely on the B<local machine> against the cluster's HTTP API — no
+C<kubectl> binary is required anywhere, and no SSH connection to the cluster
+nodes is needed for these operations.
 
-Used internally by L<Rex::Rancher> to deploy the NVIDIA device plugin after
-cluster setup when C<gpu =E<gt> 1> is passed to C<rancher_deploy_server>.
+The module is used internally by L<Rex::Rancher/rancher_deploy_server> to:
+
+=over
+
+=item 1. Wait for the API server to respond after C<install_server> returns
+
+=item 2. Deploy the NVIDIA device plugin when C<gpu =E<gt> 1>
+
+=back
+
+It can also be used standalone for post-deploy operations such as removing
+control-plane taints on single-node clusters.
+
+=head2 No kubectl required
+
+All Kubernetes API calls are made via L<Kubernetes::REST>, which implements
+the Kubernetes REST API client in pure Perl using L<IO::K8s> for object
+serialization. The kubeconfig file is parsed by
+C<Kubernetes::REST::Kubeconfig> to extract the cluster address and
+credentials.
 
 =head1 SEE ALSO
 

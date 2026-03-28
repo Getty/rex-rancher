@@ -57,25 +57,64 @@ sub _paths {
 
 =method install_server(%opts)
 
-Install and start a Rancher Kubernetes server (control plane) node.
+Write the cluster configuration file, optionally write C<registries.yaml>,
+install the distribution, start the service, and wait until the kubeconfig
+file is written to disk by the server process.
+
+Returns C<1> on success. Dies if installation fails or the distribution is
+unknown.
 
 Options:
 
 =over
 
-=item C<distribution> — C<rke2> (default) or C<k3s>
+=item C<distribution>
 
-=item C<token> — shared secret for joining nodes to the cluster
+C<rke2> (default) or C<k3s>.
 
-=item C<server> — URL of existing server to join (for HA; omit for first node)
+=item C<token>
 
-=item C<tls_san> — additional TLS SAN entries (arrayref or comma-separated string)
+Shared secret used for node joining. Auto-generated (48 random base64 chars)
+if omitted.
 
-=item C<node_labels> — node labels (arrayref of C<key=value> strings)
+=item C<server>
 
-=item C<registries> — private registry mirror config (hashref). Structure: C<< { mirrors => { "docker.io" => { endpoint => ["https://registry.example.com"] } }, configs => { ... } } >>. Written to C<registries.yaml> in the config directory.
+URL of an existing server node to join. Used for multi-server HA setups
+(omit for the first/only server). For RKE2 the port is C<9345>; for K3s it
+is C<6443>.
 
-=item C<cilium> — use Cilium as CNI (default: C<1>). Sets C<cni: none> and C<disable-kube-proxy: true>. Set to C<0> to keep RKE2's built-in Canal CNI.
+=item C<tls_san>
+
+Additional TLS Subject Alternative Names for the API server certificate,
+as an arrayref or a comma-separated string. Include the load balancer
+address, public IP, or DNS name so that kubeconfig clients can connect.
+
+=item C<node_labels>
+
+Node labels applied at join time, as an arrayref of C<key=value> strings.
+
+=item C<registries>
+
+Private registry mirror configuration. Written to C<registries.yaml> in the
+distribution config directory. Structure:
+
+  {
+    mirrors => {
+      'docker.io' => { endpoint => ['http://registry.internal:5000'] },
+    },
+    configs => {
+      'registry.internal:5000' => {
+        auth => { username => 'user', password => 'pass' },
+      },
+    },
+  }
+
+=item C<cilium>
+
+If true (default: C<1>), set C<cni: none> and C<disable-kube-proxy: true>
+in the server config, preparing the node for Cilium CNI with full
+kube-proxy replacement. Set to C<0> to keep the distribution's default
+CNI (Canal for RKE2, Flannel for K3s).
 
 =back
 
@@ -128,9 +167,33 @@ sub install_server {
 
 =method update_registries(%opts)
 
-Update the registries.yaml on an existing node and restart containerd
-to pick up the new configuration. Use this after deploying a registry
-into the cluster to make it available to all nodes.
+Update C<registries.yaml> on an already-running node and restart the
+distribution service to pick up the new registry mirror configuration.
+
+Use this to add or change registry mirrors after the cluster is up — for
+example, after deploying an in-cluster registry that you want every node
+to use as a pull-through cache.
+
+Required options:
+
+=over
+
+=item C<registries>
+
+Registry mirror hashref (same structure as C<install_server>'s C<registries>
+option).
+
+=back
+
+Optional options:
+
+=over
+
+=item C<distribution>
+
+C<rke2> (default) or C<k3s>. Controls which service is restarted.
+
+=back
 
   update_registries(
     distribution => 'rke2',
@@ -170,10 +233,17 @@ sub update_registries {
 
 =method get_kubeconfig($distribution)
 
-Retrieve the kubeconfig content from the server. Returns the file content
-as a string.
+Read the kubeconfig file from the remote server and return its content as
+a string. The file is read directly via C<cat> over SSH; no SFTP is used.
 
 C<$distribution> defaults to C<rke2>.
+
+Note: RKE2 and K3s both write C<https://127.0.0.1> as the server address.
+The caller is responsible for substituting the real server address before
+saving the kubeconfig for external use. L<Rex::Rancher/rancher_deploy_server>
+performs this substitution automatically.
+
+Dies if the file cannot be read.
 
 =cut
 
@@ -189,9 +259,22 @@ sub get_kubeconfig {
 
 =method get_token($distribution)
 
-Retrieve the node join token from the server. Returns the token string.
+Read the node join token from the server and return it as a string
+(trailing newline stripped).
 
 C<$distribution> defaults to C<rke2>.
+
+The token is stored at:
+
+=over
+
+=item RKE2: C</var/lib/rancher/rke2/server/node-token>
+
+=item K3s: C</var/lib/rancher/k3s/server/node-token>
+
+=back
+
+Dies if the file cannot be read (e.g. server not yet started).
 
 =cut
 
@@ -362,16 +445,24 @@ sub _generate_registries_yaml {
     tls_san      => ['lb.example.com'],
   );
 
-  # Join additional control plane node (HA)
+  # Join additional control plane node (HA setup)
   install_server(
     distribution => 'rke2',
     token        => 'my-cluster-secret',
     server       => 'https://first-server:9345',
   );
 
-  # Retrieve kubeconfig and token
+  # Retrieve kubeconfig and join token from a running server
   my $kubeconfig = get_kubeconfig('rke2');
-  my $token      = get_token('k3s');
+  my $token      = get_token('rke2');
+
+  # Update registry mirrors on an already-running node
+  update_registries(
+    distribution => 'rke2',
+    registries   => {
+      mirrors => { 'docker.io' => { endpoint => ['http://cache:5000'] } },
+    },
+  );
 
 =head1 DESCRIPTION
 
@@ -379,15 +470,35 @@ L<Rex::Rancher::Server> handles control plane installation for both RKE2
 and K3s Kubernetes distributions. It provides a unified interface for
 installing, configuring, and managing server nodes.
 
-RKE2 uses the pre-download artifact approach via the official install
-script at L<https://get.rke2.io>. K3s uses the simpler curl-pipe-sh
-method with inline flags to disable Traefik and ServiceLB.
+=head2 RKE2 installation
 
-Both distributions share the same config file layout under
-C</etc/rancher/E<lt>distE<gt>/> and the same registries.yaml format.
+The official install script at L<https://get.rke2.io> is fetched and run
+via C<curl -sfL … | sh ->. The service is started with C<--no-block> to
+avoid systemd's 90-second activation timeout (RKE2's first start pulls many
+container images). The function waits only until the kubeconfig file appears
+at C</etc/rancher/rke2/rke2.yaml>; API readiness is confirmed separately by
+the caller using L<Rex::Rancher::K8s/wait_for_api>.
+
+=head2 K3s installation
+
+The official install script at L<https://get.k3s.io> is used with
+C<K3S_TOKEN> and optionally C<K3S_URL> environment variables. Traefik and
+ServiceLB are disabled by default to leave room for Cilium and external
+load balancers.
+
+=head2 Config layout
+
+Both distributions use C</etc/rancher/E<lt>distE<gt>/config.yaml> with the
+same key names (C<token>, C<tls-san>, C<node-label>, C<cni>, etc.). When
+C<cilium =E<gt> 1> (the default), C<cni: none> and
+C<disable-kube-proxy: true> are written so that Cilium's kube-proxy
+replacement is used.
+
+Registry mirrors are written to C<registries.yaml> in the same directory.
 
 =head1 SEE ALSO
 
-L<Rex::Rancher>, L<Rex::Rancher::Node>, L<Rex::Rancher::Agent>, L<Rex::Rancher::Cilium>, L<Rex>
+L<Rex::Rancher>, L<Rex::Rancher::Node>, L<Rex::Rancher::Agent>,
+L<Rex::Rancher::Cilium>, L<Rex::Rancher::K8s>, L<Rex>
 
 =cut

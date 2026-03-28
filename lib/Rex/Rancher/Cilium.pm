@@ -31,26 +31,40 @@ use constant CILIUM_CLI_VERSION => 'v0.16.23';
 
 Install Cilium CNI on a Rancher Kubernetes cluster (RKE2 or K3s).
 
-Handles:
+The Cilium CLI binary is downloaded from GitHub to C</usr/local/bin/cilium>
+on the remote host (skipped if the correct version is already present).
+Distribution-appropriate Helm values are generated and written to
+C</tmp/cilium-values-E<lt>distE<gt>.yaml>, then C<cilium install> is invoked
+with those values.
 
-=over
-
-=item Cilium CLI binary installation
-
-=item Helm values generation for the target distribution
-
-=item Cilium installation via the CLI
-
-=back
+For RKE2, C<kubeProxyReplacement=true> is passed to enable Cilium's
+eBPF-based kube-proxy replacement (the RKE2 server config must have
+C<disable-kube-proxy: true> for this to work). For K3s, C<exclusive: true>
+is set for the CNI plugin to ensure K3s's built-in Flannel does not
+conflict.
 
 Options:
 
-  install_cilium(
-    distribution => 'rke2',       # 'rke2' or 'k3s' (default: 'rke2')
-    version      => '1.17.0',     # Cilium version (default: CILIUM_VERSION)
-    cli_version  => 'v0.16.23',   # CLI version (default: CILIUM_CLI_VERSION)
-    api_server   => 'https://127.0.0.1:6443',  # optional
-  );
+=over
+
+=item C<distribution>
+
+C<rke2> (default) or C<k3s>.
+
+=item C<version>
+
+Cilium version to install, e.g. C<1.17.0>. Default: C<1.17.0>.
+
+=item C<cli_version>
+
+Cilium CLI version to download, e.g. C<v0.16.23>. Default: C<v0.16.23>.
+
+=item C<api_server>
+
+Kubernetes API server URL, passed as C<--api-server> to the CLI. Optional;
+the CLI uses the kubeconfig's server address if omitted.
+
+=back
 
 =cut
 
@@ -88,9 +102,11 @@ sub install_cilium {
 
 =method upgrade_cilium(%opts)
 
-Upgrade an existing Cilium installation on a Rancher Kubernetes cluster.
+Upgrade an existing Cilium installation to a new version using
+C<cilium upgrade>. The Cilium CLI is updated first if needed. The same
+Helm values generation logic as L</install_cilium> is used.
 
-Options are the same as C<install_cilium>, plus:
+Options are the same as L</install_cilium>.
 
   upgrade_cilium(
     distribution => 'rke2',
@@ -238,18 +254,19 @@ YAML
 
   use Rex::Rancher::Cilium;
 
-  # Install Cilium on an RKE2 cluster
+  # Install Cilium on an RKE2 cluster (defaults to version 1.17.0)
   install_cilium(
     distribution => 'rke2',
   );
 
-  # Install Cilium on a K3s cluster
+  # Install Cilium on a K3s cluster with explicit version
   install_cilium(
     distribution => 'k3s',
     version      => '1.17.0',
+    cli_version  => 'v0.16.23',
   );
 
-  # Upgrade an existing installation
+  # Upgrade an existing Cilium installation
   upgrade_cilium(
     distribution => 'rke2',
     version      => '1.17.0',
@@ -257,25 +274,47 @@ YAML
 
 =head1 DESCRIPTION
 
-L<Rex::Rancher::Cilium> provides Cilium CNI installation and management
-for Rancher Kubernetes distributions (RKE2 and K3s). It handles:
+L<Rex::Rancher::Cilium> provides Cilium CNI installation and upgrade for
+Rancher Kubernetes distributions (RKE2 and K3s). All operations are run
+on the remote server host via SSH.
+
+=head2 Prerequisites
+
+The server must already be running with C<cni: none> and
+C<disable-kube-proxy: true> in its C<config.yaml> so that Cilium can
+own the CNI and kube-proxy roles. L<Rex::Rancher::Server/install_server>
+sets these options by default when C<cilium =E<gt> 1>.
+
+=head2 Helm values
+
+Distribution-specific Helm values are written to
+C</tmp/cilium-values-E<lt>distE<gt>.yaml>:
 
 =over
 
-=item * Cilium CLI binary download and installation
+=item RKE2
 
-=item * Distribution-specific Helm values generation
+C<kubeProxyReplacement: true>, C<k8sServiceHost: 127.0.0.1>,
+C<k8sServicePort: "6443">, C<cni.exclusive: false>, C<operator.replicas: 1>.
 
-=item * Cilium installation and upgrades via the CLI
+=item K3s
+
+C<cni.exclusive: true>, C<operator.replicas: 1>.
 
 =back
 
-The module generates appropriate Helm values for each distribution,
-handling differences in CNI paths, containerd socket locations, and
-kube-proxy replacement settings.
+Both distributions use C<ipam.mode: kubernetes> and share the same CNI
+binary/config paths (C</opt/cni/bin>, C</etc/cni/net.d>).
+
+=head2 Default versions
+
+The module ships with pinned defaults for reproducibility:
+Cilium C<1.17.0> and Cilium CLI C<v0.16.23>. Override with the
+C<version> and C<cli_version> options.
 
 =head1 SEE ALSO
 
-L<Rex::Rancher>, L<Rex::Rancher::Node>, L<Rex>
+L<Rex::Rancher>, L<Rex::Rancher::Server>, L<Rex>,
+L<https://docs.cilium.io/>
 
 =cut
