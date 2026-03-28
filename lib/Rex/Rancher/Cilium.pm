@@ -92,10 +92,20 @@ sub install_cilium {
   push @cmd, "--api-server $api_server" if $api_server;
 
   my $env = "KUBECONFIG=$paths->{kubeconfig}";
-  my $install_cmd = "$env " . join(" ", @cmd);
+  my $install_cmd = "$env " . join(" ", @cmd) . " 2>&1";
 
   Rex::Logger::info("Running: $install_cmd");
-  run $install_cmd, auto_die => 1;
+  my $out = run $install_cmd, auto_die => 0;
+
+  if ($? != 0) {
+    # "cannot re-use a name that is still in use" means Cilium is already
+    # installed (Helm release exists) — treat as success for idempotent re-deploys.
+    if (($out // '') =~ /cannot re-use a name/i) {
+      Rex::Logger::info("  Cilium already installed (Helm release exists), skipping");
+      return;
+    }
+    die "cilium install failed: " . ($out // '') . "\n";
+  }
 
   Rex::Logger::info("Cilium $version installed on $distribution cluster");
 }

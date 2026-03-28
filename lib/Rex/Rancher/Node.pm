@@ -94,9 +94,9 @@ sub prepare_node {
 
 sub _install_base_packages {
   Rex::Logger::info("Installing base packages");
-  # apt-get update returns non-zero on warnings (snap repos, apt-daily lock, etc.)
-  # on Ubuntu 24.04 — use auto_die => 0 so Rex::Pkg::Base does not abort.
-  run "apt-get update -q", auto_die => 0 if is_debian();
+  # DPkg::Lock::Timeout=120: wait for apt lock held by system init on first boot.
+  # auto_die => 0: apt-get update returns non-zero on snap/PPA repo warnings.
+  run "apt-get -o DPkg::Lock::Timeout=120 update -q", auto_die => 0 if is_debian();
   pkg ["curl", "ca-certificates"], ensure => "present";
 }
 
