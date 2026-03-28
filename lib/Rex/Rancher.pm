@@ -39,6 +39,8 @@ Options:
 
 =item C<gpu> — detect and set up GPU drivers (default: C<0>, requires L<Rex::GPU>)
 
+=item C<reboot> — reboot after driver install and wait for host to reconnect (default: C<0>, only meaningful with C<gpu =E<gt> 1>)
+
 =item C<hostname> — Node hostname (optional)
 
 =item C<domain> — Domain name (optional)
@@ -124,7 +126,10 @@ sub _gpu_setup_if_requested {
     die "gpu => 1 requested but Rex::GPU is not installed. Install the Rex-GPU distribution.\n";
   }
 
-  Rex::GPU::gpu_setup(containerd_config => $distribution);
+  Rex::GPU::gpu_setup(
+    containerd_config => $distribution,
+    reboot            => ($opts{reboot} // 0),
+  );
 }
 
 1;
