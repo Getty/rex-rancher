@@ -22,6 +22,9 @@ use vars qw(@EXPORT);
 @EXPORT = qw(
   rancher_deploy_server
   rancher_deploy_agent
+  wait_for_api
+  untaint_node
+  deploy_nvidia_device_plugin
 );
 
 =method rancher_deploy_server(%opts)
@@ -92,14 +95,15 @@ sub rancher_deploy_server {
 
   install_server(%opts);
 
-  # Save kubeconfig locally so we can drive the K8s API from here
+  # Fetch and save kubeconfig locally, then wait for the API from this machine.
+  # install_server only waits for the kubeconfig file to appear on the remote;
+  # actual API readiness is confirmed here via Rex::Rancher::K8s::wait_for_api.
   my $local_kc = _save_kubeconfig_locally($distribution, $kubeconfig_file, %opts);
+  wait_for_api(kubeconfig => $local_kc) if $local_kc;
 
   install_cilium(distribution => $distribution);
 
-  # After Cilium, deploy NVIDIA device plugin via K8s API (no kubectl needed)
   if ($opts{gpu} && $local_kc) {
-    wait_for_api(kubeconfig => $local_kc);
     deploy_nvidia_device_plugin(kubeconfig => $local_kc);
   }
 

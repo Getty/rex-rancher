@@ -16,6 +16,7 @@ use vars qw(@EXPORT);
 @EXPORT = qw(
   deploy_nvidia_device_plugin
   wait_for_api
+  untaint_node
 );
 
 use constant DEVICE_PLUGIN_VERSION => 'v0.17.0';
@@ -144,6 +145,42 @@ sub deploy_nvidia_device_plugin {
   _wait_for_gpu_resource($api);
 
   Rex::Logger::info("NVIDIA device plugin ready");
+}
+
+=method untaint_node(%opts)
+
+Remove C<node-role.kubernetes.io/control-plane> and
+C<node-role.kubernetes.io/master> taints from all nodes. Use this on
+single-node clusters so that workloads can be scheduled on the control
+plane.
+
+  untaint_node(kubeconfig => '/path/to/kubeconfig');
+
+=cut
+
+sub untaint_node {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+
+  Rex::Logger::info("Removing control-plane taints (single-node)...");
+
+  my $api   = _api($kubeconfig);
+  my $nodes = $api->list('Node');
+
+  for my $node (@{ $nodes->items }) {
+    my $name   = $node->metadata->name;
+    my @taints = @{ $node->spec->taints // [] };
+    my @keep   = grep {
+      ($_->{key} // '') !~ /^node-role\.kubernetes\.io\/(control-plane|master)$/
+    } @taints;
+
+    next if @keep == @taints;  # nothing to remove
+
+    my $fresh = $api->get('Node', $name);
+    $fresh->spec->taints(\@keep);
+    $api->update($fresh);
+    Rex::Logger::info("  Untainted: $name");
+  }
 }
 
 # ============================================================

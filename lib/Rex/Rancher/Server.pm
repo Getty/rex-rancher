@@ -30,7 +30,6 @@ my %PATHS = (
     service     => 'rke2-server',
     install_url => 'https://get.rke2.io',
     kubeconfig  => '/etc/rancher/rke2/rke2.yaml',
-    kubectl     => '/var/lib/rancher/rke2/bin/kubectl',
     token_file  => '/var/lib/rancher/rke2/server/node-token',
   },
   k3s => {
@@ -38,7 +37,6 @@ my %PATHS = (
     service     => 'k3s',
     install_url => 'https://get.k3s.io',
     kubeconfig  => '/etc/rancher/k3s/k3s.yaml',
-    kubectl     => 'kubectl',
     token_file  => '/var/lib/rancher/k3s/server/node-token',
   },
 );
@@ -269,11 +267,12 @@ sub _install_rke2 {
   # Enable and start the service
   run "systemctl enable " . $paths->{service}, auto_die => 1;
   # --no-block: return immediately; RKE2 first start pulls many images and
-  # exceeds systemctl's default 90s activation timeout. _wait_for_service
-  # polls for actual readiness via kubectl get nodes.
+  # exceeds systemctl's default 90s activation timeout.
   run "systemctl start --no-block " . $paths->{service}, auto_die => 1;
 
-  _wait_for_service($paths);
+  # Wait only until kubeconfig is written — API readiness is checked locally
+  # by the caller via Rex::Rancher::K8s::wait_for_api after saving the file.
+  _wait_for_kubeconfig($paths);
 }
 
 #
@@ -301,39 +300,32 @@ sub _install_k3s {
 
   run $cmd, auto_die => 1;
 
-  _wait_for_service($paths);
+  _wait_for_kubeconfig($paths);
 }
 
 #
-# Wait for the service to become ready
+# Wait until the kubeconfig file appears on the remote host.
+# API readiness is checked locally by the caller via Rex::Rancher::K8s::wait_for_api.
 #
 
-sub _wait_for_service {
+sub _wait_for_kubeconfig {
   my ($paths) = @_;
-
-  Rex::Logger::info("Waiting for " . $paths->{service} . " to become ready...");
-
-  my $kubectl = $paths->{kubectl};
   my $kubeconfig = $paths->{kubeconfig};
 
-  # Wait up to 5 minutes for the API server to respond.
-  # The node will be NotReady until the CNI (Cilium) is installed — that's
-  # expected. We only need the API server up so that install_cilium can run.
-  my $api_up = 0;
+  Rex::Logger::info("Waiting for " . $paths->{service} . " to write kubeconfig...");
+
   for my $i (1..60) {
-    my $output = run "$kubectl --kubeconfig=$kubeconfig get nodes 2>&1", auto_die => 0;
-    if ($? == 0 && $output) {
-      $api_up = 1;
-      Rex::Logger::info("  API server is up (node status: " . ($output =~ /NotReady/ ? 'NotReady — CNI pending' : 'Ready') . ")");
-      last;
+    my $out = run "test -f $kubeconfig && echo yes", auto_die => 0;
+    if ($? == 0 && ($out // '') =~ /yes/) {
+      Rex::Logger::info("  Kubeconfig ready at $kubeconfig");
+      return 1;
     }
-    Rex::Logger::info("  API server not yet responding, waiting... ($i/60)");
-    run "sleep 5", auto_die => 0;
+    Rex::Logger::info("  Not ready yet ($i/60), waiting...");
+    sleep 5;
   }
 
-  unless ($api_up) {
-    Rex::Logger::info($paths->{service} . " API server did not respond — check manually", "warn");
-  }
+  Rex::Logger::info($paths->{service} . " kubeconfig did not appear — check manually", "warn");
+  return 0;
 }
 
 sub _generate_registries_yaml {
