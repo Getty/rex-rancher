@@ -1,7 +1,7 @@
 # ABSTRACT: Rancher Kubernetes server (control plane) installation
 
 package Rex::Rancher::Server;
-
+our $VERSION = '0.002';
 use v5.14.4;
 use warnings;
 

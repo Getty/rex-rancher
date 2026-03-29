@@ -1,7 +1,7 @@
 # ABSTRACT: Rancher Kubernetes agent (worker node) installation
 
 package Rex::Rancher::Agent;
-
+our $VERSION = '0.002';
 use v5.14.4;
 use warnings;
 
