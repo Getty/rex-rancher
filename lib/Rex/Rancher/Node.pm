@@ -94,9 +94,15 @@ sub prepare_node {
 
 sub _install_base_packages {
   Rex::Logger::info("Installing base packages");
-  # DPkg::Lock::Timeout=120: wait for apt lock held by system init on first boot.
-  # auto_die => 0: apt-get update returns non-zero on snap/PPA repo warnings.
-  run "apt-get -o DPkg::Lock::Timeout=120 update -q", auto_die => 0 if is_debian();
+  if (is_debian()) {
+    # Stop automatic apt services first — on a fresh Hetzner boot,
+    # unattended-upgrades holds /var/lib/dpkg/lock-frontend and apt-get
+    # fails immediately (DPkg::Lock::Timeout only covers the dpkg lock,
+    # not the apt frontend lock).
+    run "systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true",
+      auto_die => 0;
+    run "apt-get -o DPkg::Lock::Timeout=120 update -q", auto_die => 0;
+  }
   pkg ["curl", "ca-certificates"], ensure => "present";
 }
 
