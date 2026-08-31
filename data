@@ -1,0 +1,13 @@
+---
+class: standard
+created: 2026-08-31T04:30:27Z
+id: 1
+priority: medium
+status: backlog
+tags:
+- testing
+title: No automated coverage of the deploy pipeline
+updated: 2026-08-31T04:30:27Z
+---
+
+t/ holds only t/00-load.t, a compile check on the six modules. install_server/install_agent/install_cilium and the K8s.pm API objects have no automated coverage; a pipeline change is only trustworthy after a live run against a real node (eg/hetzner-gpu.Rexfile). Add integration coverage (or, minimum, a documented live-deploy verification checklist) so a change can be gated without a manual Hetzner deploy each time.
