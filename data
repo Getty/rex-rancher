@@ -1,0 +1,13 @@
+---
+class: standard
+created: 2026-08-31T04:30:31Z
+id: 2
+priority: low
+status: backlog
+tags:
+- robustness
+title: kubeconfig server-address patch relies on tls_san ordering
+updated: 2026-08-31T04:30:31Z
+---
+
+_save_kubeconfig_locally rewrites https://127.0.0.1 to the FIRST tls_san entry (or kubeconfig_server). A caller who orders tls_san with a non-routable SAN first, or omits tls_san, silently gets a kubeconfig still pointing at 127.0.0.1. Consider validating/warning when no usable server address is derivable.
