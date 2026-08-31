@@ -1,0 +1,13 @@
+---
+class: standard
+created: 2026-08-31T04:30:35Z
+id: 3
+priority: low
+status: backlog
+tags:
+- portability
+title: prepare_node non-Debian base-package path unverified on openSUSE/SLES
+updated: 2026-08-31T04:30:35Z
+---
+
+README verifies Debian 13, Rocky 10.1, Ubuntu 24.04. _install_base_packages special-cases is_debian (stop unattended-upgrades, apt-get update); RHEL is covered by the Rocky verification. The is_suse path (pkg only, zypper) has never been run. Verify prepare_node on openSUSE Leap/SLES or document it as unsupported.
