@@ -6,12 +6,12 @@ allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - rex-rancher-core
-    - getty-rex
+    - rex
     - getty-perl-core
     - kubernetes-rke2
     - kubernetes-cilium-concepts
     - kubernetes-gpu
-    - getty-perl-kubernetes-classes
+    - perl-io-k8s-kubernetes-classes
     - kanban-issues-karr-cli
 ---
 

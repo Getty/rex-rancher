@@ -22,7 +22,7 @@ The distribution just wires these steps; the domain knowledge behind each step l
 dedicated skills — RKE2/K3s config and joining: `kubernetes-rke2`; Cilium/eBPF/kube-proxy
 replacement: `kubernetes-cilium-concepts`; the four things that must line up for
 `nvidia.com/gpu`: `kubernetes-gpu`; building the typed K8s objects `K8s.pm` sends:
-`getty-perl-kubernetes-classes`. This skill is only what is true about *this* wiring.
+`perl-io-k8s-kubernetes-classes`. This skill is only what is true about *this* wiring.
 
 ## The pipeline is the product
 
@@ -65,7 +65,7 @@ get-resourceVersion-then-`update` on an "already exist" error — that is the id
 contract for the plugin. Adding a `kubectl` call anywhere breaks the promise that the
 remote host needs no cluster tooling and the operator's machine needs no kubeconfig on
 disk beyond what we wrote. Typed-object construction and the boolean/`\0` quirks:
-`getty-perl-kubernetes-classes`.
+`perl-io-k8s-kubernetes-classes`.
 
 ## No SFTP — this is a Hetzner-dedicated deployer
 
@@ -74,7 +74,7 @@ is `LibSSH` or a working SFTP subsystem is present, pointing the user at
 `set connection => 'LibSSH'` and `Rex::LibSSH` (a `recommends`, not a `requires`). The
 target environment is Hetzner dedicated servers, which ship without `Subsystem sftp`.
 Never assume `file`/`upload` can rely on SFTP here. Connection backends and why: skill
-`getty-rex`.
+`rex`.
 
 ## Idempotency and the fresh-boot traps — do not "clean these up"
 
@@ -119,7 +119,7 @@ qw(Rex::Exporter); use vars qw(@EXPORT);`), **not** standard `Exporter` and no M
 `die "…\n"` for hard ones. `$VERSION` is repeated in **all six** files under `lib/`; a
 partial bump ships modules that disagree about their version — `grep -rn 'our $VERSION'
 lib/` and change them together. Everything else Perl: skill `getty-perl-core`. Rex idioms,
-connection types, `run`/`pkg`/`auto_die`: skill `getty-rex`.
+connection types, `run`/`pkg`/`auto_die`: skill `rex`.
 
 ## Verification
 

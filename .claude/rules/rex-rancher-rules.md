@@ -95,7 +95,7 @@ commenting, closing or creating unless the user explicitly says to handle a spec
 ## Reference, don't restate
 
 Perl house style and cpanfile pinning: skills `getty-perl-core`,
-`getty-perl-release-author-getty`. Rex idioms and connection types: skill `getty-rex`.
+`getty-perl-release-author-getty`. Rex idioms and connection types: skill `rex`.
 RKE2/K3s, Cilium and GPU domain knowledge: skills `kubernetes-rke2`,
 `kubernetes-cilium-concepts`, `kubernetes-gpu`. This distribution's pipeline invariants:
 skill `rex-rancher-core`. All are force-loaded for `rex-rancher-*` agents; do not
