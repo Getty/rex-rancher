@@ -1,0 +1,37 @@
+---
+class: standard
+created: 2026-09-09T02:14:36Z
+id: 4
+priority: high
+status: backlog
+title: 'Rex::LibSSH >= 0.004: strict host-key Default bricht ersten Connect auf frischen
+  Hetzner-Hosts'
+updated: 2026-09-09T02:14:36Z
+---
+
+Rex::LibSSH 0.004 verifiziert den Server-Host-Key ab sofort per Default gegen
+known_hosts (CWE-322-Fix, siehe rex-libssh karr #8). Vorher setzte
+Rex::Interface::Connection::LibSSH hart strict_hostkeycheck => 0, pruefte also
+nie.
+
+Dieses Projekt `recommends 'Rex::LibSSH'` und provisioniert frische
+Hetzner-Dedicated-Server, die keinen known_hosts-Eintrag haben. Sobald
+Rex::LibSSH >= 0.004 gezogen wird, schlaegt der ERSTE Connect fehl:
+
+  can't connect to <host>: host key is not in known_hosts and
+  strict_hostkeycheck is on
+
+Fix im Deploy-Flow, eins von:
+  - vor dem ersten Rex-Connect `ssh-keyscan <host> >> known_hosts`
+    (empfohlen, behaelt die Host-Verifikation), oder
+  - pro Connection `strict_hostkeycheck => 0`, bzw. Rexfile-weit
+    `-feature => ['disable_strict_host_key_checking']` (deaktiviert die
+    Pruefung -- Security-Tradeoff bewusst dokumentieren).
+
+Timing: greift erst, wenn Rex::LibSSH >= 0.004 tatsaechlich released/gezogen
+wird; das ist derzeit noch durch das ausstehende Net::LibSSH-0.004-Release
+geblockt (rex-libssh karr #8). Also VOR dem Upgrade auf Rex::LibSSH 0.004 den
+Deploy-Flow anpassen.
+
+Quelle: Pre-Release-Audit von rex-libssh (rex-libssh-release-checker,
+2026-09-09).
