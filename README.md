@@ -66,6 +66,13 @@ set connection => 'LibSSH';
 
 `Rex::GPU` is required only when using `gpu => 1`.
 
+### Supported / verified distributions
+
+Verified on Debian, Ubuntu, and RHEL/Rocky. openSUSE Leap / SLES is
+**unverified and unsupported** — node preparation there relies on Rex's
+generic `pkg` abstraction (zypper) and has never been exercised on real
+SUSE hardware, so treat it as best-effort only.
+
 ### Host-key verification on fresh hosts
 
 `Rex::LibSSH` >= 0.004 verifies the server host key against your `known_hosts`

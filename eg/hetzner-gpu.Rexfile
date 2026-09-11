@@ -7,7 +7,7 @@
 #   rex -f eg/hetzner-gpu-rke2.Rexfile -H <IP> get_token
 #
 # Prerequisites:
-#   - Fresh Debian/Ubuntu/openSUSE on Hetzner dedicated server with NVIDIA GPU
+#   - Fresh Debian/Ubuntu on Hetzner dedicated server with NVIDIA GPU (openSUSE/SLES unverified)
 #   - SSH root access (key-based), Rex::LibSSH for SFTP-less hosts
 #   - cpanm Rex::GPU Rex::Rancher (or -Ilib paths for dev)
 #

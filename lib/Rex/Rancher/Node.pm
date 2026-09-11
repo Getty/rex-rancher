@@ -207,9 +207,11 @@ sub _configure_sysctl {
 =head1 DESCRIPTION
 
 L<Rex::Rancher::Node> prepares a Linux node for Rancher Kubernetes
-distributions (RKE2 and K3s). It is distribution-agnostic — the same
-L</prepare_node> call works on Debian, Ubuntu, RHEL/Rocky/Alma, and
-openSUSE Leap.
+distributions (RKE2 and K3s). The same L</prepare_node> call is verified on
+Debian, Ubuntu, and RHEL/Rocky/Alma — the supported set. openSUSE Leap / SLES
+is B<unverified>: the base-package step there falls through to Rex's generic
+C<pkg> abstraction (zypper) and has never been exercised on real SUSE
+hardware, so it is unsupported and best-effort only.
 
 The module sets OS-level configuration that Kubernetes requires:
 

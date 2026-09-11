@@ -15,6 +15,11 @@ Revision history for Rex-Rancher
     keeps verification on rather than disabling strict_hostkeycheck, and is
     idempotent. Wired via a 'before ALL' pre-connect hook in
     eg/hetzner-gpu.Rexfile — the canonical operator pattern.
+  - Document the supported distribution set: node preparation is verified on
+    Debian, Ubuntu and RHEL/Rocky; openSUSE Leap / SLES is now marked
+    unverified and unsupported (the base-package step falls through to Rex's
+    generic pkg/zypper path and has never run on real SUSE hardware). No
+    behaviour change — documentation only.
 
 0.001     2026-03-29 04:21:30Z
   - Initial release
