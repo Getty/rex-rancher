@@ -1,6 +1,12 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - Warn loudly when the saved kubeconfig would still point at
+    https://127.0.0.1: rancher_deploy_server now emits a warning (rather than
+    silently saving an unusable file) when no server address can be derived
+    (no tls_san / kubeconfig_server) or when the derived address is loopback
+    (127.0.0.1, localhost, ::1). The file is still saved; only the silence is
+    removed.
   - Pre-connect host-key scan for Rex::LibSSH >= 0.004, which now verifies
     the server host key against known_hosts (CWE-322 fix). New exported
     rancher_scan_known_hosts($host) runs ssh-keyscan locally and seeds the

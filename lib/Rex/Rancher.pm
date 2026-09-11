@@ -118,7 +118,11 @@ even when C<gpu =E<gt> 1>.
 
 RKE2 and K3s write C<https://127.0.0.1> into the kubeconfig. The first
 C<tls_san> entry (or C<kubeconfig_server> if provided) is substituted for
-C<127.0.0.1> so the saved file connects to the real server address.
+C<127.0.0.1> so the saved file connects to the real server address. If no
+address can be derived (neither C<tls_san> nor C<kubeconfig_server> given), or
+the derived address is itself loopback (C<127.0.0.1>, C<localhost>, C<::1>),
+the file is still saved but a warning is logged: it will keep pointing at
+C<https://127.0.0.1> and cannot reach the cluster from the operator's machine.
 
 =item C<kubeconfig_server>
 
@@ -381,7 +385,28 @@ sub _save_kubeconfig_locally {
 
   # RKE2/K3s writes 127.0.0.1 in the kubeconfig; patch to the real address
   my $server_addr = _kubeconfig_server_addr(%opts);
-  if ($server_addr) {
+  my %loopback = map { $_ => 1 } qw(127.0.0.1 localhost ::1);
+
+  if (!defined $server_addr || !length $server_addr) {
+    # No tls_san / kubeconfig_server given: nothing to patch to, so the saved
+    # file keeps pointing at 127.0.0.1 and cannot reach the cluster remotely.
+    # Still save it (a local-only operator may want it) but make it loud.
+    Rex::Logger::info(
+      "Kubeconfig saved to $output_file but no server address could be "
+        . "derived — it still points at https://127.0.0.1 and will not reach "
+        . "the cluster from this machine; pass tls_san or kubeconfig_server",
+      "warn");
+  }
+  else {
+    if ($loopback{lc $server_addr}) {
+      # A loopback address patches 127.0.0.1 to itself (or another loopback):
+      # still unreachable from the operator's machine.
+      Rex::Logger::info(
+        "Kubeconfig server address '$server_addr' is a loopback address — the "
+          . "kubeconfig saved to $output_file will still point at the loopback "
+          . "interface and will not reach the cluster from this machine; pass "
+          . "a routable tls_san or kubeconfig_server", "warn");
+    }
     $content =~ s{https://127\.0\.0\.1:(\d+)}{https://$server_addr:$1}g;
   }
 
