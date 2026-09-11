@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-09-11T02:58:21Z
+claimed_by: opus-ticket-round
+class: standard
+completed: 2026-09-11T23:00:18Z
+created: 2026-08-31T04:30:27Z
+id: 1
+priority: medium
+started: 2026-09-11T02:48:31Z
+status: done
+tags:
+- testing
+title: No automated coverage of the deploy pipeline
+updated: 2026-09-11T23:00:18Z
+---
+
+t/ holds only t/00-load.t, a compile check on the six modules. install_server/install_agent/install_cilium and the K8s.pm API objects have no automated coverage; a pipeline change is only trustworthy after a live run against a real node (eg/hetzner-gpu.Rexfile). Add integration coverage (or, minimum, a documented live-deploy verification checklist) so a change can be gated without a manual Hetzner deploy each time.
+
+RESOLVED (commit f2d0d42, branch worktree-ticket-round). Kern-Deliverable: eg/DEPLOY-CHECKLIST.md — stage-by-stage Live-Deploy-Checkliste entlang der echten rancher_deploy_server-Pipeline (host-key scan -> node prep -> GPU -> install_server -> kubeconfig patch -> wait_for_api -> Cilium -> device plugin -> untaint), RKE2 UND K3s wo sie divergieren, plus RKE2/K3s-Differenztabelle. BEWUSST KEIN gemockter Integrationstest (wuerde Deploy-Sicherheit vortaeuschen, House-Rules-Verbot). t/00-load.t prueft jetzt Rex::Rancher::K8s direkt (war nur transitiv). Bonus: nvidia-device-plugin DaemonSet aus deploy_nvidia_device_plugin in reine Sub _nvidia_device_plugin_daemonset_spec($version) extrahiert (behaviour-preserving, byte-identisch via is_deeply+canonical-JSON verifiziert) + Offline-Unit-Test t/nvidia-device-plugin-spec.t (kein Cluster/kubeconfig/Netz/Mock). README-Pointer. prove -lr t/ gruen (24 Tests; NUR Compile-Beweis, KEIN Deploy-Beweis). NEBENBEFUND: echte rke2/k3s-Lockstep-Verletzung (kube-proxy disabled auf K3s ohne Cilium-Replacement) — als eigene Karte angelegt, NICHT hier gefixt (Scope + braucht Design-Entscheidung + Live-K3s-Test).
+
+2026-09-11 23:00 Gemerged nach main in 0ffc547 (Merge der Ticket-Runde); prove gruen.
