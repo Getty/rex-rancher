@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-09-11T02:43:06Z
+claimed_by: opus-ticket-round
+class: standard
+completed: 2026-09-11T23:00:26Z
+created: 2026-08-31T04:30:31Z
+id: 2
+priority: low
+started: 2026-09-11T02:39:43Z
+status: done
+tags:
+- robustness
+title: kubeconfig server-address patch relies on tls_san ordering
+updated: 2026-09-11T23:00:26Z
+---
+
+_save_kubeconfig_locally rewrites https://127.0.0.1 to the FIRST tls_san entry (or kubeconfig_server). A caller who orders tls_san with a non-routable SAN first, or omits tls_san, silently gets a kubeconfig still pointing at 127.0.0.1. Consider validating/warning when no usable server address is derivable.
+
+RESOLVED (commit 7a07c2d, branch worktree-ticket-round). _save_kubeconfig_locally warnt jetzt via Rex::Logger(...,'warn') in zwei deterministischen Faellen statt still eine unbrauchbare kubeconfig zu speichern: (a) keine Adresse ableitbar (kein tls_san/kubeconfig_server) und (b) abgeleitete Adresse ist loopback (127.0.0.1/localhost/::1, case-insensitive). Datei wird in beiden Faellen weiter geschrieben (local-only-Operator will sie evtl.) — nur das Schweigen ist weg. BEWUSST auf diese zwei Faelle beschraenkt, KEINE Routability/DNS-Checks (false-positive offline). POD nachgezogen. Neuer Offline-Regressionstest t/kubeconfig-server-addr.t deckt _kubeconfig_server_addr (Precedence, arrayref, CSV-String, single, empty). Distributionsagnostisch. Suite gruen (nur Compile+Pure-Function-Beweis, KEIN Deploy-Beweis).
+
+2026-09-11 23:00 Gemerged nach main in 0ffc547 (Merge der Ticket-Runde); prove gruen.
