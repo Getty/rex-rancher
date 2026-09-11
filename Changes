@@ -20,6 +20,13 @@ Revision history for Rex-Rancher
     unverified and unsupported (the base-package step falls through to Rex's
     generic pkg/zypper path and has never run on real SUSE hardware). No
     behaviour change — documentation only.
+  - Add eg/DEPLOY-CHECKLIST.md, a stage-by-stage live-deploy verification
+    checklist (host-key scan, node prep, GPU, install_server, kubeconfig
+    patch, wait_for_api, Cilium, device plugin, untaint) covering both RKE2
+    and K3s where they differ — the honest gate for a pipeline change, since
+    the suite proves compilation only. README points at it. t/00-load.t now
+    also compile-checks Rex::Rancher::K8s directly (was loaded only
+    transitively). No behaviour change.
 
 0.001     2026-03-29 04:21:30Z
   - Initial release

@@ -66,6 +66,8 @@ set connection => 'LibSSH';
 
 `Rex::GPU` is required only when using `gpu => 1`.
 
+**Verifying a deploy:** `prove -lr t/` only checks that the modules compile — there is no integration test. To trust a pipeline change, run the live-deploy checklist in [`eg/DEPLOY-CHECKLIST.md`](eg/DEPLOY-CHECKLIST.md) against a real node.
+
 ### Supported / verified distributions
 
 Verified on Debian, Ubuntu, and RHEL/Rocky. openSUSE Leap / SLES is
