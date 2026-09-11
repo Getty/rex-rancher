@@ -66,6 +66,24 @@ set connection => 'LibSSH';
 
 `Rex::GPU` is required only when using `gpu => 1`.
 
+### Host-key verification on fresh hosts
+
+`Rex::LibSSH` >= 0.004 verifies the server host key against your `known_hosts`
+(a CWE-322 fix; earlier versions never checked). A freshly-installed Hetzner
+box has no entry, so the first connect fails with `host key is not in
+known_hosts and strict_hostkeycheck is on`. Seed the key before connecting —
+the exported `rancher_scan_known_hosts($host)` runs `ssh-keyscan` locally and
+appends it, which **keeps** verification on instead of disabling it. Because
+Rex opens the connection before the task body runs, wire it into a pre-connect
+`before 'ALL'` hook (see `eg/hetzner-gpu.Rexfile`):
+
+```perl
+before 'ALL' => sub {
+    my ($server) = @_;
+    rancher_scan_known_hosts($server);
+};
+```
+
 ## Installation
 
 ```

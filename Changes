@@ -1,6 +1,14 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - Pre-connect host-key scan for Rex::LibSSH >= 0.004, which now verifies
+    the server host key against known_hosts (CWE-322 fix). New exported
+    rancher_scan_known_hosts($host) runs ssh-keyscan locally and seeds the
+    key before the first verified connect, so provisioning a fresh SFTP-less
+    Hetzner box no longer dies with "host key is not in known_hosts". It
+    keeps verification on rather than disabling strict_hostkeycheck, and is
+    idempotent. Wired via a 'before ALL' pre-connect hook in
+    eg/hetzner-gpu.Rexfile — the canonical operator pattern.
 
 0.001     2026-03-29 04:21:30Z
   - Initial release

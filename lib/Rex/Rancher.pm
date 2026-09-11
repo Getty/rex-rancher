@@ -14,6 +14,9 @@ use Rex::Rancher::Cilium;
 use Rex::Rancher::K8s;
 use Rex::Logger;
 
+use File::Basename qw(dirname);
+use File::Path qw(make_path);
+
 require Rex::Exporter;
 use base qw(Rex::Exporter);
 
@@ -22,6 +25,7 @@ use vars qw(@EXPORT);
 @EXPORT = qw(
   rancher_deploy_server
   rancher_deploy_agent
+  rancher_scan_known_hosts
   wait_for_api
   untaint_node
   deploy_nvidia_device_plugin
@@ -224,6 +228,128 @@ sub rancher_deploy_agent {
   install_agent(%opts);
 
   Rex::Logger::info("$distribution agent deployment complete");
+}
+
+=method rancher_scan_known_hosts($host, %opts)
+
+Pre-seed the local C<known_hosts> with C<$host>'s SSH host key by running
+C<ssh-keyscan> B<on the machine executing Rex> (not on the target). Returns
+true if a key was added, false/undef otherwise.
+
+This is a I<pre-connect> helper: L<Rex::LibSSH> E<gt>= 0.004 verifies the
+server host key against C<known_hosts> (a CWE-322 fix; earlier versions never
+checked). A freshly-installed host — the Hetzner dedicated servers this
+distribution targets — has no C<known_hosts> entry, so the very first verified
+connect dies with C<host key is not in known_hosts and strict_hostkeycheck is
+on>. Scanning the key in beforehand fixes that while B<keeping> host-key
+verification on, which is why this is preferred over disabling the check.
+
+Because Rex opens the connection before the task body runs, call this from a
+C<before> hook so it executes ahead of C<connect> (see the C<before 'ALL'>
+block in F<eg/hetzner-gpu.Rexfile>). It shells out locally and never uses
+Rex's C<run>, since there is no connection yet:
+
+  before 'ALL' => sub {
+    my ($server) = @_;
+    rancher_scan_known_hosts($server);
+  };
+
+It is idempotent (an already-trusted host is left untouched) and degrades to a
+warning — never a hard failure — when C<ssh-keyscan> is absent or the host is
+unreachable; the subsequent verified connect then surfaces the real error.
+
+Options:
+
+=over
+
+=item C<known_hosts>
+
+Path to the C<known_hosts> file to update. Defaults to
+C<$HOME/.ssh/known_hosts>.
+
+=back
+
+=cut
+
+sub rancher_scan_known_hosts {
+  my ($host, %opts) = @_;
+
+  $host = "$host" if ref $host;    # Rex server objects stringify to the host
+  return unless defined $host && length $host;
+  return if $host eq 'localhost' || $host eq '127.0.0.1' || $host eq '::1';
+
+  unless (_have_local_command('ssh-keyscan')) {
+    Rex::Logger::info(
+      "ssh-keyscan not found locally — cannot pre-seed the host key for "
+        . "$host; a verified connect will fail if the key is unknown", "warn");
+    return;
+  }
+
+  my $known_hosts = $opts{known_hosts};
+  unless (defined $known_hosts && length $known_hosts) {
+    unless ($ENV{HOME}) {
+      Rex::Logger::info(
+        "Cannot scan host key for $host: \$HOME is unset and no known_hosts "
+          . "path was given", "warn");
+      return;
+    }
+    $known_hosts = "$ENV{HOME}/.ssh/known_hosts";
+  }
+
+  # Idempotent: if the key is already trusted, leave known_hosts untouched —
+  # never disturb a key the operator has already pinned.
+  return if -f $known_hosts && _known_host_present($host, $known_hosts);
+
+  my $keys = _run_local_capture('ssh-keyscan', $host) // '';
+  my @key_lines = grep { /\S/ && !/^\s*#/ } split /\n/, $keys;
+  unless (@key_lines) {
+    Rex::Logger::info(
+      "ssh-keyscan returned no host key for $host (host unreachable?) — "
+        . "known_hosts left unchanged", "warn");
+    return;
+  }
+
+  my $dir = dirname($known_hosts);
+  make_path($dir, { mode => 0700 }) if length $dir && !-d $dir;
+
+  open(my $fh, '>>', $known_hosts)
+    or do {
+      Rex::Logger::info(
+        "Cannot append to $known_hosts: $! — host key for $host not saved",
+        "warn");
+      return;
+    };
+  print $fh "$_\n" for @key_lines;
+  close $fh;
+
+  Rex::Logger::info("Scanned host key for $host into $known_hosts");
+  return 1;
+}
+
+sub _known_host_present {
+  my ($host, $known_hosts) = @_;
+  return 0 unless _have_local_command('ssh-keygen');
+  # ssh-keygen -F exits 0 when a matching entry exists (handles hashed hosts),
+  # 1 otherwise. Its stdout is captured so the found line is not echoed.
+  _run_local_capture('ssh-keygen', '-F', $host, '-f', $known_hosts);
+  return ($? >> 8) == 0 ? 1 : 0;
+}
+
+sub _have_local_command {
+  my ($name) = @_;
+  for my $dir (split /:/, ($ENV{PATH} // '')) {
+    return 1 if length $dir && -x "$dir/$name";
+  }
+  return 0;
+}
+
+sub _run_local_capture {
+  my (@cmd) = @_;
+  my $pid = open(my $out, '-|', @cmd) or return;
+  local $/;
+  my $content = <$out>;
+  close $out;    # sets $? to the child exit status
+  return defined $content ? $content : '';
 }
 
 sub _gpu_setup_if_requested {

@@ -187,4 +187,24 @@ task "status", sub {
   say run("cat /etc/rancher/rke2/registries.yaml 2>/dev/null || echo '(not configured)'", auto_die => 0);
 };
 
+# ============================================================
+#  Pre-connect host-key scan (Rex::LibSSH >= 0.004)
+# ============================================================
+#
+# Rex::LibSSH >= 0.004 verifies the server host key against known_hosts
+# (CWE-322 fix); before that it never checked. A freshly-installed Hetzner
+# box has no known_hosts entry, so the FIRST verified connect would die with
+# "host key is not in known_hosts and strict_hostkeycheck is on". This
+# 'before ALL' hook runs on the LOCAL machine BEFORE Rex opens the SSH
+# connection for any task (Rex runs before-hooks ahead of ->connect) and
+# ssh-keyscans the target into known_hosts — which KEEPS host-key
+# verification on, rather than disabling it.
+#
+# It must come after the task definitions: 'before' attaches to tasks that
+# already exist.
+before 'ALL' => sub {
+  my ($server) = @_;
+  rancher_scan_known_hosts($server);
+};
+
 1;
