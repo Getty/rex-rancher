@@ -1,0 +1,45 @@
+---
+claimed_at: 2026-09-11T02:39:16Z
+claimed_by: opus-ticket-round
+class: standard
+completed: 2026-09-11T23:00:42Z
+created: 2026-09-09T02:14:36Z
+id: 4
+priority: high
+started: 2026-09-11T02:26:18Z
+status: done
+title: 'Rex::LibSSH >= 0.004: strict host-key Default bricht ersten Connect auf frischen
+  Hetzner-Hosts'
+updated: 2026-09-11T23:00:42Z
+---
+
+Rex::LibSSH 0.004 verifiziert den Server-Host-Key ab sofort per Default gegen
+known_hosts (CWE-322-Fix, siehe rex-libssh karr #8). Vorher setzte
+Rex::Interface::Connection::LibSSH hart strict_hostkeycheck => 0, pruefte also
+nie.
+
+Dieses Projekt `recommends 'Rex::LibSSH'` und provisioniert frische
+Hetzner-Dedicated-Server, die keinen known_hosts-Eintrag haben. Sobald
+Rex::LibSSH >= 0.004 gezogen wird, schlaegt der ERSTE Connect fehl:
+
+  can't connect to <host>: host key is not in known_hosts and
+  strict_hostkeycheck is on
+
+Fix im Deploy-Flow, eins von:
+  - vor dem ersten Rex-Connect `ssh-keyscan <host> >> known_hosts`
+    (empfohlen, behaelt die Host-Verifikation), oder
+  - pro Connection `strict_hostkeycheck => 0`, bzw. Rexfile-weit
+    `-feature => ['disable_strict_host_key_checking']` (deaktiviert die
+    Pruefung -- Security-Tradeoff bewusst dokumentieren).
+
+Timing: greift erst, wenn Rex::LibSSH >= 0.004 tatsaechlich released/gezogen
+wird; das ist derzeit noch durch das ausstehende Net::LibSSH-0.004-Release
+geblockt (rex-libssh karr #8). Also VOR dem Upgrade auf Rex::LibSSH 0.004 den
+Deploy-Flow anpassen.
+
+Quelle: Pre-Release-Audit von rex-libssh (rex-libssh-release-checker,
+2026-09-09).
+
+RESOLVED (commit bccf105, branch worktree-ticket-round). ssh-keyscan-Ansatz implementiert (behaelt Host-Key-Verifikation; strict_hostkeycheck NICHT deaktiviert). Neuer Export rancher_scan_known_hosts($host) in Rex::Rancher laeuft ssh-keyscan LOKAL (kein Rex-run, es gibt noch keine Connection), idempotent via 'ssh-keygen -F', skippt localhost, degradiert zu Warnung statt die. Integration: 'before ALL' Pre-Connect-Hook in eg/hetzner-gpu.Rexfile — Rex feuert before-Hooks bei Task.pm:631, connect erst bei :688 (Worker-Runtime-Nachweis). Hook MUSS im Rexfile (package main) bleiben: TaskList::modify package-scoped einen library-seitigen before auf ^Rancher: und wuerde an keinen main-Task binden. cpanfile UNVERAENDERT (recommends 'Rex::LibSSH', kein Pin) — Fix ist proaktiv vor dem noch geblockten 0.004-Release. Distributionsagnostisch; rex-gpu #4 kann Helper+Hook verbatim spiegeln. Compile-Suite gruen (nur Kompilation, KEIN Deploy-Beweis — braucht Live-Run gegen echten Node sobald Rex::LibSSH 0.004 gezogen wird).
+
+2026-09-11 23:00 Gemerged nach main in 0ffc547 (Merge der Ticket-Runde); prove gruen.
