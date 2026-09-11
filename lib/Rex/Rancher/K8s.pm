@@ -139,51 +139,7 @@ sub deploy_nvidia_device_plugin {
   my $api = _api($kubeconfig);
 
   my $ds = $api->new_object(DaemonSet =>
-    metadata => {
-      name      => 'nvidia-device-plugin-daemonset',
-      namespace => 'kube-system',
-    },
-    spec => {
-      selector => {
-        matchLabels => { name => 'nvidia-device-plugin-ds' },
-      },
-      updateStrategy => { type => 'RollingUpdate' },
-      template => {
-        metadata => {
-          labels => { name => 'nvidia-device-plugin-ds' },
-        },
-        spec => {
-          runtimeClassName  => 'nvidia',
-          priorityClassName => 'system-node-critical',
-          tolerations => [{
-            key      => 'nvidia.com/gpu',
-            operator => 'Exists',
-            effect   => 'NoSchedule',
-          }],
-          containers => [{
-            name  => 'nvidia-device-plugin-ctr',
-            image => "nvcr.io/nvidia/k8s-device-plugin:$version",
-            env   => [{
-              name  => 'FAIL_ON_INIT_ERROR',
-              value => 'false',
-            }],
-            securityContext => {
-              allowPrivilegeEscalation => \0,
-              capabilities            => { drop => ['ALL'] },
-            },
-            volumeMounts => [{
-              name      => 'device-plugin',
-              mountPath => '/var/lib/kubelet/device-plugins',
-            }],
-          }],
-          volumes => [{
-            name     => 'device-plugin',
-            hostPath => { path => '/var/lib/kubelet/device-plugins' },
-          }],
-        },
-      },
-    },
-  );
+    %{ _nvidia_device_plugin_daemonset_spec($version) });
 
   eval { $api->create($ds) };
   if ($@) {
@@ -271,6 +227,62 @@ sub _api {
   return Kubernetes::REST::Kubeconfig->new(
     kubeconfig_path => $kubeconfig,
   )->api;
+}
+
+# The nvidia-device-plugin DaemonSet as a plain hashref, split out verbatim
+# from deploy_nvidia_device_plugin so its shape can be unit-tested offline —
+# no cluster, no kubeconfig, no Kubernetes::REST client. $version is the only
+# value that varies; the caller resolves the DEVICE_PLUGIN_VERSION default
+# before calling. new_object(DaemonSet => %{ ... }) receives exactly the same
+# named args as the previous inline literal.
+sub _nvidia_device_plugin_daemonset_spec {
+  my ($version) = @_;
+  return {
+    metadata => {
+      name      => 'nvidia-device-plugin-daemonset',
+      namespace => 'kube-system',
+    },
+    spec => {
+      selector => {
+        matchLabels => { name => 'nvidia-device-plugin-ds' },
+      },
+      updateStrategy => { type => 'RollingUpdate' },
+      template => {
+        metadata => {
+          labels => { name => 'nvidia-device-plugin-ds' },
+        },
+        spec => {
+          runtimeClassName  => 'nvidia',
+          priorityClassName => 'system-node-critical',
+          tolerations => [{
+            key      => 'nvidia.com/gpu',
+            operator => 'Exists',
+            effect   => 'NoSchedule',
+          }],
+          containers => [{
+            name  => 'nvidia-device-plugin-ctr',
+            image => "nvcr.io/nvidia/k8s-device-plugin:$version",
+            env   => [{
+              name  => 'FAIL_ON_INIT_ERROR',
+              value => 'false',
+            }],
+            securityContext => {
+              allowPrivilegeEscalation => \0,
+              capabilities            => { drop => ['ALL'] },
+            },
+            volumeMounts => [{
+              name      => 'device-plugin',
+              mountPath => '/var/lib/kubelet/device-plugins',
+            }],
+          }],
+          volumes => [{
+            name     => 'device-plugin',
+            hostPath => { path => '/var/lib/kubelet/device-plugins' },
+          }],
+        },
+      },
+    },
+  };
 }
 
 sub _wait_for_gpu_resource {

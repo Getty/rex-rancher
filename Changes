@@ -1,6 +1,32 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - Warn loudly when the saved kubeconfig would still point at
+    https://127.0.0.1: rancher_deploy_server now emits a warning (rather than
+    silently saving an unusable file) when no server address can be derived
+    (no tls_san / kubeconfig_server) or when the derived address is loopback
+    (127.0.0.1, localhost, ::1). The file is still saved; only the silence is
+    removed.
+  - Pre-connect host-key scan for Rex::LibSSH >= 0.004, which now verifies
+    the server host key against known_hosts (CWE-322 fix). New exported
+    rancher_scan_known_hosts($host) runs ssh-keyscan locally and seeds the
+    key before the first verified connect, so provisioning a fresh SFTP-less
+    Hetzner box no longer dies with "host key is not in known_hosts". It
+    keeps verification on rather than disabling strict_hostkeycheck, and is
+    idempotent. Wired via a 'before ALL' pre-connect hook in
+    eg/hetzner-gpu.Rexfile — the canonical operator pattern.
+  - Document the supported distribution set: node preparation is verified on
+    Debian, Ubuntu and RHEL/Rocky; openSUSE Leap / SLES is now marked
+    unverified and unsupported (the base-package step falls through to Rex's
+    generic pkg/zypper path and has never run on real SUSE hardware). No
+    behaviour change — documentation only.
+  - Add eg/DEPLOY-CHECKLIST.md, a stage-by-stage live-deploy verification
+    checklist (host-key scan, node prep, GPU, install_server, kubeconfig
+    patch, wait_for_api, Cilium, device plugin, untaint) covering both RKE2
+    and K3s where they differ — the honest gate for a pipeline change, since
+    the suite proves compilation only. README points at it. t/00-load.t now
+    also compile-checks Rex::Rancher::K8s directly (was loaded only
+    transitively). No behaviour change.
 
 0.001     2026-03-29 04:21:30Z
   - Initial release
