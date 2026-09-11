@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-09-11T02:47:08Z
+claimed_by: opus-ticket-round
+class: standard
+completed: 2026-09-11T23:00:34Z
+created: 2026-08-31T04:30:35Z
+id: 3
+priority: low
+started: 2026-09-11T02:44:03Z
+status: done
+tags:
+- portability
+title: prepare_node non-Debian base-package path unverified on openSUSE/SLES
+updated: 2026-09-11T23:00:34Z
+---
+
+README verifies Debian 13, Rocky 10.1, Ubuntu 24.04. _install_base_packages special-cases is_debian (stop unattended-upgrades, apt-get update); RHEL is covered by the Rocky verification. The is_suse path (pkg only, zypper) has never been run. Verify prepare_node on openSUSE Leap/SLES or document it as unsupported.
+
+RESOLVED (commit 7e36640, branch worktree-ticket-round). DOKUMENTATION-ONLY, kein Verhalten geaendert (Maintainer-Vorgabe: dokumentieren statt raten). Node.pm DESCRIPTION-POD entschaerft: Debian/Ubuntu/RHEL-Rocky-Alma sind der verifizierte/supportete Satz; openSUSE Leap/SLES als UNVERIFIED/unsupported/best-effort markiert (base-package-Schritt faellt auf Rex' generische pkg/zypper-Abstraktion durch, nie auf echter SUSE-Hardware gelaufen). Dazu README-Subsection 'Supported / verified distributions', eg/Rexfile-Prereq-Kommentar annotiert, 1 Changes-Bullet. KEINE is_suse-Branch, kein Runtime-Warn, kein die — _install_base_packages byte-gleich. RHEL gilt via Rocky als abgedeckt. podchecker-Rauschen (=method/L</prepare_node>/=encoding) ist pre-existing (Pod::Weaver loest es bei dzil build), durch #3 unveraendert. prove -lr t/ gruen.
+
+2026-09-11 23:00 Gemerged nach main in 0ffc547 (Merge der Ticket-Runde); prove gruen.
