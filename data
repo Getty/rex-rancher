@@ -1,0 +1,34 @@
+---
+class: standard
+completed: 2026-09-12T02:51:59Z
+created: 2026-09-11T02:58:52Z
+id: 5
+priority: high
+started: 2026-09-12T02:51:59Z
+status: done
+title: 'K3s: kube-proxy disabled but Cilium not set to replace it (rke2/k3s lockstep
+  gap)'
+updated: 2026-09-12T02:51:59Z
+---
+
+rke2/k3s Lockstep-Verletzung: kube-proxy wird auf K3s deaktiviert, aber Cilium nicht auf Replacement gesetzt -> Service/ClusterIP-Routing auf K3s vermutlich tot.
+
+Befund (im Code verifiziert, branch worktree-ticket-round):
+- Server.pm _write_config: bei cilium=1 wird disable-kube-proxy: true fuer BEIDE Distributionen geschrieben (nur cilium-gated, nicht distribution-abhaengig).
+- Cilium.pm install_cilium (Z.91): "--set kubeProxyReplacement=true" NUR fuer rke2. _write_helm_values (Z.239-253): RKE2-Zweig setzt kubeProxyReplacement: true, k8sServiceHost: 127.0.0.1, k8sServicePort: 6443; K3s-Zweig setzt NUR operator.replicas: 1.
+=> Auf K3s + Default-Cilium ist kube-proxy weg UND Cilium ersetzt es nicht.
+
+Design-Entscheidung noetig, NICHT blind fixen: entweder (a) K3s-Helm-Values ebenfalls kubeProxyReplacement/k8sServiceHost/k8sServicePort setzen, oder (b) auf K3s disable-kube-proxy NICHT schreiben. Muss per Live-K3s-Deploy verifiziert werden (siehe eg/DEPLOY-CHECKLIST.md Stage g).
+
+Verwandte K3s-config.yaml-Lockstep-Smells (im selben Zug pruefen): disable: [rke2-ingress-nginx] ist auf K3s inert (K3s nutzt Traefik/ServiceLB via --disable Flags); ggf. cni: none vs flannel-backend fuer K3s.
+
+Dateien: lib/Rex/Rancher/Server.pm (_write_config), lib/Rex/Rancher/Cilium.pm (install_cilium, _write_helm_values). Entdeckt beim Bearbeiten von karr #1 (Coverage/Checkliste), 2026-09-11.
+
+2026-09-11 23:03 ENTSCHEIDUNGSVORLAGE (verifiziert gegen main-Code):
+Bug bestaetigt: Server.pm _write_config Z.312-315 schreibt bei $cilium fuer BEIDE Distros cni:none + disable-kube-proxy:true (nur cilium-gated, nicht distro-abhaengig). Cilium.pm _write_helm_values Z.239-253: RKE2-Zweig setzt kubeProxyReplacement:true + k8sServiceHost:127.0.0.1 + k8sServicePort:6443; K3s-Zweig (Z.248-252) NUR operator.replicas:1. Ebenso Cilium.pm Z.91 --set kubeProxyReplacement=true nur fuer rke2. => Auf K3s+cilium: kube-proxy weg, Cilium ersetzt es nicht -> Service/ClusterIP-Routing tot.
+OPTION A (pure eBPF): K3s dieselbe Replacement-Config geben -- K3s-Helm-Zweig (Z.248-252) um kubeProxyReplacement:true + k8sServiceHost/Port ergaenzen + Z.91 fuer k3s. OFFEN: k8sServiceHost/Port fuer K3s (Server-Node 127.0.0.1:6443 ok, Agent-Nodes brauchen Server-Adresse) -- live klaeren.
+OPTION B (empfohlen, konservativ): disable-kube-proxy (Server.pm Z.314) rke2-only machen -> K3s behaelt eigenes kube-proxy, Cilium laeuft ohne Replacement. Robuster, K3s bleibt sofort funktionsfaehig.
+IM SELBEN ZUG mitentscheiden: cni:none (Server.pm Z.313) ist RKE2-Syntax; K3s nutzt flannel-backend:none (+disable-network-policy) -> auf K3s vermutlich inert/falsch. disable:[rke2-ingress-nginx] (Z.317) auf K3s inert (K3s: Traefik/ServiceLB via --disable).
+VERIFIKATION: Live-K3s-Deploy noetig, eg/DEPLOY-CHECKLIST.md Stage g. Ohne K3s-Cluster nicht abschliessbar.
+
+2026-09-12 02:51 Gefixt in commit efaba02: rke2-only-Gating von cni:none + disable-kube-proxy (Root-Cause), reine _build_server_config + Offline-Test t/server-config.t (k3s+cilium bekommt disable-kube-proxy nicht mehr -> Routing intakt). RKE2 als einzig verifizierte/unterstuetzte Distribution dokumentiert (Server.pm+Cilium.pm POD); install_server warnt bei k3s. K3s bewusst zurueckgestellt (RKE2-Fokus).
