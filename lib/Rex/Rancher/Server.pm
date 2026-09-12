@@ -70,7 +70,10 @@ Options:
 
 =item C<distribution>
 
-C<rke2> (default) or C<k3s>.
+C<rke2> (default) or C<k3s>. B<Only rke2 is verified and supported.> The k3s
+path installs and runs, but is not deploy-verified: Cilium's kube-proxy
+replacement is wired for rke2 only (see L</cilium> and L<Rex::Rancher::Cilium>),
+so on k3s kube-proxy and the default CNI are left in place.
 
 =item C<token>
 
@@ -111,10 +114,15 @@ distribution config directory. Structure:
 
 =item C<cilium>
 
-If true (default: C<1>), set C<cni: none> and C<disable-kube-proxy: true>
-in the server config, preparing the node for Cilium CNI with full
-kube-proxy replacement. Set to C<0> to keep the distribution's default
-CNI (Canal for RKE2, Flannel for K3s).
+On B<rke2>, if true (default: C<1>), set C<cni: none> and
+C<disable-kube-proxy: true> in the server config, preparing the node for
+Cilium CNI with full kube-proxy replacement. Set to C<0> to keep RKE2's
+default Canal CNI.
+
+On k3s these keys are B<not> written even when C<cilium> is true: Cilium's
+kube-proxy replacement is rke2-only, so k3s keeps its own kube-proxy and
+default Flannel CNI. Disabling kube-proxy without the matching Cilium config
+broke Service/ClusterIP routing on k3s (karr #5).
 
 =back
 
@@ -131,6 +139,10 @@ sub install_server {
   my (%opts) = @_;
 
   my $distribution = $opts{distribution} // 'rke2';
+  Rex::Logger::info(
+    "k3s is not deploy-verified in Rex::Rancher; only rke2 is supported. "
+      . "Cilium kube-proxy replacement is skipped on k3s (see karr #5).", "warn")
+    if $distribution eq 'k3s';
   my $paths        = _paths($distribution);
   my $token        = $opts{token} // _generate_token();
   my $server       = $opts{server};
@@ -145,7 +157,7 @@ sub install_server {
   file $paths->{config_dir}, ensure => 'directory';
 
   # Write config.yaml
-  _write_config($paths, $token, $server, $tls_san, $node_labels, $cilium);
+  _write_config($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium);
 
   # Write registries.yaml if configured
   if ($registries) {
@@ -302,19 +314,30 @@ sub _generate_token {
 # Config file generation
 #
 
-sub _write_config {
-  my ($paths, $token, $server, $tls_san, $node_labels, $cilium) = @_;
+sub _build_server_config {
+  my ($distribution, $token, $server, $tls_san, $node_labels, $cilium) = @_;
+
+  $distribution //= 'rke2';
 
   my %config = (
     'token' => $token,
   );
 
-  if ($cilium) {
-    $config{'cni'}                = 'none';
-    $config{'disable-kube-proxy'} = JSON()->true;
+  # cni:none + disable-kube-proxy hand the CNI and kube-proxy roles to Cilium.
+  # Cilium's kube-proxy replacement (kubeProxyReplacement/k8sServiceHost/Port)
+  # is only wired for rke2 (see Rex::Rancher::Cilium), so these are gated to
+  # rke2. Writing them on k3s left kube-proxy disabled with nothing replacing
+  # it -> Service/ClusterIP routing dead (karr #5). k3s keeps its own kube-proxy
+  # and default CNI; the k3s path is currently unverified/unsupported.
+  if ($distribution eq 'rke2') {
+    if ($cilium) {
+      $config{'cni'}                = 'none';
+      $config{'disable-kube-proxy'} = JSON()->true;
+    }
+    # rke2-ingress-nginx is an rke2-specific bundled addon; disabling it is a
+    # deployment choice for this fleet and inert on k3s.
+    $config{'disable'} = ['rke2-ingress-nginx'];
   }
-
-  $config{'disable'} = ['rke2-ingress-nginx'];
 
   $config{server} = $server if $server;
 
@@ -328,11 +351,20 @@ sub _write_config {
     $config{'node-label'} = \@labels;
   }
 
+  return \%config;
+}
+
+sub _write_config {
+  my ($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium) = @_;
+
+  my $config =
+    _build_server_config($distribution, $token, $server, $tls_san, $node_labels, $cilium);
+
   my $config_file = $paths->{config_dir} . "config.yaml";
   Rex::Logger::info("Writing config to $config_file");
 
   file $config_file,
-    content => YAML::PP->new(boolean => 'JSON::PP')->dump_string(\%config);
+    content => YAML::PP->new(boolean => 'JSON::PP')->dump_string($config);
 }
 
 #

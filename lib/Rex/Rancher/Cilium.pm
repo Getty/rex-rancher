@@ -43,6 +43,12 @@ C<disable-kube-proxy: true> for this to work). For K3s, C<exclusive: true>
 is set for the CNI plugin to ensure K3s's built-in Flannel does not
 conflict.
 
+B<Only rke2 is verified and supported.> On k3s, kube-proxy replacement is
+B<not> enabled and the server config keeps kube-proxy in place (see
+L<Rex::Rancher::Server/install_server>): the k3s Helm values do not set
+C<kubeProxyReplacement>/C<k8sServiceHost>/C<k8sServicePort>, so Cilium runs
+alongside k3s's own kube-proxy. The k3s path is not deploy-verified (karr #5).
+
 Options:
 
 =over

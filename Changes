@@ -1,6 +1,15 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - Fix K3s Service/ClusterIP routing: with cilium enabled the server config
+    wrote cni:none + disable-kube-proxy:true for both distributions, but
+    Cilium's kube-proxy replacement is wired for rke2 only, so on K3s
+    kube-proxy was disabled with nothing replacing it. These keys (and the
+    rke2-ingress-nginx disable) are now gated to rke2; K3s keeps its own
+    kube-proxy and default CNI. Extracted the pure _build_server_config for
+    offline unit testing (t/server-config.t). RKE2 is the verified/supported
+    distribution; K3s is documented as unverified and install_server warns on
+    it (karr #5).
   - Warn loudly when the saved kubeconfig would still point at
     https://127.0.0.1: rancher_deploy_server now emits a warning (rather than
     silently saving an unusable file) when no server address can be derived
