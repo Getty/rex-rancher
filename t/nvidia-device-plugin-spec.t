@@ -2,6 +2,7 @@ use strict;
 use warnings;
 use Test::More;
 
+use IO::K8s;
 use Rex::Rancher::K8s;
 
 # _nvidia_device_plugin_daemonset_spec is a pure function: it returns the
@@ -11,6 +12,13 @@ use Rex::Rancher::K8s;
 # no cluster, no kubeconfig, no network, no Kubernetes::REST mock. This guards
 # the manifest's load-bearing fields against silent drift; it is the only part
 # of K8s.pm reachable without a live API server.
+#
+# Two layers of coverage below. First: the plain-hashref shape, so a field we
+# rely on (image tag, toleration, boolean securityContext, hostPath) cannot be
+# renamed or dropped unnoticed. Second: feed that same hashref through the real
+# IO::K8s type classes exactly as deploy_nvidia_device_plugin does, so that a
+# future IO::K8s tracking a newer Kubernetes — which may make a field we omit
+# newly required — fails loudly here instead of on a live deploy.
 
 my $version = 'v0.17.0';
 my $ds = Rex::Rancher::K8s::_nvidia_device_plugin_daemonset_spec($version);
@@ -59,5 +67,27 @@ my $pinned = Rex::Rancher::K8s::_nvidia_device_plugin_daemonset_spec('v9.9.9');
 is($pinned->{spec}{template}{spec}{containers}[0]{image},
   'nvcr.io/nvidia/k8s-device-plugin:v9.9.9',
   'a custom version reaches the image tag');
+
+# The real construction path. deploy_nvidia_device_plugin hands this hashref to
+# $api->new_object(DaemonSet => %{ ... }); Kubernetes::REST delegates new_object
+# straight to its inner IO::K8s (same for object_to_struct), so building through
+# IO::K8s here is the exact typed-object path — offline, no client, no network.
+# This is the assertion that catches required-field drift: if a future IO::K8s
+# makes a field the spec omits mandatory, construction dies here, not on a node.
+my $k8s = IO::K8s->new;
+
+my $obj = eval { $k8s->new_object(DaemonSet => %{ $ds }) };
+ok(!$@, 'new_object(DaemonSet => %$spec) constructs without dying')
+  or diag($@);
+isa_ok($obj, 'IO::K8s::Api::Apps::V1::DaemonSet',
+  'the spec builds the typed DaemonSet class');
+
+# Round-trip back to a struct walks every nested typed object, so a malformed
+# child fails loudly here — the same serialisation Kubernetes::REST runs to put
+# the manifest on the wire.
+my $struct = eval { $k8s->object_to_struct($obj) };
+ok(!$@, 'object_to_struct round-trips the DaemonSet without dying')
+  or diag($@);
+is(ref $struct, 'HASH', 'object_to_struct yields a plain hashref');
 
 done_testing;
