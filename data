@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-09-20T19:20:05Z
+claimed_by: opus-main
+class: standard
+completed: 2026-09-20T19:20:05Z
+created: 2026-09-20T19:17:01Z
+id: 8
+priority: high
+started: 2026-09-20T19:20:05Z
+status: done
+tags:
+- cpanfile
+- release-blocker
+title: cpanfile missing YAML::PP and JSON::MaybeXS (used in lib/Rex/Rancher/Server.pm)
+updated: 2026-09-20T19:20:05Z
+---
+
+Pre-release audit (0.002) found two runtime deps used in lib/ but not declared in cpanfile:
+
+- lib/Rex/Rancher/Server.pm:12 `use YAML::PP;` — used at Server.pm:367,458 (`YAML::PP->new(boolean => "JSON::PP")->dump_string(...)`) to write config.yaml/registries.yaml.
+- lib/Rex/Rancher/Server.pm:13 `use JSON::MaybeXS;` — used at Server.pm:335 (`JSON()->true`) for the disable-kube-proxy boolean.
+
+dist.ini uses [Prereqs::FromCPANfile] only (confirmed via `dzil build` log) — nothing auto-scans lib/ for `use` statements, so these never reach META.json. A fresh `cpanm Rex::Rancher` install would fail at runtime the first time install_server/update_registries writes config.yaml or registries.yaml (Cant locate YAML/PP.pm or JSON/MaybeXS.pm), even though prove -lr t/ and dzil test pass clean here because both modules happen to already be installed on this dev machine.
+
+Fix: add to cpanfile (unversioned per house style, no known minimum-version need — boolean => JSON::PP has been supported by installed YAML::PP v0.41.0 and long before):
+  requires "JSON::MaybeXS";
+  requires "YAML::PP";
+alphabetical order per getty-perl-core cpanfile convention. Route through rex-rancher-worker, not release-checker (audit-only).
+
+Behoben (opus-main): cpanfile ergaenzt um requires JSON::MaybeXS + requires YAML::PP (unversioniert). Verifiziert: META.json runtime.requires enthaelt beide nach dzil build; prove -lr t/ gruen. Als Metadaten-Fix direkt erledigt (cpanfile nicht behavior-relevant i.S.d. Delegations-Lock).
