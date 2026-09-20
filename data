@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-09-20T19:16:16Z
+created: 2026-09-20T19:08:26Z
+id: 7
+priority: medium
+started: 2026-09-20T19:16:16Z
+status: archived
+title: Pin Getty base deps once released to CPAN (Rex::LibSSH 0.004, Kubernetes::REST/IO::K8s
+  1.108)
+updated: 2026-09-20T19:16:16Z
+---
+
+Follow-up zu #6. Die Verhaltensaenderungen der neuen Basis-Versionen sind in rex-rancher bereits abgedeckt (Host-Key-Flow via rancher_scan_known_hosts; NVIDIA-DaemonSet konstruiert sauber unter IO::K8s 1.108), ABER die Versionen sind noch NICHT auf CPAN:
+- Rex::LibSSH: CPAN-latest 0.003, host-key-check kommt in 0.004 (lokal installiert, git-commit da, aber nicht auf CPAN)
+- Kubernetes::REST: CPAN-latest 1.107, lokal 1.108
+- IO::K8s: CPAN-latest 1.107, lokal 1.108
+
+cpanfile laesst alle drei aktuell unversioniert (requires Kubernetes::REST/IO::K8s ohne Version, recommends Rex::LibSSH ohne Version) — das ist korrekt und darf so bleiben, bis released.
+
+TODO sobald auf CPAN:
+1. recommends Rex::LibSSH => 0.004 (host-key-verifizierender Stand, den der before-ALL-Hook voraussetzt).
+2. requires Kubernetes::REST/IO::K8s => 1.108 nur pinnen, falls rex-rancher eine 1.108-only-Faehigkeit tatsaechlich braucht (aktuell nicht — Konstruktion laeuft auch unter 1.107). Sonst unversioniert lassen.
+3. House-Rule beachten: nur auf latest RELEASED CPAN-Version pinnen, nie auf $VERSION aus ~/dev.
+
+NICHT ohne Maintainer-Freigabe releasen.
+
+Obsolet/zurueckgezogen: Dieses Follow-up ging von 'auf CPAN-Release warten, bevor gepinnt wird' aus. Maintainer hat entschieden, die noetige Version JETZT zu pinnen (requires Rex::LibSSH 0.004) und koordiniert zu releasen — siehe #6. Kein Warten noetig.
