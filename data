@@ -1,0 +1,31 @@
+---
+claimed_at: 2026-09-20T22:41:43Z
+claimed_by: opus-main
+class: standard
+completed: 2026-09-20T22:41:43Z
+created: 2026-09-20T18:52:44Z
+id: 6
+priority: high
+started: 2026-09-20T19:00:57Z
+status: done
+tags:
+- libssh
+- security
+title: Rex::LibSSH's next release verifies host keys by default (CWE-322) — check
+  Hetzner provisioning flow
+updated: 2026-09-20T22:41:43Z
+---
+
+Rex::LibSSH gets a new default in its next release: the server host key is verified against known_hosts before authentication (CWE-322 fix). Freshly provisioned Hetzner dedicated servers are never in known_hosts, so the first connection in a deploy task can fail with a host-key error after a Rex::LibSSH upgrade.
+
+Before bumping Rex::LibSSH here, check the provisioning flow: either ssh-keyscan the box into known_hosts first, or set an explicit opt-out (strict_hostkeycheck => 0 per connection, or -feature => ['disable_strict_host_key_checking'] Rexfile-wide).
+
+Source: rex-libssh pre-release audit (HEAD 7085c0f). Not yet released.
+
+Flow geprueft (opus-main): bereits geloest via rancher_scan_known_hosts + before-ALL-Hook (ssh-keyscan-zuerst, haelt Verifikation an). Verifiziert: Rex 1.16.1 run_hook(before) Task.pm:631 laeuft VOR ->connect Task.pm:688 => Key wird vor dem verifizierten Connect geseedet. Idempotent, degradiert zu warn, ueberspringt localhost. Kein lib/-Change noetig. ABER cpanfile NICHT auf Rex::LibSSH 0.004 pinnen: 0.004 noch nicht auf CPAN (latest=0.003), nur lokal als git-commit/dev-install. Unversioniertes recommends bleibt korrekt bis 0.004 released. Bump blockiert auf CPAN-Release -> siehe Follow-up.
+
+Maintainer-Entscheidung: cpanfile nun HARTES requires Rex::LibSSH 0.004 (nicht recommends, nicht unversioniert). Begruendung: recommends ist weich (Clients skippen es), der CWE-322-Host-Key-Fix soll aber als Baseline erzwungen sein; Dist ist explizit fuer den LibSSH-Backend gebaut. Koordinierter Release durch Maintainer, House-Rule 'nur latest released CPAN pinnen' hier explizit aufgehoben. Regressionstest ergaenzt (t/nvidia-device-plugin-spec.t konstruiert DaemonSet offline ueber echte IO::K8s-Typklassen). dzil build + prove -lr t/ gruen (32 Tests). Flow-Annahme verifiziert. -> review.
+
+2026-09-20 19:17 Independent release-checker audit (0.002): rancher_scan_known_hosts + before-ALL hook confirmed correct (Rex::Rancher.pm:237-331), cpanfile Rex::LibSSH 0.004 pin confirmed intentional/maintainer-authorized (CPAN latest still 0.003 per cpanm --info). VERSION consistent 0.002 across all 6 lib/ modules. dzil build clean, dzil test --release green (40 tests incl. author-pod-syntax + release-changes_has_content). Changes {{$NEXT}} covers this work. One unrelated blocker found and filed separately as k8: cpanfile is missing YAML::PP and JSON::MaybeXS, both used directly in lib/Rex/Rancher/Server.pm. Overall: no blocker on the host-key/LibSSH work itself; k8 blocks release until fixed.
+
+Committet: a708642 (Rex::LibSSH 0.004 hart gefordert, cpanfile-Deps korrigiert + Getty-Pins, IO::K8s-Konstruktionstest), 9170165 (Skills). Requirements konform zu getty-perl-core, Build+Suite gruen. Live-Deploy-Verifikation bleibt bewusst offen (durch reale Nutzung, kubernetes-ocp deckt die API-Seite ab). Closing.
