@@ -64,7 +64,7 @@ use Rex::LibSSH;
 set connection => 'LibSSH';
 ```
 
-`Rex::GPU` is required only when using `gpu => 1`.
+`Rex::GPU` is required only when using `gpu => 1`. Driver selection depends on the GPU generation, and unsupported hardware/OS combinations (Kepler and older, conflicting GPU mixes such as V100 + B200, no matching package source) make the deploy die after node preparation but before any GPU or Kubernetes install — see "GPU hardware support" in the `Rex::Rancher` POD.
 
 **Verifying a deploy:** `prove -lr t/` only checks that the modules compile — there is no integration test. To trust a pipeline change, run the live-deploy checklist in [`eg/DEPLOY-CHECKLIST.md`](eg/DEPLOY-CHECKLIST.md) against a real node.
 

@@ -1,6 +1,9 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - Document gpu => 1 with newer Rex::GPU versions (new "GPU hardware
+    support" POD section): per-generation driver choice, passthrough VMs, and
+    the deploy aborting after node preparation on unsupported GPUs or OSes.
   - Fix K3s Service/ClusterIP routing: with cilium enabled the server config
     wrote cni:none + disable-kube-proxy:true for both distributions, but
     Cilium's kube-proxy replacement is wired for rke2 only, so on K3s

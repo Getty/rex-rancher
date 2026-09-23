@@ -75,7 +75,9 @@ Kubernetes distribution to install. C<rke2> (default) or C<k3s>.
 
 If true, detect GPUs and run the full GPU setup pipeline via L<Rex::GPU>
 before installing the Kubernetes distribution. Requires L<Rex::GPU> to be
-installed. Default: C<0>.
+installed. Default: C<0>. Driver selection depends on the GPU generation,
+and some hardware/OS combinations make the deploy die instead — see
+L</GPU hardware support>.
 
 =item C<reboot>
 
@@ -546,6 +548,43 @@ For fine-grained control, use the individual modules directly:
 =item L<Rex::Rancher::K8s> — Kubernetes API operations (device plugin, readiness, untaint)
 
 =back
+
+=head2 GPU hardware support
+
+With C<gpu =E<gt> 1>, driver choice and hardware checks are made by
+L<Rex::GPU>'s C<gpu_setup>; Rex::Rancher passes only the distribution and
+C<reboot>. Newer L<Rex::GPU> versions behave as follows:
+
+=over
+
+=item * B<Blackwell> (RTX 50xx, RTX PRO, B200/GB200, B300): the open kernel
+driver on Ubuntu; on Debian 12 and 13 the driver comes from NVIDIA's CUDA
+repository. Any other release or architecture makes C<gpu_setup> die.
+
+=item * B<Maxwell, Pascal, Volta> (e.g. P100, V100): pinned to the
+proprietary 580 driver branch.
+
+=item * B<Kepler and older>: C<gpu_setup> dies. Earlier L<Rex::GPU> versions
+installed a non-working driver and the deploy carried on.
+
+=item * B<VMs with a passed-through GPU> next to an emulated console are
+detected as GPU hosts and get the full GPU pipeline, including the driver
+reboot — set C<reboot> accordingly.
+
+=item * B<Several compute GPUs>: the driver must satisfy all of them (Ada +
+V100 gives 580, Ada + B200 gives the open driver). If no driver fits (V100 +
+B200), or no package source serves the required driver for the OS (e.g.
+Debian 14 with Blackwell or V100), C<gpu_setup> dies.
+
+=back
+
+Such a die happens before C<gpu_setup> changes anything on the host, and it
+is not caught: L</rancher_deploy_server> and L</rancher_deploy_agent> abort
+with it. It does, however, come after L<Rex::Rancher::Node/prepare_node> has
+already run, so base packages, hostname, timezone, locale, swap, kernel
+modules and sysctl are already changed; no Kubernetes distribution has been
+installed yet. See L<Rex::GPU> for the details of detection and driver
+selection.
 
 =head1 SEE ALSO
 
