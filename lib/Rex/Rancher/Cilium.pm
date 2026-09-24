@@ -102,15 +102,17 @@ existing installation in that case.
 
 For RKE2, C<kubeProxyReplacement=true> is passed to enable Cilium's
 eBPF-based kube-proxy replacement (the RKE2 server config must have
-C<disable-kube-proxy: true> for this to work). For K3s, C<exclusive: true>
-is set for the CNI plugin to ensure K3s's built-in Flannel does not
-conflict.
+C<cni: none> and C<disable-kube-proxy: true> for this to work). For K3s,
+C<cni.exclusive: true> is set, and the K3s server config must have
+C<flannel-backend: none> and C<disable-network-policy: true> so that Cilium
+is the only CNI.
 
 B<Only rke2 is verified and supported.> On k3s, kube-proxy replacement is
 B<not> enabled and the server config keeps kube-proxy in place (see
 L<Rex::Rancher::Server/install_server>): the k3s Helm values do not set
 C<kubeProxyReplacement>/C<k8sServiceHost>/C<k8sServicePort>, so Cilium runs
-alongside k3s's own kube-proxy. The k3s path is not deploy-verified (karr #5).
+alongside k3s's own kube-proxy and reaches the API server through its
+Service. The k3s path is not deploy-verified.
 For the same reason C<helm_values> must not set those three keys on k3s, and
 C<gateway_api> (which needs kube-proxy replacement) is refused there.
 
@@ -771,6 +773,7 @@ sub _write_helm_values {
 =head1 SYNOPSIS
 
   use Rex::Rancher::Cilium;
+  use JSON::MaybeXS;    # JSON()->true below
 
   # Install Cilium on an RKE2 cluster (defaults to version 1.17.0)
   install_cilium(
@@ -811,10 +814,12 @@ local C<kubeconfig> is given.
 
 =head2 Prerequisites
 
-The server must already be running with C<cni: none> and
-C<disable-kube-proxy: true> in its C<config.yaml> so that Cilium can
-own the CNI and kube-proxy roles. L<Rex::Rancher::Server/install_server>
-sets these options by default when C<cilium =E<gt> 1>.
+The server must already be running with its own CNI switched off in
+C<config.yaml>, so that Cilium is the only one: on RKE2 C<cni: none> and
+C<disable-kube-proxy: true> (Cilium also takes over kube-proxy's role), on
+K3s C<flannel-backend: none> and C<disable-network-policy: true> (kube-proxy
+stays; unverified). L<Rex::Rancher::Server/install_server> sets these
+options by default when C<cilium =E<gt> 1>.
 
 =head2 Helm values
 

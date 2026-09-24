@@ -37,7 +37,7 @@ Required options:
 
 =item C<kubeconfig>
 
-Absolute path to the kubeconfig file saved locally. This file must have the
+Path to the kubeconfig file saved locally. This file must have the
 real server address (not C<127.0.0.1>) — L<Rex::Rancher/rancher_deploy_server>
 patches the address automatically.
 
@@ -83,8 +83,12 @@ The DaemonSet is created with:
 
 =over
 
-=item * C<runtimeClassName: nvidia> — uses the NVIDIA container runtime
-(registered by L<Rex::GPU::NVIDIA/configure_containerd>) to enumerate devices.
+=item * C<runtimeClassName: nvidia> — uses the NVIDIA container runtime to
+enumerate devices. With L<Rex::GPU>'s C<gpu_setup> it is registered by
+L<Rex::GPU::NVIDIA/configure_containerd>; with C<gpu_setup =E<gt> 0> it must
+come from the host (a preinstalled toolkit, see C<nvidia_runtime_path> in
+L<Rex::Rancher/rancher_deploy_server>) or the GPU Operator's toolkit, which
+RKE2/K3s pick up at service start along with the C<nvidia> RuntimeClass.
 
 =item * C<priorityClassName: system-node-critical> — ensures the plugin
 pod is scheduled even under resource pressure.

@@ -248,12 +248,14 @@ sub _enable_service {
     node_name    => 'worker-01',
   );
 
-  # With pull-through registry cache
+  # With a pull-through registry mirror
   install_agent(
-    distribution   => 'rke2',
-    server         => 'https://10.0.0.1:9345',
-    token          => 'K10abc123...',
-    registry_cache => 'http://cache.local:5000',
+    distribution => 'rke2',
+    server       => 'https://10.0.0.1:9345',
+    token        => 'K10abc123...',
+    registries   => {
+      mirrors => { 'docker.io' => { endpoint => ['http://cache.local:5000'] } },
+    },
   );
 
 =head1 DESCRIPTION

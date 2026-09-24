@@ -28,6 +28,11 @@ required before installing RKE2 or K3s:
 
 =over
 
+=item * On Debian/Ubuntu, stop C<unattended-upgrades>, C<apt-daily.service>
+and C<apt-daily-upgrade.service> (they hold the apt lock on a fresh boot)
+and run C<apt-get update>. They are B<not> restarted afterwards; their
+timers bring them back on schedule, C<unattended-upgrades> at the next boot.
+
 =item * Install C<curl> and C<ca-certificates>
 
 =item * Set hostname via C<hostnamectl> or C</etc/hostname> (optional)
@@ -194,7 +199,8 @@ sub _configure_sysctl {
     timezone => 'Europe/Berlin',
   );
 
-  # Minimal preparation — leave hostname and locale at OS defaults
+  # Minimal preparation — hostname left unchanged; timezone UTC and
+  # locale en_US.UTF-8 are still set (the defaults), chrony installed
   prepare_node();
 
   # Skip NTP (e.g. host is a VM with hypervisor time sync)

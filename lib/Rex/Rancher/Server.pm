@@ -90,7 +90,7 @@ Options:
 C<rke2> (default) or C<k3s>. B<Only rke2 is verified and supported.> The k3s
 path installs and runs, but is not deploy-verified: Cilium's kube-proxy
 replacement is wired for rke2 only (see L</cilium> and L<Rex::Rancher::Cilium>),
-so on k3s kube-proxy and the default CNI are left in place.
+so on k3s kube-proxy is left in place.
 
 =item C<token>
 
@@ -98,7 +98,8 @@ Shared secret used for node joining. If omitted, the token the server is
 already sealed with (C</var/lib/rancher/rke2/server/token>, K3s:
 C</var/lib/rancher/k3s/server/token>) is reused, so re-running
 C<install_server> on a live control plane never rotates its token. Only on a
-fresh server (no such file) is a new one generated (48 random base64 chars).
+fresh server (no such file) is a new one generated (up to 48 random
+alphanumeric characters, never fewer than 32).
 A passed C<token> always wins.
 
 The token is written to C<config.yaml> only; it is never put on the installer
@@ -195,15 +196,20 @@ distribution config directory, C<0600 root:root>
 
 =item C<cilium>
 
-On B<rke2>, if true (default: C<1>), set C<cni: none> and
-C<disable-kube-proxy: true> in the server config, preparing the node for
-Cilium CNI with full kube-proxy replacement. Set to C<0> to keep RKE2's
-default Canal CNI.
+If true (default: C<1>), switch off the distribution's own CNI in the
+server config so that Cilium is the only one. Set to C<0> to keep the
+distribution's default CNI (Canal on RKE2, Flannel on K3s).
 
-On k3s these keys are B<not> written even when C<cilium> is true: Cilium's
-kube-proxy replacement is rke2-only, so k3s keeps its own kube-proxy and
-default Flannel CNI. Disabling kube-proxy without the matching Cilium config
-broke Service/ClusterIP routing on k3s (karr #5).
+On B<rke2>, C<cni: none> and C<disable-kube-proxy: true> are written,
+preparing the node for Cilium with full kube-proxy replacement.
+
+On B<k3s>, C<flannel-backend: none> and C<disable-network-policy: true> are
+written instead: Flannel and k3s's embedded network policy controller are
+switched off, but kube-proxy stays, because Cilium's kube-proxy replacement
+is rke2-only. Both keys are server settings that k3s agents take from the
+server; an additional server joining with C<server> gets the same keys, as
+k3s requires them to match across servers. The k3s path is not
+deploy-verified.
 
 =item C<nvidia_runtime_path>
 
@@ -244,7 +250,7 @@ sub install_server {
   my $distribution = $opts{distribution} // 'rke2';
   Rex::Logger::info(
     "k3s is not deploy-verified in Rex::Rancher; only rke2 is supported. "
-      . "Cilium kube-proxy replacement is skipped on k3s (see karr #5).", "warn")
+      . "Cilium kube-proxy replacement is skipped on k3s.", "warn")
     if $distribution eq 'k3s';
   my $paths        = _paths($distribution);
   # Validated before anything touches the host (the token lookup reads it).
@@ -462,16 +468,21 @@ sub _build_server_config {
     'token' => $token,
   );
 
-  # cni:none + disable-kube-proxy hand the CNI and kube-proxy roles to Cilium.
-  # Cilium's kube-proxy replacement (kubeProxyReplacement/k8sServiceHost/Port)
-  # is only wired for rke2 (see Rex::Rancher::Cilium), so these are gated to
-  # rke2. Writing them on k3s left kube-proxy disabled with nothing replacing
-  # it -> Service/ClusterIP routing dead (karr #5). k3s keeps its own kube-proxy
-  # and default CNI; the k3s path is currently unverified/unsupported.
-  if ($distribution eq 'rke2') {
-    if ($cilium) {
+  # With cilium, Cilium is the only CNI on both distributions. rke2: cni:none
+  # + disable-kube-proxy hand the CNI and kube-proxy roles to Cilium, whose
+  # kube-proxy replacement (kubeProxyReplacement/k8sServiceHost/Port) is wired
+  # for rke2 only (see Rex::Rancher::Cilium). k3s: Flannel and the embedded
+  # network policy controller go, kube-proxy stays -- disabling it on k3s left
+  # Service/ClusterIP routing dead with nothing replacing it. Both keys are
+  # server-side; k3s agents take them from the server. k3s is unverified.
+  if ($cilium) {
+    if ($distribution eq 'rke2') {
       $config{'cni'}                = 'none';
       $config{'disable-kube-proxy'} = JSON()->true;
+    }
+    else {
+      $config{'flannel-backend'}        = 'none';
+      $config{'disable-network-policy'} = JSON()->true;
     }
   }
 
@@ -1019,9 +1030,11 @@ L</install_server>) to leave room for Cilium and external load balancers.
 Both distributions use C</etc/rancher/E<lt>distE<gt>/config.yaml> with the
 same key names (C<token>, C<tls-san>, C<node-name>, C<node-label>,
 C<disable>, C<cni>, etc.). When
-C<cilium =E<gt> 1> (the default), C<cni: none> and
-C<disable-kube-proxy: true> are written so that Cilium's kube-proxy
-replacement is used.
+C<cilium =E<gt> 1> (the default), the distribution's own CNI is switched off
+so that Cilium is the only one: on RKE2 C<cni: none> and
+C<disable-kube-proxy: true> (Cilium's kube-proxy replacement takes over), on
+K3s C<flannel-backend: none> and C<disable-network-policy: true> (kube-proxy
+stays; unverified). See L</install_server>'s C<cilium>.
 
 Registry mirrors are written to C<registries.yaml> in the same directory.
 Both files are C<0600 root:root>: C<config.yaml> holds the join token,

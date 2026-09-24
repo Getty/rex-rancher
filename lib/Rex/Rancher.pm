@@ -48,7 +48,7 @@ The full pipeline for a GPU server deployment:
 
 =over
 
-=item 1. C<prepare_node> — hostname, timezone, swap off, kernel modules, sysctl
+=item 1. C<prepare_node> — base packages, hostname, timezone, locale, NTP, swap off, kernel modules, sysctl
 
 =item 2. C<gpu_setup> (only with C<gpu =E<gt> 1>, unless C<gpu_setup =E<gt> 0>) — driver + toolkit + CDI + containerd config
 
@@ -56,6 +56,7 @@ The full pipeline for a GPU server deployment:
 
 =item 4. Fetch kubeconfig locally, patch C<127.0.0.1> to the real server address,
 save to C<kubeconfig_file>, wait for API with L<Rex::Rancher::K8s/wait_for_api>
+(skipped without C<kubeconfig_file>)
 
 =item 5. C<install_cilium> (skipped with C<cilium =E<gt> 0>) — install Cilium CLI on remote, then install,
 upgrade or leave Cilium alone according to its Helm release (read through the
@@ -64,6 +65,14 @@ saved kubeconfig once the API answered; without one, plain C<cilium install>)
 =item 6. C<deploy_nvidia_device_plugin> (only with C<gpu =E<gt> 1> and C<kubeconfig_file>, unless C<gpu_device_plugin =E<gt> 0>)
 
 =back
+
+If the API does not answer within L<Rex::Rancher::K8s/wait_for_api>'s five
+minutes, that is only a warning: the pipeline carries on as if there were no
+saved kubeconfig for step 5, so C<install_cilium> takes its plain
+C<cilium install> path. With C<gateway_api> this then dies with
+"gateway_api needs kubeconfig", although C<kubeconfig_file> was given; the
+cause is the unreachable API (address, firewall, C<tls_san>), not the
+option. Step 6 still runs against the saved kubeconfig.
 
 Options:
 
@@ -131,6 +140,22 @@ still set but no hosts entry is written.
 =item C<timezone>
 
 Timezone string, e.g. C<Europe/Berlin>. Default: C<UTC>.
+
+=item C<locale>
+
+System locale, e.g. C<de_DE.UTF-8>. Default: C<en_US.UTF-8>. See
+L<Rex::Rancher::Node/prepare_node>.
+
+=item C<ntp>
+
+Install and start C<chrony>. Default: C<1>; pass C<0> to leave time sync to
+the host (e.g. a VM with hypervisor time sync).
+
+=item C<server>
+
+URL of an existing server to join as an additional control plane node (HA),
+passed to L<Rex::Rancher::Server/install_server>: C<https://SERVER:9345> for
+RKE2, C<https://SERVER:6443> for K3s. Omit it for the first server.
 
 =item C<token>
 
@@ -205,9 +230,14 @@ See L<Rex::Rancher::Server/install_server> for the structure.
 
 =item C<cilium>
 
-Whether to configure Cilium CNI. Default: C<1>. Set to C<0> to keep the
-distribution's built-in CNI (Canal for RKE2, Flannel for K3s): the pipeline
-then skips L<Rex::Rancher::Cilium/install_cilium> entirely. Passing
+Whether Cilium is the cluster's CNI. Default: C<1>: the distribution's own
+CNI is switched off in C<config.yaml> (RKE2: C<cni: none> and
+C<disable-kube-proxy: true>, Cilium replaces kube-proxy; K3s:
+C<flannel-backend: none> and C<disable-network-policy: true>, kube-proxy stays
+and the K3s path is unverified) and Cilium is installed in step 5. Set to
+C<0> and Rex::Rancher does nothing CNI-related: the distribution's built-in
+CNI comes up (Canal for RKE2, Flannel for K3s) and the pipeline skips
+L<Rex::Rancher::Cilium/install_cilium> entirely. Passing
 C<gateway_api>, C<cilium_version>, C<cilium_cli_version> or
 C<cilium_helm_values> together with C<cilium =E<gt> 0> dies before the node
 is touched.
@@ -316,7 +346,7 @@ C<gpu =E<gt> 1> (and C<gpu_setup>, C<reboot>) works identically to the server
 case; there is no device plugin step, so C<gpu_device_plugin> has no effect
 here.
 
-Options: same as L</rancher_deploy_server> plus:
+Options:
 
 =over
 
@@ -334,7 +364,28 @@ L<Rex::Rancher::Server/get_token>. Required.
 
 Override the node name registered in Kubernetes (optional).
 
+=item C<distribution>, C<version>, C<install_method>, C<registries>, C<nvidia_runtime_path>
+
+As for L</rancher_deploy_server>; passed to
+L<Rex::Rancher::Agent/install_agent>.
+
+=item C<hostname>, C<domain>, C<timezone>, C<locale>, C<ntp>
+
+As for L</rancher_deploy_server>; passed to
+L<Rex::Rancher::Node/prepare_node>.
+
+=item C<gpu>, C<gpu_setup>, C<reboot>
+
+As for L</rancher_deploy_server> (step 2).
+
 =back
+
+The server-only options have no effect on an agent and are ignored:
+C<node_labels>, C<tls_san>, C<disable>, C<kubeconfig_file>,
+C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
+C<cilium_helm_values>, C<gateway_api>, C<gateway_api_version>,
+C<gateway_api_channel> and C<gpu_device_plugin>. Whether a K3s agent runs
+Flannel or leaves the CNI to Cilium follows the server's C<config.yaml>.
 
 =cut
 
@@ -669,19 +720,24 @@ When deploying a GPU server node, the full pipeline runs automatically:
 
 =over
 
-=item 1. B<Node preparation> — hostname, timezone, locale, NTP, swap off,
+=item 1. B<Node preparation> — base packages (on Debian/Ubuntu after stopping
+the automatic apt services), hostname, timezone, locale, NTP, swap off,
 kernel modules (br_netfilter, overlay), sysctl for Kubernetes networking.
 
 =item 2. B<GPU setup> (C<gpu =E<gt> 1>, unless C<gpu_setup =E<gt> 0>) — NVIDIA driver via DKMS, optional
 reboot, Container Toolkit, CDI specs, containerd runtime config. Handled by
 L<Rex::GPU>.
 
-=item 3. B<Cluster bring-up> — write config, run RKE2 or K3s install script,
-wait for kubeconfig file on the remote host, fetch and save it locally,
-wait for API server readiness via L<Kubernetes::REST>.
+=item 3. B<Cluster bring-up> — write config (with C<cilium>, the
+distribution's own CNI switched off), run RKE2 or K3s install script,
+wait for kubeconfig file on the remote host, then, with C<kubeconfig_file>,
+fetch and save it locally and wait for API server readiness via
+L<Kubernetes::REST>.
 
-=item 4. B<Cilium CNI> — Cilium CLI installed on the remote host, Cilium
-deployed with distribution-appropriate Helm values.
+=item 4. B<Cilium CNI> (skipped with C<cilium =E<gt> 0>, which leaves the
+distribution's own CNI in place) — Cilium CLI installed on the remote host,
+Cilium installed, upgraded or left alone with distribution-appropriate Helm
+values (kube-proxy replacement on RKE2 only).
 
 =item 5. B<NVIDIA device plugin> (C<gpu =E<gt> 1> + C<kubeconfig_file>, unless
 C<gpu_device_plugin =E<gt> 0>) — DaemonSet

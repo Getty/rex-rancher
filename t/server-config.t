@@ -5,17 +5,20 @@ use Test::More;
 # -----------------------------------------------------------------------------
 # Unit test for the server config.yaml builder (Rex::Rancher::Server).
 #
-# Regression guard for karr #5: with cilium enabled the config wrote
-# `cni: none` + `disable-kube-proxy: true` for BOTH distributions, but Cilium's
-# kube-proxy replacement (kubeProxyReplacement/k8sServiceHost/Port) is only
-# wired for rke2 (see Rex::Rancher::Cilium). On k3s that left kube-proxy
-# disabled with nothing replacing it -> Service/ClusterIP routing dead.
+# With cilium (the default) Cilium must be the only CNI on both distributions:
+# - rke2: cni:none + disable-kube-proxy (Cilium's kube-proxy replacement is
+#   wired for rke2 only, see Rex::Rancher::Cilium).
+# - k3s: flannel-backend:none + disable-network-policy, but kube-proxy stays --
+#   disabling it on k3s left Service/ClusterIP routing dead with nothing
+#   replacing it, and keeping Flannel under Cilium's cni.exclusive ran two CNIs.
+# Without cilium neither distribution's CNI is touched.
 #
-# The rke2-specific keys must be gated to rke2. k3s keeps its own kube-proxy
-# and default CNI. _build_server_config is pure (no file/YAML I/O), so it is
-# unit-testable offline; the actual write stays in _write_config.
+# _build_server_config is pure (no file/YAML I/O), so it is unit-testable
+# offline; the actual write stays in _write_config. Nothing here says the
+# resulting cluster comes up -- k3s is not deploy-verified.
 # -----------------------------------------------------------------------------
 
+use JSON::MaybeXS ();
 use Rex::Rancher::Server;
 
 sub cfg { Rex::Rancher::Server::_build_server_config(@_) }
@@ -26,22 +29,42 @@ subtest 'rke2 + cilium: kube-proxy replacement config present' => sub {
   is($c->{token}, 'tok',   'token set');
   is($c->{cni},   'none',  'cni:none — Cilium owns the CNI');
   ok($c->{'disable-kube-proxy'}, 'disable-kube-proxy true (Cilium replaces it on rke2)');
+  ok(!exists $c->{'flannel-backend'}, 'no k3s flannel key on rke2');
   is_deeply($c->{disable}, [qw( rke2-ingress-nginx rke2-traefik rke2-traefik-crd )],
     'rke2 bundled ingress controllers disabled');
 };
 
-subtest 'k3s + cilium: no rke2-only kube-proxy override (karr #5)' => sub {
+subtest 'k3s + cilium: Flannel off, kube-proxy kept' => sub {
   my $c = cfg('k3s', 'tok', undef, undef, undef, 1);
   is($c->{token}, 'tok', 'token set');
+  is($c->{'flannel-backend'}, 'none', 'flannel-backend:none — Cilium is the only CNI');
+  ok(JSON::MaybeXS::is_bool($c->{'disable-network-policy'}) && $c->{'disable-network-policy'},
+    'disable-network-policy is a real true boolean');
   ok(!exists $c->{'disable-kube-proxy'},
     'k3s keeps its own kube-proxy — Cilium replacement is rke2-only');
-  ok(!exists $c->{cni},     'no cni:none on k3s');
+  ok(!exists $c->{cni},     'no rke2 cni key on k3s');
   is_deeply($c->{disable}, ['traefik', 'servicelb'],
     'k3s default disable list (traefik, servicelb), no rke2 names');
 };
 
+subtest 'k3s without cilium: Flannel and network policy left alone' => sub {
+  my $c = cfg('k3s', 'tok', undef, undef, undef, 0);
+  ok(!exists $c->{'flannel-backend'},        'no flannel-backend without cilium');
+  ok(!exists $c->{'disable-network-policy'}, 'no disable-network-policy without cilium');
+  ok(!exists $c->{'disable-kube-proxy'},     'no disable-kube-proxy');
+  ok(!exists $c->{cni},                      'no cni key');
+};
+
+subtest 'k3s server join + cilium: same CNI keys as the first server' => sub {
+  my $c = cfg('k3s', 'tok', 'https://cp1:6443', undef, undef, 1);
+  is($c->{server}, 'https://cp1:6443', 'server set');
+  is($c->{'flannel-backend'}, 'none', 'joining server also has flannel-backend:none');
+  ok($c->{'disable-network-policy'}, 'joining server also disables network policy');
+};
+
 subtest 'rke2 without cilium: no kube-proxy override, ingress still disabled' => sub {
   my $c = cfg('rke2', 'tok', undef, undef, undef, 0);
+  ok(!exists $c->{'flannel-backend'},    'no k3s flannel key on rke2');
   ok(!exists $c->{'disable-kube-proxy'}, 'no disable-kube-proxy without cilium');
   ok(!exists $c->{cni},                  'no cni:none without cilium');
   is_deeply($c->{disable}, [qw( rke2-ingress-nginx rke2-traefik rke2-traefik-crd )],
