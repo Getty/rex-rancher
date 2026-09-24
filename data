@@ -1,0 +1,22 @@
+---
+class: standard
+completed: 2026-09-24T02:50:38Z
+created: 2026-09-23T20:23:45Z
+id: 15
+priority: medium
+started: 2026-09-24T02:47:40Z
+status: done
+tags:
+- ocp
+- gpu
+- escalated-from:kubernetes-ocp#155
+title: '#10e GPU nur per Schalter, kein Zwang zu Rex::GPU::gpu_setup'
+updated: 2026-09-24T02:50:43Z
+---
+
+OCP laesst containerd/CDI dem GPU Operator -- Rancher.pm ~359-373. Beruehrt #9 (gpu_setup-Verhalten).
+Referenz: kubernetes-ocp/share/Rexfile (von dort portieren). Teil von #10. rke2 und k3s gemeinsam; Offline-Test wo erreichbar.
+
+2026-09-24 02:50 Umgesetzt (uncommitted): gpu_setup/gpu_device_plugin (Default 1) nur unter gpu => 1; reine Entscheidung _gpu_steps; Rex::GPU wird nur bei setup required. t/gpu-steps.t (21 Tests, Pipeline mit Fakes). POD+Changes. OCP nutzt gpu=>1,gpu_setup=>0,gpu_device_plugin=>0 bzw. laesst gpu weg. Live-Lauf offen. RKE2-PATH-Luecke als eigenes Ticket.
+
+2026-09-24 02:50 Bereit fuer Review, nicht committet
