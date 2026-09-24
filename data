@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-24T03:45:55Z
+created: 2026-09-24T03:21:32Z
+id: 21
+priority: medium
+started: 2026-09-24T03:39:11Z
+status: done
+tags:
+- cilium
+- rke2
+- gateway-api
+title: RKE2 v1.37 ships rke2-gateway-api-crd; may fight Cilium gateway_api CRD apply
+updated: 2026-09-24T03:45:59Z
+---
+
+RKE2 docs: "Starting with RKE2 v1.37, Gateway API CRDs are no longer bundled with Traefik; they are now part of a standalone chart" (rke2-gateway-api-crd, listed in rancher/rke2 pkg/cli/types.go DisableItems, charts/chart_versions.yaml on master). install_cilium with gateway_api => 1 applies the kubernetes-sigs/gateway-api release CRDs itself (_ensure_gateway_api_crds, gateway_api_version/channel). On v1.37+ the RKE2 chart may own the same CRDs at a different version/channel (Helm-managed, can overwrite or be overwritten on every restart). Not in the default disable list (not an ingress controller). Decide: add rke2-gateway-api-crd to the rke2 default disable when gateway_api is on, document it, or defer to the RKE2 chart. Needs a live run on RKE2 v1.37.
+
+2026-09-24 03:44 Implemented (uncommitted): rancher_deploy_server adds rke2-gateway-api-crd to the rke2 default disable with gateway_api (warns if caller disable lacks it); _ensure_gateway_api_crds dies while Helm release rke2-gateway-api-crd exists (release secrets, not CRD annotations - kept CRDs keep them). Sources: chart 1.6.101 = Gateway API v1.6.1 standard, CRDs in templates/ with helm.sh/resource-policy: keep; HelmChart takeOwnership+forceConflicts, non-bootstrap (runs after CNI). t/gateway-api-rke2-chart.t. Needs live RKE2 v1.37 run.
