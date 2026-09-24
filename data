@@ -1,0 +1,15 @@
+---
+claimed_at: 2026-09-24T14:44:56Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T14:44:56Z
+created: 2026-09-24T14:39:56Z
+id: 25
+priority: low
+started: 2026-09-24T14:42:48Z
+status: done
+title: 'Doc: gpu => 1 die is not strictly before any host change'
+updated: 2026-09-24T14:44:56Z
+---
+
+Rancher.pm "GPU hardware support" (paragraph after the list) and README claim a gpu_setup die happens before gpu_setup changes anything on the host. Not quite true: gpu_setup runs gpu_detect first, which may install pciutils when lspci is missing (see Rex::GPU source). Tighten the wording (e.g. "before any driver change; only pciutils may be installed for detection"). Doc only. Found during k24.
