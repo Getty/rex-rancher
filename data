@@ -1,0 +1,33 @@
+---
+class: standard
+completed: 2026-09-23T20:31:47Z
+created: 2026-09-23T17:32:45Z
+id: 9
+priority: medium
+started: 2026-09-23T20:23:57Z
+status: done
+title: 'gpu => 1: Verhaltensaenderungen aus Rex::GPU (Blackwell, Pre-Turing, Kepler-Abbruch,
+  Passthrough-VMs) dokumentieren'
+updated: 2026-09-24T00:25:40Z
+---
+
+Upstream Rex::GPU (main, unreleased, commits 0156164..3cba655) aendert Ergebnis von gpu_setup ohne Versions-Gate:
+- Blackwell (RTX 50xx, RTX PRO, B200/GB200, B300): Ubuntu -open-Treiber, Debian 12/13 Treiber aus NVIDIAs CUDA-Repo; andere Debian-Releases/Archs sterben jetzt vor dem Install (k16, k18).
+- Maxwell/Pascal/Volta (V100/P100): fest auf proprietaeren 580-Branch (k26).
+- Kepler und aelter (PCI 10de < 1340): gpu_setup STIRBT jetzt, bevor der Host veraendert wird (vorher: kaputter Install, Deploy lief weiter).
+- VMs mit durchgereichter GPU + emulierter Konsole: vorher kein GPU erkannt, jetzt volle Pipeline inkl. Reboot (k17).
+Zu entscheiden: nur Doku, oder den Die im Rancher-Deploy abfangen/klar melden. Ausserdem kuenftig: Rex::GPU bekommt klassenbasierte Setups (Epic #25 dort) mit `set gpu_nvidia_setup => Klasse` im Rexfile -- ggf. ein Rancher-Option zum Durchreichen (setup =>).
+
+Nachtrag (Rex::GPU k33): gpu_setup beruecksichtigt jetzt ALLE compute-GPUs (Schnittmenge der Treiberanforderungen). Gemischte Hosts: Ada+V100 -> 580, Ada+B200 -> open, V100+B200 -> gpu_setup stirbt vor jeder Host-Aenderung. Ausserdem stirbt es jetzt, wenn keine Paketquelle passt (z.B. Debian 14 + Blackwell/V100).
+
+2026-09-23 20:24 Doku umgesetzt (nur POD/README/Changes, kein Code): neuer POD-Abschnitt 'GPU hardware support' in lib/Rex/Rancher.pm, Verweis bei gpu-Option, README-Satz, Changes-Eintrag. Nicht committet.
+
+2026-09-23 20:26 Doku-only fertig (POD 'GPU hardware support', README, Changes), Review-Fixes eingearbeitet. Nicht committet, wartet auf Freigabe.
+
+Nachtrag (Rex::GPU 1a2cf54): gpu_setup ruft am Ende verify_nvidia auf (read-only, kann warnen) -- Rancher-Tests, die die NVIDIA-Schritte mocken, muessen auch verify_nvidia mocken.
+
+Nachtrag (Rex::GPU k21): Hosts mit RTX 50xx Desktop / RTX PRO Blackwell, deren Name lspci nicht aufloest (Klasse 0300), wurden bisher uebersprungen und bekommen jetzt die volle Pipeline inkl. Reboot.
+
+Nachtrag (Rex::GPU k46): gpu_detect stirbt jetzt, wenn lspci nach dem pciutils-Setup fehlt (vorher still "keine GPU"). Auf Rocky/Alma mit lsb_release laeuft gpu_setup jetzt durch statt mit Rex::Pkg-Fehler zu sterben.
+
+Nachtrag (Rex::GPU k23): HGX-Hosts mit NVSwitch (A100/H100/H200) bekommen nvidia-fabricmanager passend zur Treiberversion; auf Debian 12/13 kommt der Treiber dort aus NVIDIAs CUDA-Repo statt non-free, Debian 11 und openSUSE mit NVSwitch sterben vor jeder Host-Aenderung.
