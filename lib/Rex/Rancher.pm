@@ -380,6 +380,10 @@ As for L</rancher_deploy_server> (step 2).
 
 =back
 
+A missing C<server> or C<token> dies before the host is touched. As on the
+server, an SFTP-less host needs the C<LibSSH> connection backend; without it
+the deploy dies before the first step with a hint to C<Rex::LibSSH>.
+
 The server-only options have no effect on an agent and are ignored:
 C<node_labels>, C<tls_san>, C<disable>, C<kubeconfig_file>,
 C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
@@ -393,6 +397,12 @@ sub rancher_deploy_agent {
   my (%opts) = @_;
   my $distribution = $opts{distribution} // 'rke2';
 
+  # install_agent needs both; refuse before prepare_node and gpu_setup
+  # (driver install, possibly a reboot) have touched the host.
+  die "server is required for rancher_deploy_agent\n" unless $opts{server};
+  die "token is required for rancher_deploy_agent\n"  unless $opts{token};
+
+  _check_connection();
   prepare_node(%opts);
 
   _gpu_setup_if_requested($distribution, %opts);

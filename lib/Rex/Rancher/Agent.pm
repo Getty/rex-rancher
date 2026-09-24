@@ -122,8 +122,8 @@ sub install_agent {
   my (%opts) = @_;
 
   my $distribution = $opts{distribution} // 'rke2';
-  my $server       = $opts{server} or die "server is required for install_agent";
-  my $token        = $opts{token} or die "token is required for install_agent";
+  my $server       = $opts{server} or die "server is required for install_agent\n";
+  my $token        = $opts{token} or die "token is required for install_agent\n";
   my $version      = $opts{version};
   my $node_name    = $opts{node_name};
   my $method       = Rex::Rancher::Server::_install_method($opts{install_method}, $version);

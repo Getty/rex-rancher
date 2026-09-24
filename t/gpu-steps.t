@@ -82,7 +82,7 @@ is_deeply(\@ran,
 reset_run();
 Rex::Rancher::rancher_deploy_agent(gpu => 1, gpu_setup => 0, server => 'https://cp:9345', token => 't');
 is_deeply(\@gpu_loads, [], 'agent, gpu_setup => 0: Rex::GPU not required');
-is_deeply(\@ran, [qw( prepare_node install_agent )], 'agent, gpu_setup => 0: prepare + join only');
+is_deeply(\@ran, [qw( check_connection prepare_node install_agent )], 'agent, gpu_setup => 0: prepare + join only');
 is($install_opts{nvidia_runtime_path}, 1, 'agent, gpu_setup => 0: install_agent writes the unit PATH');
 
 # Default gpu => 1: Rex::GPU's gpu_setup runs between prepare_node and the install.
