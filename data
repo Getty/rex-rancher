@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-24T20:03:31Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T20:03:31Z
+created: 2026-09-24T17:48:05Z
+id: 34
+priority: medium
+started: 2026-09-24T19:58:32Z
+status: done
+title: rancher_deploy_agent checks server/token only after prepare_node and GPU setup
+updated: 2026-09-24T20:03:31Z
+---
+
+install_agent dies "server is required" / "token is required" (no trailing \n) only after rancher_deploy_agent already ran prepare_node and, with gpu => 1, Rex::GPU gpu_setup (driver install, possibly reboot). A missing server/token should die before the host is touched, like rancher_deploy_server validates Cilium options up front. Found while documenting agent options for k30.
+
+2026-09-24 20:02 Committed (666997a); offline tests green; needs a live run (eg/hetzner-gpu.Rexfile) before trust.
