@@ -1,0 +1,24 @@
+---
+class: standard
+completed: 2026-09-24T02:46:54Z
+created: 2026-09-23T20:23:41Z
+id: 14
+priority: medium
+started: 2026-09-24T02:35:56Z
+status: done
+tags:
+- ocp
+- cilium
+- escalated-from:kubernetes-ocp#155
+title: '#10d Cilium: Gateway-API-CRDs, Versionen/Helm-Values vom Aufrufer, echte Upgrade-/Stale-Release-Erkennung'
+updated: 2026-09-24T02:46:57Z
+---
+
+- Gateway-API-CRDs + gatewayAPI.enabled
+- Cilium-/CRD-Versionen vom Aufrufer, zusaetzliche Helm-Values
+- echte Upgrade-/Stale-Release-Erkennung statt 'cannot re-use a name' schlucken (bewusste auto_die=>0-Stelle -- Fehlerfall benennen, den sie abdeckt!) -- Rexfile ~1190-1305
+Referenz: kubernetes-ocp/share/Rexfile (von dort portieren). Teil von #10. rke2 und k3s gemeinsam; Offline-Test wo erreichbar.
+
+2026-09-24 02:44 Commit 0dc080a on branch worktree-agent-a862a9754268ea1ac (rebased onto main 3c515c4). Release-state handling needs a local kubeconfig; without it the old swallow stays. Only a live run proves the cilium CLI release config matches our values (noop) and the CRD/operator restart path.
+
+2026-09-24 02:45 Review ok. Branch worktree-agent-a862a9754268ea1ac (97053cf) auf b5692cf rebased, 76 Tests gruen. Merge nach main nach #13-Commit. Danach Skill rex-rancher-core anpassen (swallow nur noch ohne kubeconfig).
