@@ -1,0 +1,29 @@
+---
+claimed_at: 2026-09-24T17:50:17Z
+claimed_by: main
+class: standard
+completed: 2026-09-24T17:50:17Z
+created: 2026-09-24T17:35:42Z
+id: 28
+priority: medium
+started: 2026-09-24T17:42:46Z
+status: done
+title: 'cpanfile: Kubernetes::REST / IO::K8s pins stale (1.107, latest released 1.108)'
+updated: 2026-09-24T17:50:17Z
+---
+
+cpanfile pins:
+
+requires 'IO::K8s', '1.107';
+requires 'Kubernetes::REST', '1.107';
+
+`cpanm --info` shows the latest released CPAN versions are:
+
+GETTY/Kubernetes-REST-1.108.tar.gz
+GETTY/IO-K8s-1.108.tar.gz
+
+(Confirmed via each dists own Changes: both shipped a 1.108 release on 2026-09-22.) The ~/dev working-tree checkouts are already at $VERSION 1.109 (their own next-unreleased number per the Getty versioning convention) - do NOT pin to that; 1.108 is the correct target.
+
+Nothing in lib/ currently calls a 1.108-only API (checked Cilium.pm/K8s.pm - no ensure_crd, no Unstructured-specific usage), so this is not a functional break, but it violates the house rule "Pin every Getty-authored distribution. Not stale, not omitted - current." Bump both pins to 1.108 before release.
+
+Found during pre-release audit at 0b97665. Assign to rex-rancher-worker.
