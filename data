@@ -1,0 +1,44 @@
+---
+class: standard
+completed: 2026-09-24T02:50:50Z
+created: 2026-09-23T20:03:22Z
+depends_on:
+- 11
+- 12
+- 13
+- 14
+- 15
+id: 10
+priority: medium
+started: 2026-09-24T02:50:50Z
+status: done
+tags:
+- ocp
+- server
+- cilium
+- escalated-from:kubernetes-ocp#155
+title: 'OCP-Anforderungen: install_server/install_agent/Cilium so erweitern, dass
+  OCP seine Rexfile-Tasks ersetzen kann'
+updated: 2026-09-24T02:50:50Z
+---
+
+OCP (kubernetes-ocp k155) soll seine RKE2/K3s-Install-Logik aus share/Rexfile hierher verlagern. Diese Luecken verhindern das heute (Stand HEAD, 0.002 unreleased). Referenz ist jeweils die OCP-Implementierung in kubernetes-ocp/share/Rexfile, am besten von dort portieren:
+
+- install_server: version-Pin (OCP pinnt Server-Version fuer Drift/Skew; Agent kann es schon) -- Rexfile ~572/725
+- install_server: node_name -- Rexfile ~603
+- Token-Wiederverwendung: ohne uebergebenes Token vorhandenes /var/lib/rancher/rke2/server/token lesen statt neu erzeugen (OCP k150/k154) -- Server.pm:147 vs Rexfile ~571/1009
+- K3s: Token nicht auf die Kommandozeile (K3S_TOKEN sichtbar in ps) -- Server.pm ~408-421
+- konfigurierbare disable-Liste (OCP deaktiviert rke2-ingress-nginx, rke2-traefik, rke2-traefik-crd) -- Server.pm:339
+- Installationsmethode waehlbar: Artefakt-Vordownload fuer die Node-Arch (arm64) mit Checksumme statt curl|sh -- Rexfile ~638-734
+- Warten auf aktiven Service mit Journal-Diagnose statt nur auf die Kubeconfig-Datei -- Rexfile ~757-805
+- Cilium: Gateway-API-CRDs + gatewayAPI.enabled, Versionen vom Aufrufer, zusaetzliche Helm-Values, echte Upgrade-/Stale-Release-Erkennung statt "cannot re-use a name" schlucken -- Rexfile ~1190-1305
+- GPU nur per Schalter, kein Zwang zu Rex::GPU::gpu_setup (OCP laesst containerd/CDI dem GPU Operator) -- Rancher.pm ~359-373
+- Kubeconfig-Server explizit setzbar (OCP nimmt advertised_host, nicht den ersten tls_san)
+
+Tests: die Garantien oben brauchen Offline-Tests hier (heute prueft die Suite nur Kompilierung).
+
+2026-09-23 20:23 Aufgespalten in #11 (Server-Optionen), #12 (Token), #13 (Install-Methode/Service-Wait), #14 (Cilium), #15 (GPU-Schalter). Dieses Ticket ist nur noch Klammer.
+
+2026-09-24 02:38 Note for k14 (claimed elsewhere, could not annotate): rancher_deploy_server passes %opts wholesale to install_server, where 'version' now means the RKE2/K3s version. install_cilium also reads opts version as the Cilium version. No clash today, but Cilium versions threaded through rancher_deploy_server need a distinct key (e.g. cilium_version).
+
+2026-09-24 02:50 Alle Teiltickets erledigt: k11 b5692cf, k12 f361cff, k13 a06ffc2, k14 b0b2299, k15 (s. log), Folge-k16 3c515c4. Live-Lauf steht aus. Offene Folgen: k17, k18, k19.
