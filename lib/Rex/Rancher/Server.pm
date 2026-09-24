@@ -87,7 +87,8 @@ fresh server (no such file) is a new one generated (48 random base64 chars).
 A passed C<token> always wins.
 
 The token is written to C<config.yaml> only; it is never put on the installer
-command line or into its environment, where C<ps> would show it.
+command line or into its environment, where C<ps> would show it. C<config.yaml>
+is written C<0600 root:root>, including when it already exists.
 
 =item C<server>
 
@@ -108,7 +109,8 @@ Node labels applied at join time, as an arrayref of C<key=value> strings.
 =item C<registries>
 
 Private registry mirror configuration. Written to C<registries.yaml> in the
-distribution config directory. Structure:
+distribution config directory, C<0600 root:root>
+(it may hold registry passwords). Structure:
 
   {
     mirrors => {
@@ -397,8 +399,8 @@ sub _write_config {
   my $config_file = $paths->{config_dir} . "config.yaml";
   Rex::Logger::info("Writing config to $config_file");
 
-  file $config_file,
-    content => YAML::PP->new(boolean => 'JSON::PP')->dump_string($config);
+  _write_secret_file($config_file,
+    YAML::PP->new(boolean => 'JSON::PP')->dump_string($config));
 }
 
 #
@@ -489,8 +491,28 @@ sub _generate_registries_yaml {
   my $registries_file = $config_dir . "registries.yaml";
   Rex::Logger::info("Writing registries config to $registries_file");
 
-  file $registries_file,
-    content => YAML::PP->new(boolean => 'JSON::PP')->dump_string($registries);
+  _write_secret_file($registries_file,
+    YAML::PP->new(boolean => 'JSON::PP')->dump_string($registries));
+}
+
+# config.yaml carries the join token and registries.yaml may carry registry
+# passwords, so both end up 0600 root:root. Rex's `file` writes content to a
+# ".rex.tmp.<name>" sibling (LibSSH: `cat >` over an exec channel, no SFTP),
+# renames it over the target and only then chmods -- the tmp file would be
+# umask-mode (0644) in between. Pre-creating that tmp name at 0600 closes the
+# window: `cat >` and SFTP open-truncate both keep an existing inode's mode,
+# and the rename carries it to the target. The explicit chmod afterwards is
+# what fixes an existing 0644 file whose content is unchanged (Rex then drops
+# the tmp file and never touches the target), and fails loudly.
+sub _write_secret_file {
+  my ($path, $content) = @_;
+
+  my $tmp = Rex::Commands::File::get_tmp_file_name($path);
+  run "install -m 600 -o root -g root /dev/null $tmp", auto_die => 1;
+
+  file $path, content => $content;
+
+  run "chown root:root $path && chmod 600 $path", auto_die => 1;
 }
 
 1;
@@ -563,6 +585,8 @@ C<disable-kube-proxy: true> are written so that Cilium's kube-proxy
 replacement is used.
 
 Registry mirrors are written to C<registries.yaml> in the same directory.
+Both files are C<0600 root:root>: C<config.yaml> holds the join token,
+C<registries.yaml> may hold registry credentials.
 
 =head1 SEE ALSO
 

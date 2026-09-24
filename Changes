@@ -3,7 +3,8 @@ Revision history for Rex-Rancher
 {{$NEXT}}
   - Without a token, install_server reuses the host's existing server token,
     so a re-run never rotates a live cluster's token. The token reaches K3s
-    (server and agent) via config.yaml only, never the installer command line.
+    (server and agent) via config.yaml only, never the installer command line;
+    config.yaml and registries.yaml are written 0600 root:root, re-runs too.
   - Document gpu => 1 with newer Rex::GPU versions (new "GPU hardware
     support" POD section): per-generation driver choice, passthrough VMs, and
     the deploy aborting after node preparation on unsupported GPUs or OSes.

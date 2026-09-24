@@ -130,8 +130,8 @@ sub _write_config {
   push @lines, "token: $token";
   push @lines, "node-name: $node_name" if $node_name;
 
-  file $paths->{config_file},
-    content => join("\n", @lines) . "\n";
+  Rex::Rancher::Server::_write_secret_file($paths->{config_file},
+    join("\n", @lines) . "\n");
 }
 
 sub _write_registries {
@@ -230,7 +230,8 @@ For RKE2 the installer is fetched from L<https://get.rke2.io> with
 C<INSTALL_RKE2_TYPE=agent>. For K3s the installer from L<https://get.k3s.io>
 is used with the C<K3S_URL> environment variable. For both distributions the
 token is read from C<config.yaml> and never passed on the installer command
-line, where C<ps> would show it.
+line, where C<ps> would show it. C<config.yaml> and C<registries.yaml> are
+written C<0600 root:root>.
 
 Registry configuration uses the same YAML structure and helper as
 L<Rex::Rancher::Server>, so mirrors configured for the server are directly
