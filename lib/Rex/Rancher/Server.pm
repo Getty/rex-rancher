@@ -33,6 +33,9 @@ my %PATHS = (
     token_file   => '/var/lib/rancher/rke2/server/node-token',
     server_token => '/var/lib/rancher/rke2/server/token',
     disable      => ['rke2-ingress-nginx'],
+    binary       => 'rke2',
+    release_url  => 'https://github.com/rancher/rke2/releases/download',
+    artifact_dir => '/tmp/rke2-artifacts',
   },
   k3s => {
     config_dir   => '/etc/rancher/k3s/',
@@ -42,6 +45,9 @@ my %PATHS = (
     token_file   => '/var/lib/rancher/k3s/server/node-token',
     server_token => '/var/lib/rancher/k3s/server/token',
     disable      => ['traefik', 'servicelb'],
+    binary       => 'k3s',
+    release_url  => 'https://github.com/k3s-io/k3s/releases/download',
+    artifact_dir => '/tmp/k3s-artifacts',
   },
 );
 
@@ -62,11 +68,15 @@ sub _paths {
 =method install_server(%opts)
 
 Write the cluster configuration file, optionally write C<registries.yaml>,
-install the distribution, start the service, and wait until the kubeconfig
-file is written to disk by the server process.
+install the distribution, start the service, wait until C<systemctl
+is-active> reports it active, and then wait until the kubeconfig file is
+written to disk by the server process.
 
-Returns C<1> on success. Dies if installation fails or the distribution is
-unknown.
+Returns C<1> on success. Dies if installation fails, the distribution is
+unknown, the installed version differs from a pinned C<version>, or the
+service does not become active within 10 minutes. A service that ends up
+C<failed> or never gets active makes the C<die> message carry the last 50
+lines of its journal (C<journalctl -u SERVICE -n 50 --no-pager>).
 
 Options:
 
@@ -109,6 +119,35 @@ address, public IP, or DNS name so that kubeconfig clients can connect.
 Pinned version string, e.g. C<v1.30.4+rke2r1> for RKE2 or C<v1.30.4+k3s1>
 for K3s, handed to the installer as C<INSTALL_RKE2_VERSION> /
 C<INSTALL_K3S_VERSION>. If omitted, the latest stable release is installed.
+
+When given, the version the installed binary reports (C<rke2 --version> /
+C<k3s --version>) is compared with it after the installer ran, and a
+mismatch dies (on RKE2 before the service is started; the K3s install
+script has already restarted it). This catches a pinned
+install or upgrade that failed while an older binary is still on the host.
+
+=item C<install_method>
+
+How the distribution gets onto the host. C<script> (default) pipes the
+official install script into C<sh> (C<curl -sfL https://get.rke2.io | sh ->,
+K3s: C<https://get.k3s.io>), exactly as without this option.
+
+C<artifact> pre-downloads the release artifact for the node's own
+architecture (C<uname -m> on the host: C<amd64> or C<arm64>, anything else
+dies) from the GitHub release, verifies it against the release's official
+C<sha256sum-ARCH.txt> and dies loudly on a mismatch, then runs the install
+script against the local file: RKE2 via C<INSTALL_RKE2_ARTIFACT_PATH>
+(tarball C<rke2.linux-ARCH.tar.gz>), K3s by installing the binary to
+C</usr/local/bin/k3s> and running the script with
+C<INSTALL_K3S_SKIP_DOWNLOAD=binary>. Downloads run on the host with C<curl>
+(no SFTP, nothing is uploaded) into C</tmp/rke2-artifacts> /
+C</tmp/k3s-artifacts>, which are emptied first. Requires C<version>; dies
+without one.
+
+On RPM-based hosts (Rocky, RHEL) RKE2's install script uses the tarball
+instead of its RPM method when given an artifact path, so no C<rke2-selinux>
+package is installed, and a host that already carries RKE2 from RPMs is
+refused by the script ("existing RKE2 RPMs").
 
 =item C<node_name>
 
@@ -169,6 +208,12 @@ broke Service/ClusterIP routing on k3s (karr #5).
     node_name    => 'cp-01',
   );
 
+  # Checksum-verified release artifact instead of curl | sh
+  install_server(
+    version        => 'v1.30.4+rke2r1',
+    install_method => 'artifact',
+  );
+
 =cut
 
 sub install_server {
@@ -180,6 +225,8 @@ sub install_server {
       . "Cilium kube-proxy replacement is skipped on k3s (see karr #5).", "warn")
     if $distribution eq 'k3s';
   my $paths        = _paths($distribution);
+  # Validated before anything touches the host (the token lookup reads it).
+  my $method       = _install_method($opts{install_method}, $opts{version});
   my $token        = _resolve_token($paths, $opts{token});
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
@@ -206,10 +253,10 @@ sub install_server {
 
   # Install and start
   if ($distribution eq 'k3s') {
-    _install_k3s($paths, $server, $version);
+    _install_k3s($paths, $server, $version, $method);
   }
   else {
-    _install_rke2($paths, $version);
+    _install_rke2($paths, $version, $method);
   }
 
   Rex::Logger::info("$distribution server installation complete");
@@ -448,17 +495,29 @@ sub _write_config {
 #
 
 sub _install_rke2 {
-  my ($paths, $version) = @_;
+  my ($paths, $version, $method) = @_;
 
-  Rex::Logger::info("Installing RKE2 via install script...");
-
-  # Download and run the RKE2 install script.
-  # auto_die => 0: the script emits GPG key import info on STDERR which can
-  # cause a non-zero exit on some distros (Rocky 10). Verify via rpm/dpkg instead.
-  run _rke2_server_install_cmd($paths, $version), auto_die => 0;
+  if (($method // 'script') eq 'artifact') {
+    my $spec = _fetch_artifacts('rke2', $version);
+    Rex::Logger::info("Installing RKE2 from verified artifact $spec->{asset}...");
+    # auto_die => 1: with an artifact path the script takes its tarball
+    # method, which has no GPG key import (the Rocky 10 noise below is the
+    # RPM method's), so a non-zero exit here is a real failure.
+    run _rke2_artifact_install_cmd($spec, $version), auto_die => 1;
+  }
+  else {
+    Rex::Logger::info("Installing RKE2 via install script...");
+    # Download and run the RKE2 install script.
+    # auto_die => 0: the script emits GPG key import info on STDERR which can
+    # cause a non-zero exit on some distros (Rocky 10). Verify via rpm/dpkg instead.
+    run _rke2_server_install_cmd($paths, $version), auto_die => 0;
+  }
   my $check = run "command -v rke2 2>/dev/null", auto_die => 0;
   die "RKE2 install script failed — rke2 binary not found\n"
     unless $check && $check =~ /rke2/;
+  # The binary being there is not enough when a version is pinned: a failed
+  # pinned upgrade (swallowed above) leaves the old one in place.
+  _verify_installed_version('rke2', $version);
 
   # Enable and start the service
   run "systemctl enable " . $paths->{service}, auto_die => 1;
@@ -466,7 +525,9 @@ sub _install_rke2 {
   # exceeds systemctl's default 90s activation timeout.
   run "systemctl start --no-block " . $paths->{service}, auto_die => 1;
 
-  # Wait only until kubeconfig is written — API readiness is checked locally
+  _wait_for_service($paths->{service});
+
+  # Then wait until kubeconfig is written — API readiness is checked locally
   # by the caller via Rex::Rancher::K8s::wait_for_api after saving the file.
   _wait_for_kubeconfig($paths);
 }
@@ -483,16 +544,24 @@ sub _rke2_server_install_cmd {
 #
 
 sub _install_k3s {
-  my ($paths, $server, $version) = @_;
-
-  Rex::Logger::info("Installing K3s via install script...");
+  my ($paths, $server, $version, $method) = @_;
 
   # No K3S_TOKEN here: the token is already in config.yaml (written before the
   # installer runs, same as rke2), and anything on this line shows up in ps.
-  my $cmd = _k3s_server_install_cmd($paths, $server, $version);
+  if (($method // 'script') eq 'artifact') {
+    my $spec = _fetch_artifacts('k3s', $version);
+    Rex::Logger::info("Installing K3s from verified artifact $spec->{asset}...");
+    run _k3s_binary_place_cmd($spec), auto_die => 1;
+    run _k3s_artifact_install_cmd($spec, $server, $version, 'server'), auto_die => 1;
+  }
+  else {
+    Rex::Logger::info("Installing K3s via install script...");
+    run _k3s_server_install_cmd($paths, $server, $version), auto_die => 1;
+  }
+  _verify_installed_version('k3s', $version);
 
-  run $cmd, auto_die => 1;
-
+  # The K3s install script starts the service itself.
+  _wait_for_service($paths->{service});
   _wait_for_kubeconfig($paths);
 }
 
@@ -533,6 +602,236 @@ sub _wait_for_kubeconfig {
 
   Rex::Logger::info($paths->{service} . " kubeconfig did not appear — check manually", "warn");
   return 0;
+}
+
+#
+# Install method, release artifacts, version check, service wait.
+# Shared with Rex::Rancher::Agent (same distributions, same artifacts).
+#
+
+sub _install_method {
+  my ($method, $version) = @_;
+  $method //= 'script';
+  die "Unknown install_method: $method (expected 'script' or 'artifact')\n"
+    unless $method eq 'script' || $method eq 'artifact';
+  die "install_method 'artifact' requires a version (e.g. v1.30.4+rke2r1)\n"
+    if $method eq 'artifact' && !$version;
+  return $method;
+}
+
+# Release artifacts are named by GOARCH, not by `uname -m`.
+sub _goarch {
+  my ($uname) = @_;
+  $uname //= '';
+  $uname =~ s/\s+\z//;
+  my %goarch = (
+    x86_64  => 'amd64',
+    amd64   => 'amd64',
+    aarch64 => 'arm64',
+    arm64   => 'arm64',
+  );
+  return $goarch{$uname}
+    // die "Unsupported node architecture '$uname' for install_method 'artifact'"
+    . " (amd64 and arm64 only)\n";
+}
+
+sub _artifact_spec {
+  my ($distribution, $arch, $version) = @_;
+  my $paths = _paths($distribution);
+
+  die "install_method 'artifact' requires a version\n" unless $version;
+  die "Invalid version '$version'\n" unless $version =~ /\A[A-Za-z0-9._+-]+\z/;
+
+  (my $url_version = $version) =~ s/\+/%2B/g;
+  my $base  = $paths->{release_url} . '/' . $url_version;
+  my $dir   = $paths->{artifact_dir};
+  my $asset = $distribution eq 'k3s'
+    ? ($arch eq 'amd64' ? 'k3s' : "k3s-$arch")
+    : "rke2.linux-$arch.tar.gz";
+  my $sums  = "sha256sum-$arch.txt";
+
+  return {
+    dir        => $dir,
+    script     => "$dir/install.sh",
+    script_url => $paths->{install_url},
+    asset      => $asset,
+    asset_url  => "$base/$asset",
+    sums       => $sums,
+    sums_url   => "$base/$sums",
+  };
+}
+
+# The line for exactly $asset in an official sha256sum-ARCH.txt, or undef.
+# Exact name match: 'k3s' must not pick up 'k3s-airgap-images-...'.
+sub _expected_sha256 {
+  my ($sums_text, $asset) = @_;
+  for my $line (split /\n/, $sums_text // '') {
+    return lc $1 if $line =~ /\A\s*([0-9a-fA-F]{64})\s+\*?\Q$asset\E\s*\z/;
+  }
+  return;
+}
+
+# First field of `sha256sum FILE` output, or undef.
+sub _sha256_of {
+  my ($out) = @_;
+  return lc $1 if ($out // '') =~ /\A\s*([0-9a-fA-F]{64})\b/;
+  return;
+}
+
+sub _verify_sha256 {
+  my ($expected, $actual, $asset) = @_;
+  die "No checksum for $asset in the release's sha256sum file\n"
+    unless defined $expected;
+  die "Could not compute sha256 of downloaded $asset\n"
+    unless defined $actual;
+  die "Checksum mismatch for $asset: expected $expected, got $actual\n"
+    unless $expected eq $actual;
+  return 1;
+}
+
+sub _download_cmd {
+  my ($url, $dest, $progress) = @_;
+  # --progress-bar keeps output flowing during the ~60 MB tarball download,
+  # so a long silent curl does not look like a hung channel.
+  my $flags = $progress ? '-fL --progress-bar' : '-fsSL';
+  return "curl $flags -o '$dest' '$url' 2>&1";
+}
+
+# Download install script, artifact and checksum file on the host (curl, no
+# SFTP, no upload) and verify the artifact. Dies on any failure.
+sub _fetch_artifacts {
+  my ($distribution, $version) = @_;
+
+  my $arch = _goarch(run "uname -m", auto_die => 1);
+  my $spec = _artifact_spec($distribution, $arch, $version);
+  my $dir  = $spec->{dir};
+
+  Rex::Logger::info("Downloading $distribution $version artifacts for $arch to $dir");
+
+  run "rm -rf '$dir' && mkdir -p '$dir'", auto_die => 1;
+
+  for my $dl (
+    [ $spec->{script_url}, $spec->{script},             0 ],
+    [ $spec->{sums_url},   "$dir/$spec->{sums}",        0 ],
+    [ $spec->{asset_url},  "$dir/$spec->{asset}",       1 ],
+  ) {
+    my ($url, $dest, $progress) = @{$dl};
+    my $out = run _download_cmd($url, $dest, $progress), auto_die => 0;
+    die "Download failed: $url\n"
+      . ($progress ? "If this 404s, $distribution $version publishes no build for '$arch'.\n" : '')
+      . ($out // '') . "\n"
+      unless $? == 0;
+  }
+
+  my $sums   = run "cat '$dir/$spec->{sums}'", auto_die => 1;
+  my $actual = run "sha256sum '$dir/$spec->{asset}'", auto_die => 1;
+  # scalar(): both return empty on no match; in this list they must stay undef.
+  _verify_sha256(scalar(_expected_sha256($sums, $spec->{asset})),
+    scalar(_sha256_of($actual)), $spec->{asset});
+  Rex::Logger::info("  $spec->{asset}: sha256 verified");
+
+  return $spec;
+}
+
+# $type: undef for a server, 'agent' for an agent.
+sub _rke2_artifact_install_cmd {
+  my ($spec, $version, $type) = @_;
+  my @env = ("INSTALL_RKE2_ARTIFACT_PATH=$spec->{dir}");
+  push @env, "INSTALL_RKE2_TYPE=$type" if $type;
+  push @env, "INSTALL_RKE2_VERSION=$version";
+  return join(' ', @env) . " sh $spec->{script}";
+}
+
+# Put the verified binary where the K3s install script looks for it: next to
+# it, then rename, so a running k3s ("text file busy") is replaced atomically.
+sub _k3s_binary_place_cmd {
+  my ($spec) = @_;
+  return "install -m 0755 -o root -g root '$spec->{dir}/$spec->{asset}' /usr/local/bin/.k3s.rex-new"
+    . " && mv -f /usr/local/bin/.k3s.rex-new /usr/local/bin/k3s";
+}
+
+# SKIP_DOWNLOAD=binary skips only the binary; the SELinux RPM on RHEL-likes is
+# still fetched, as with curl | sh. BIN_DIR pinned to where we put the binary.
+sub _k3s_artifact_install_cmd {
+  my ($spec, $server, $version, $role) = @_;
+  my @env;
+  push @env, "K3S_URL=$server" if $server;
+  push @env, 'INSTALL_K3S_SKIP_DOWNLOAD=binary', 'INSTALL_K3S_BIN_DIR=/usr/local/bin',
+    "INSTALL_K3S_VERSION=$version";
+  my $cmd = join(' ', @env) . " sh $spec->{script} $role";
+  $cmd .= ' --write-kubeconfig-mode=644' if $role eq 'server';
+  return $cmd;
+}
+
+# "rke2 version v1.30.4+rke2r1 (abc)" / "k3s version v1.30.4+k3s1 (abc)"
+sub _parse_version_output {
+  my ($out) = @_;
+  return $1 if ($out // '') =~ /^(?:rke2|k3s) version (\S+)/m;
+  return;
+}
+
+sub _same_version {
+  my ($want, $got) = @_;
+  return 0 unless defined $want && defined $got;
+  my ($w, $g) = ($want, $got);
+  s/\Av// for $w, $g;
+  return $w eq $g ? 1 : 0;
+}
+
+sub _verify_installed_version {
+  my ($distribution, $version) = @_;
+  return 1 unless $version;
+
+  my $binary = _paths($distribution)->{binary};
+  my $out    = run "$binary --version 2>&1", auto_die => 0;
+  my $got    = _parse_version_output($out);
+  die "Could not determine installed $distribution version ($binary --version):\n"
+    . ($out // '') . "\n"
+    unless defined $got;
+  die "Installed $distribution version is $got, expected $version — the "
+    . "install or upgrade did not take effect\n"
+    unless _same_version($version, $got);
+  Rex::Logger::info("  $distribution $got installed");
+  return 1;
+}
+
+# Poll `systemctl is-active` until active. 'failed' dies at once; any other
+# state (activating, inactive right after --no-block, auto-restart loops)
+# is polled until the timeout. Either failure carries the journal tail.
+sub _wait_for_service {
+  my ($service, %args) = @_;
+  my $attempts = $args{attempts} // 60;
+  my $interval = $args{interval} // 10;
+
+  Rex::Logger::info("Waiting for $service to become active...");
+
+  my $state = '';
+  for my $i (1 .. $attempts) {
+    $state = run "systemctl is-active $service", auto_die => 0;
+    $state = '' unless defined $state;
+    $state =~ s/\s+\z//;
+    if ($state eq 'active') {
+      Rex::Logger::info("  $service is active");
+      return 1;
+    }
+    die _service_failure($service, "is failed") if $state eq 'failed';
+    Rex::Logger::info("  $service is " . ($state || 'unknown') . " ($i/$attempts)");
+    sleep $interval if $i < $attempts;
+  }
+
+  die _service_failure($service,
+    "did not become active within " . ($attempts * $interval) . "s (last state: "
+      . ($state || 'unknown') . ")");
+}
+
+sub _service_failure {
+  my ($service, $reason) = @_;
+  my $journal = run "journalctl -u $service -n 50 --no-pager 2>&1", auto_die => 0;
+  $journal = '' unless defined $journal;
+  $journal =~ s/\s+\z//;
+  return "$service $reason\n"
+    . "--- journalctl -u $service -n 50 ---\n"
+    . ($journal eq '' ? '(no journal output)' : $journal) . "\n";
 }
 
 sub _generate_registries_yaml {
@@ -611,17 +910,24 @@ installing, configuring, and managing server nodes.
 
 =head2 RKE2 installation
 
-The official install script at L<https://get.rke2.io> is fetched and run
-via C<curl -sfL … | sh ->. The service is started with C<--no-block> to
-avoid systemd's 90-second activation timeout (RKE2's first start pulls many
-container images). The function waits only until the kubeconfig file appears
-at C</etc/rancher/rke2/rke2.yaml>; API readiness is confirmed separately by
-the caller using L<Rex::Rancher::K8s/wait_for_api>.
+By default the official install script at L<https://get.rke2.io> is fetched
+and run via C<curl -sfL … | sh ->; with C<install_method =E<gt> 'artifact'>
+the checksum-verified release tarball is installed instead (see
+L</install_server>). The service is started with C<--no-block> to avoid
+systemd's 90-second activation timeout (RKE2's first start pulls many
+container images), then polled with C<systemctl is-active> for up to 10
+minutes; a C<failed> or never-active service dies with its journal tail.
+After that the function waits until the kubeconfig file appears at
+C</etc/rancher/rke2/rke2.yaml>; API readiness is confirmed separately by the
+caller using L<Rex::Rancher::K8s/wait_for_api>.
 
 =head2 K3s installation
 
-The official install script at L<https://get.k3s.io> is used, with
-C<K3S_URL> set when joining an existing server. The token is read from
+The official install script at L<https://get.k3s.io> is used (piped, or run
+against the checksum-verified binary with C<install_method =E<gt>
+'artifact'>), with C<K3S_URL> set when joining an existing server. The
+script starts the service; the same C<systemctl is-active> wait with journal
+diagnosis as for RKE2 follows, then the kubeconfig wait. The token is read from
 C<config.yaml> and never passed on the command line. Traefik and
 ServiceLB are disabled by default (C<disable> in C<config.yaml>, see
 L</install_server>) to leave room for Cilium and external load balancers.

@@ -42,7 +42,10 @@ sub _paths {
 =method install_agent
 
 Write the agent configuration, optionally write C<registries.yaml>, run the
-distribution installer, enable and start the agent service.
+distribution installer, enable and start the agent service, and wait until
+C<systemctl is-active> reports it active (up to 10 minutes). A service that
+ends up C<failed> or never gets active dies with the last 50 lines of its
+journal in the message.
 
 Required options:
 
@@ -71,7 +74,18 @@ C<rke2> (default) or C<k3s>.
 =item C<version>
 
 Pinned version string, e.g. C<v1.28.4+rke2r1> for RKE2 or C<v1.28.4+k3s1>
-for K3s. If omitted, the latest stable release is installed.
+for K3s. If omitted, the latest stable release is installed. When given, the
+installed binary's C<--version> is checked against it after the installer
+ran, and a mismatch dies (on RKE2 before the service is started; the K3s
+install script has already started it).
+
+=item C<install_method>
+
+C<script> (default: C<curl | sh>, unchanged) or C<artifact>: download the
+release artifact for the node's architecture on the host, verify it against
+the official C<sha256sum-ARCH.txt> (a mismatch dies), and install from it.
+Requires C<version>. Details, including the RPM-host caveat for RKE2, in
+L<Rex::Rancher::Server/install_server>.
 
 =item C<node_name>
 
@@ -101,6 +115,7 @@ sub install_agent {
   my $token        = $opts{token} or die "token is required for install_agent";
   my $version      = $opts{version};
   my $node_name    = $opts{node_name};
+  my $method       = Rex::Rancher::Server::_install_method($opts{install_method}, $version);
 
   my $paths = _paths($distribution);
 
@@ -108,7 +123,8 @@ sub install_agent {
 
   _write_config($paths, $distribution, %opts);
   _write_registries($paths, %opts);
-  _run_installer($distribution, $version, $server);
+  _run_installer($distribution, $version, $server, $method);
+  Rex::Rancher::Server::_verify_installed_version($distribution, $version);
   _enable_service($paths);
 
   Rex::Logger::info("$distribution agent installed and running");
@@ -145,9 +161,23 @@ sub _write_registries {
 }
 
 sub _run_installer {
-  my ($distribution, $version, $server) = @_;
+  my ($distribution, $version, $server, $method) = @_;
 
   Rex::Logger::info("Running $distribution agent installer");
+
+  if (($method // 'script') eq 'artifact') {
+    my $spec = Rex::Rancher::Server::_fetch_artifacts($distribution, $version);
+    if ($distribution eq 'k3s') {
+      run Rex::Rancher::Server::_k3s_binary_place_cmd($spec), auto_die => 1;
+      run Rex::Rancher::Server::_k3s_artifact_install_cmd($spec, $server, $version, 'agent'),
+        auto_die => 1;
+    }
+    else {
+      run Rex::Rancher::Server::_rke2_artifact_install_cmd($spec, $version, 'agent'),
+        auto_die => 1;
+    }
+    return;
+  }
 
   run _installer_cmd($distribution, $version, $server), auto_die => 1;
 }
@@ -177,7 +207,11 @@ sub _enable_service {
   my $service = $paths->{service};
   Rex::Logger::info("Enabling and starting $service");
   run "systemctl enable $service", auto_die => 1;
-  run "systemctl start $service", auto_die => 1;
+  # --no-block, same as the server: a start that fails or outlasts systemd's
+  # activation timeout ends in _wait_for_service, which reports the journal,
+  # instead of a bare systemctl error.
+  run "systemctl start --no-block $service", auto_die => 1;
+  Rex::Rancher::Server::_wait_for_service($service);
 }
 
 1;
@@ -220,9 +254,11 @@ node for either RKE2 or K3s. It handles:
 
 =item * Writing C<registries.yaml> for private registry mirrors (optional)
 
-=item * Running the official distribution installer via C<curl | sh>
+=item * Running the official distribution installer via C<curl | sh>, or from a
+checksum-verified release artifact (C<install_method =E<gt> 'artifact'>)
 
-=item * Enabling and starting the agent systemd service
+=item * Enabling and starting the agent systemd service, and waiting until it
+is active (journal tail in the error if it is not)
 
 =back
 

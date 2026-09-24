@@ -52,7 +52,7 @@ The full pipeline for a GPU server deployment:
 
 =item 2. C<gpu_setup> (only with C<gpu =E<gt> 1>) — driver + toolkit + CDI + containerd config
 
-=item 3. C<install_server> — write config, run installer, wait for kubeconfig file
+=item 3. C<install_server> — write config, run installer, wait for the service to be active, then for the kubeconfig file
 
 =item 4. Fetch kubeconfig locally, patch C<127.0.0.1> to the real server address,
 save to C<kubeconfig_file>, wait for API with L<Rex::Rancher::K8s/wait_for_api>
@@ -141,7 +141,14 @@ affected; the address must still be a name in the API server certificate
 =item C<version>
 
 Pinned distribution version (C<INSTALL_RKE2_VERSION> / C<INSTALL_K3S_VERSION>).
-Default: latest stable. See L<Rex::Rancher::Server/install_server>.
+Default: latest stable. When given, the installed version is verified and a
+mismatch dies. See L<Rex::Rancher::Server/install_server>.
+
+=item C<install_method>
+
+C<script> (default, C<curl | sh>) or C<artifact> (checksum-verified release
+artifact for the node's architecture, downloaded on the host; requires
+C<version>). See L<Rex::Rancher::Server/install_server>.
 
 =item C<node_name>
 

@@ -1,6 +1,9 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - New install_method => 'artifact' for server and agent: checksum-verified
+    release download for the node's arch. Pinned versions are verified after
+    install; a service that fails to start dies with its journal tail.
   - New install_server options version, node_name and disable (also taken by
     rancher_deploy_server). K3s now disables traefik/servicelb via
     config.yaml instead of installer flags; the default set is unchanged.
