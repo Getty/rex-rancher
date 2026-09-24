@@ -747,6 +747,20 @@ C<gpu_device_plugin =E<gt> 0> (or leave out C<gpu>) for such a node.
 detected as GPU hosts and get the full GPU pipeline, including the driver
 reboot — set C<reboot> accordingly.
 
+=item * B<NVIDIA vGPU guests> (e.g. Azure NVadsA10 v5, AWS G6f; told apart
+from a passed-through card by PCI subsystem ID) need NVIDIA's licensed vGPU
+guest driver, which L<Rex::GPU> does not install. If it already works
+(C<nvidia-smi -L> lists the GPU and C<libcuda.so.1> is in the linker cache)
+the deploy goes on as usual; otherwise C<gpu_setup> dies naming the vGPU
+type, also when a non-vGPU GPU sits on the same host.
+
+=item * B<HGX B200/B300>: the driver is installed as for any Blackwell, then
+a warning notes that CUDA needs NVIDIA Fabric Manager, the NVLink Subnet
+Manager (C<nvlsm>), OFED/MOFED and kernel 5.17 or newer, none of which
+L<Rex::GPU> sets up (it only checks whether Fabric Manager is running).
+B<GB200/GB300> NVL72 trays get an info line that multi-node NVLink needs
+C<nvidia-imex>. Log output only; the deploy is unchanged.
+
 =item * B<Several compute GPUs>: the driver must satisfy all of them (Ada +
 V100 gives 580, Ada + B200 gives the open driver). If no driver fits (V100 +
 B200) and none is already installed, or no package source serves the
