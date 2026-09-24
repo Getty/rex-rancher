@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-09-24T20:19:22Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T20:19:22Z
+created: 2026-09-24T20:14:28Z
+id: 38
+priority: medium
+started: 2026-09-24T20:16:05Z
+status: done
+tags:
+- k3s
+- cilium
+title: 'install_cilium: refuse to change Cilium''s IPAM mode on a deployed release'
+updated: 2026-09-24T20:19:22Z
+---
+
+Since k36, k3s uses ipam.mode cluster-pool (was kubernetes, as 0.001 and rke2). _release_action compares only values subset + version, so a re-run of install_cilium against an existing k3s release deployed with ipam.mode kubernetes goes to upgrade and switches IPAM mode on a live cluster, which Cilium does not support (pods lose addresses). Changes tells users to redeploy k3s instead of re-running. Done: with kubeconfig, a deployed release whose ipam.mode differs from the requested one dies naming both modes before cilium upgrade, offline test in t/cilium.t. Found while working k36.
+
+Committed 492d0e6. Offline only; the refusal only fires when the release config carries an explicit ipam.mode (0.001 and rke2 set kubernetes explicitly). Needs a live re-run against an old k3s release to confirm.
