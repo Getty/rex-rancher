@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-09-24T03:04:44Z
+created: 2026-09-24T02:44:22Z
+id: 18
+priority: medium
+started: 2026-09-24T03:03:14Z
+status: done
+tags:
+- cilium
+- pipeline
+title: rancher_deploy_server installs Cilium even with cilium => 0
+updated: 2026-09-24T03:04:48Z
+---
+
+rancher_deploy_server calls install_cilium unconditionally (Rancher.pm step 7), but cilium => 0 makes install_server keep the bundled CNI (Canal on rke2, Flannel on k3s). Result: Cilium is installed on top of Canal/Flannel. POD of the cilium option says it keeps the built-in CNI. Fix: skip install_cilium when cilium is false; decide whether gateway_api with cilium => 0 dies. Found while working k14, not changed there.
+
+2026-09-24 03:04 Fix in working tree (uncommitted): rancher_deploy_server skips install_cilium when cilium is false (exists-semantics, default 1); cilium => 0 + gateway_api(true)/cilium_version/cilium_cli_version/cilium_helm_values(defined) dies before _check_connection; _resolve_opts only in cilium case. t/cilium-step.t (fails on old code, passes now), POD, Changes. prove -lr t/ green = offline only, no live run.
