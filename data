@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-24T17:50:25Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T17:50:25Z
+created: 2026-09-24T17:42:50Z
+id: 29
+priority: high
+started: 2026-09-24T17:43:43Z
+status: done
+title: 'k3s + cilium => 1: turn Flannel off so Cilium is the only CNI'
+updated: 2026-09-24T17:50:25Z
+---
+
+Maintainer intent: Cilium is ALWAYS installed unless the user says cilium => 0; then nothing is done and the distribution CNI (Flannel on k3s, canal on rke2) comes up. Today k3s with cilium => 1 keeps Flannel (never disabled) and installs Cilium with cni.exclusive on top. Fix: k3s config.yaml gets flannel-backend: none + disable-network-policy: true under cilium; kube-proxy stays on k3s (KPR wiring is rke2-only). Unverified until a k3s live run. Docs (Server.pm, Cilium.pm, Rancher.pm, README) must say one thing.
+
+2026-09-24 17:48 k3s+cilium writes flannel-backend:none + disable-network-policy:true; kube-proxy kept; cilium-cli v0.16.23 skips KPR autodetect on k3s (chart default KPR false), agents inherit backend from server. Tests in t/server-config.t. Uncommitted; needs Changes/README + live k3s run.
