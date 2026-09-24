@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-24T20:03:26Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T20:03:26Z
+created: 2026-09-24T17:43:07Z
+id: 33
+priority: low
+started: 2026-09-24T19:59:51Z
+status: done
+title: 'install_agent: no node_labels support'
+updated: 2026-09-24T20:03:26Z
+---
+
+Worker labels cannot be set via install_agent/rancher_deploy_agent; option silently dropped. Found in doc audit.
+
+2026-09-24 20:02 Committed (8c2f7ac); offline tests green; needs a live run (eg/hetzner-gpu.Rexfile) before trust.
