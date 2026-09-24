@@ -6,20 +6,21 @@ use Test::More;
 # Unit test for the server config.yaml builder (Rex::Rancher::Server).
 #
 # With cilium (the default) Cilium must be the only CNI on both distributions:
-# - rke2: cni:none + disable-kube-proxy (Cilium's kube-proxy replacement is
-#   wired for rke2 only, see Rex::Rancher::Cilium).
-# - k3s: flannel-backend:none + disable-network-policy, but kube-proxy stays --
-#   disabling it on k3s left Service/ClusterIP routing dead with nothing
-#   replacing it, and keeping Flannel under Cilium's cni.exclusive ran two CNIs.
-# Without cilium neither distribution's CNI is touched.
+# - rke2: cni:none + disable-kube-proxy.
+# - k3s: flannel-backend:none + disable-network-policy + disable-kube-proxy,
+#   and cluster-cidr spelled out: Cilium's cluster-pool IPAM is handed the
+#   same range (Rex::Rancher::Cilium), as in kubernetes-ocp k178.
+# Cilium replaces kube-proxy on both. Without cilium neither distribution's
+# CNI or kube-proxy is touched.
 #
 # _build_server_config is pure (no file/YAML I/O), so it is unit-testable
 # offline; the actual write stays in _write_config. Nothing here says the
-# resulting cluster comes up -- k3s is not deploy-verified.
+# resulting cluster comes up -- k3s has not been run live through Rex::Rancher.
 # -----------------------------------------------------------------------------
 
 use JSON::MaybeXS ();
 use Rex::Rancher::Server;
+use Rex::Rancher::Cilium;
 
 sub cfg { Rex::Rancher::Server::_build_server_config(@_) }
 #          ($distribution, $token, $server, $tls_san, $node_labels, $cilium)
@@ -34,14 +35,18 @@ subtest 'rke2 + cilium: kube-proxy replacement config present' => sub {
     'rke2 bundled ingress controllers disabled');
 };
 
-subtest 'k3s + cilium: Flannel off, kube-proxy kept' => sub {
+subtest 'k3s + cilium: Flannel, network policy and kube-proxy off' => sub {
   my $c = cfg('k3s', 'tok', undef, undef, undef, 1);
   is($c->{token}, 'tok', 'token set');
   is($c->{'flannel-backend'}, 'none', 'flannel-backend:none — Cilium is the only CNI');
   ok(JSON::MaybeXS::is_bool($c->{'disable-network-policy'}) && $c->{'disable-network-policy'},
     'disable-network-policy is a real true boolean');
-  ok(!exists $c->{'disable-kube-proxy'},
-    'k3s keeps its own kube-proxy — Cilium replacement is rke2-only');
+  ok(JSON::MaybeXS::is_bool($c->{'disable-kube-proxy'}) && $c->{'disable-kube-proxy'},
+    'disable-kube-proxy is a real true boolean — Cilium replaces it');
+  is($c->{'cluster-cidr'}, '10.42.0.0/16', 'cluster-cidr spelled out');
+  is($c->{'cluster-cidr'},
+    Rex::Rancher::Cilium::_paths_for('k3s')->{cluster_cidr},
+    'cluster-cidr is the range Cilium\'s pool gets');
   ok(!exists $c->{cni},     'no rke2 cni key on k3s');
   is_deeply($c->{disable}, ['traefik', 'servicelb'],
     'k3s default disable list (traefik, servicelb), no rke2 names');
@@ -52,6 +57,7 @@ subtest 'k3s without cilium: Flannel and network policy left alone' => sub {
   ok(!exists $c->{'flannel-backend'},        'no flannel-backend without cilium');
   ok(!exists $c->{'disable-network-policy'}, 'no disable-network-policy without cilium');
   ok(!exists $c->{'disable-kube-proxy'},     'no disable-kube-proxy');
+  ok(!exists $c->{'cluster-cidr'},           'no cluster-cidr');
   ok(!exists $c->{cni},                      'no cni key');
 };
 
@@ -60,6 +66,8 @@ subtest 'k3s server join + cilium: same CNI keys as the first server' => sub {
   is($c->{server}, 'https://cp1:6443', 'server set');
   is($c->{'flannel-backend'}, 'none', 'joining server also has flannel-backend:none');
   ok($c->{'disable-network-policy'}, 'joining server also disables network policy');
+  ok($c->{'disable-kube-proxy'}, 'joining server also disables kube-proxy');
+  is($c->{'cluster-cidr'}, '10.42.0.0/16', 'joining server: same cluster-cidr');
 };
 
 subtest 'rke2 without cilium: no kube-proxy override, ingress still disabled' => sub {

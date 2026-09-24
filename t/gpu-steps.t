@@ -87,7 +87,8 @@ is($install_opts{nvidia_runtime_path}, 1, 'agent, gpu_setup => 0: install_agent 
 
 # Default gpu => 1: Rex::GPU's gpu_setup runs between prepare_node and the install.
 reset_run();
-Rex::Rancher::rancher_deploy_server(%server, gpu => 1, distribution => 'k3s', reboot => 1);
+Rex::Rancher::rancher_deploy_server(%server, gpu => 1, distribution => 'k3s', reboot => 1,
+  tls_san => '10.0.0.1');
 is(scalar @gpu_loads, 1, 'server, gpu => 1: Rex::GPU required');
 is_deeply(\@gpu_setup_calls, [ { containerd_config => 'k3s', reboot => 1 } ],
   'server, gpu => 1: gpu_setup gets distribution and reboot');

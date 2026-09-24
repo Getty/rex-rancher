@@ -43,9 +43,9 @@ use constant GATEWAY_API_PROBE_CRD => 'gateways.gateway.networking.k8s.io';
 # lives in RELEASE_NAMESPACE like Cilium's.
 use constant RKE2_GATEWAY_API_RELEASE => 'rke2-gateway-api-crd';
 
-# Keys that wire Cilium's kube-proxy replacement. RKE2 only: the K3s server
-# config keeps kube-proxy (Rex::Rancher::Server::_build_server_config).
-my @KPR_KEYS = qw( kubeProxyReplacement k8sServiceHost k8sServicePort );
+# Addresses that name the node itself. k3s agents serve the API on
+# 127.0.0.1:6444, not 6443, so on k3s k8sServiceHost must not be one of these.
+my %LOOPBACK = map { $_ => 1 } qw( 127.0.0.1 localhost ::1 );
 
 =head1 FUNCTIONS
 
@@ -100,21 +100,22 @@ error (the release already exists) counts as success, with a warning that
 version and values were not reconciled. Use L</upgrade_cilium> to change an
 existing installation in that case.
 
-For RKE2, C<kubeProxyReplacement=true> is passed to enable Cilium's
-eBPF-based kube-proxy replacement (the RKE2 server config must have
-C<cni: none> and C<disable-kube-proxy: true> for this to work). For K3s,
-C<cni.exclusive: true> is set, and the K3s server config must have
-C<flannel-backend: none> and C<disable-network-policy: true> so that Cilium
-is the only CNI.
+On both distributions C<kubeProxyReplacement=true> is passed to enable
+Cilium's eBPF-based kube-proxy replacement, so the server config must have
+switched off the distribution's CNI and kube-proxy: on RKE2 C<cni: none> and
+C<disable-kube-proxy: true>, on K3s C<flannel-backend: none>,
+C<disable-network-policy: true>, C<disable-kube-proxy: true> and
+C<cluster-cidr: 10.42.0.0/16> (L<Rex::Rancher::Server/install_server> writes
+these). Cilium then needs an API server address that works before any
+Service does, on every node: on RKE2 that is C<127.0.0.1:6443>, where servers
+and agents alike serve it. K3s agents serve it on C<127.0.0.1:6444> instead,
+so on K3s Cilium is given the control plane's own address,
+C<k8s_service_host>, and dies without one.
 
-B<Only rke2 is verified and supported.> On k3s, kube-proxy replacement is
-B<not> enabled and the server config keeps kube-proxy in place (see
-L<Rex::Rancher::Server/install_server>): the k3s Helm values do not set
-C<kubeProxyReplacement>/C<k8sServiceHost>/C<k8sServicePort>, so Cilium runs
-alongside k3s's own kube-proxy and reaches the API server through its
-Service. The k3s path is not deploy-verified.
-For the same reason C<helm_values> must not set those three keys on k3s, and
-C<gateway_api> (which needs kube-proxy replacement) is refused there.
+B<rke2 is the verified distribution.> The k3s values are those
+kubernetes-ocp verified live (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API
+v1.6.1 standard); Rex::Rancher's k3s path has not been run live itself and
+defaults to Cilium 1.17.0.
 
 Options:
 
@@ -131,6 +132,16 @@ Cilium version to install, e.g. C<1.17.0>. Default: C<1.17.0>.
 =item C<cli_version>
 
 Cilium CLI version to download, e.g. C<v0.16.23>. Default: C<v0.16.23>.
+
+=item C<k8s_service_host>
+
+K3s only, and required there: the control plane address Cilium reaches the
+API server at on port 6443 from every node (C<k8sServiceHost>), e.g. the
+server's IP or a name in its certificate. A loopback address dies, because
+K3s agents serve the API on C<127.0.0.1:6444>, not 6443.
+C<helm_values-E<gt>{k8sServiceHost}> may take its place.
+L<Rex::Rancher/rancher_deploy_server> passes the first C<tls_san>. Passing
+it on RKE2 dies: RKE2 uses C<127.0.0.1>, which works on every node there.
 
 =item C<api_server>
 
@@ -152,7 +163,7 @@ merge key by key, anything else replaces the default). Optional.
 
 If true, apply the Gateway API CRDs before Cilium and set
 C<gatewayAPI.enabled: true>. Default: off. Requires C<kubeconfig> and
-C<gateway_api_version>; rke2 only. The CRDs are fetched from the
+C<gateway_api_version>. The CRDs are fetched from the
 kubernetes-sigs/gateway-api GitHub release on the machine running Rex and
 applied through L<Kubernetes::REST> (no C<kubectl>). They are skipped when
 the cluster already carries that bundle version and channel; when they are
@@ -286,13 +297,8 @@ sub _resolve_opts {
 
   die "helm_values must be a hashref\n" unless ref $helm_values eq 'HASH';
 
-  if ($distribution eq 'k3s') {
-    my @kpr = grep { exists $helm_values->{$_} } @KPR_KEYS;
-    die "helm_values must not set @kpr on k3s: kube-proxy replacement is "
-      . "rke2-only, the k3s server config keeps kube-proxy\n" if @kpr;
-    die "gateway_api is rke2-only: Cilium's Gateway API needs kube-proxy "
-      . "replacement, which is not enabled on k3s\n" if $gateway_api;
-  }
+  die "k8s_service_host is k3s-only: rke2 serves the API on 127.0.0.1:6443 "
+    . "on every node\n" if $distribution eq 'rke2' && defined $opts{k8s_service_host};
 
   if ($gateway_api) {
     die "gateway_api needs kubeconfig (a local kubeconfig the API answers "
@@ -301,6 +307,20 @@ sub _resolve_opts {
       . "Cilium supports\n" unless $opts{gateway_api_version};
     die "gateway_api_channel must be 'standard' or 'experimental'\n"
       unless $channel eq 'standard' || $channel eq 'experimental';
+  }
+
+  my $values = _helm_values($distribution, $paths, $gateway_api, $helm_values,
+    $opts{k8s_service_host});
+
+  # kube-proxy replacement on k3s: Cilium must reach the API server before
+  # any Service works, on agents too, where 127.0.0.1:6443 does not exist.
+  if ($distribution eq 'k3s') {
+    my $host = $values->{k8sServiceHost} // '';
+    die "install_cilium on k3s needs k8s_service_host, the control plane "
+      . "address every node reaches the API at on port 6443 (k3s agents serve "
+      . "it on 127.0.0.1:6444, so localhost does not work)"
+      . ( length $host ? ", got '$host'" : '' ) . "\n"
+      if !length $host || $LOOPBACK{lc $host};
   }
 
   return {
@@ -313,7 +333,7 @@ sub _resolve_opts {
     gateway_api         => $gateway_api,
     gateway_api_version => $opts{gateway_api_version},
     gateway_api_channel => $channel,
-    values              => _helm_values($distribution, $paths, $gateway_api, $helm_values),
+    values              => $values,
   };
 }
 
@@ -361,7 +381,7 @@ sub _cilium_command {
     "--version $o->{version}",
     "--helm-values $values_file",
   );
-  push @cmd, "--set kubeProxyReplacement=true" if $o->{distribution} eq 'rke2';
+  push @cmd, "--set kubeProxyReplacement=true";
   push @cmd, "--api-server $o->{api_server}" if $o->{api_server};
 
   return "KUBECONFIG=$o->{paths}{kubeconfig} " . join(" ", @cmd);
@@ -703,6 +723,8 @@ sub _paths_for {
       cni_bin     => '/opt/cni/bin',
       cni_conf    => '/etc/cni/net.d',
       socket_path => '/run/k3s/containerd/containerd.sock',
+      # Rex::Rancher::Server's k3s cluster-cidr; the pool must match it.
+      cluster_cidr => '10.42.0.0/16',
     };
   }
   else {
@@ -716,7 +738,7 @@ sub _paths_for {
 
 # Defaults per distribution, then gatewayAPI, then the caller's values on top.
 sub _helm_values {
-  my ($distribution, $paths, $gateway_api, $extra) = @_;
+  my ($distribution, $paths, $gateway_api, $extra, $k8s_service_host) = @_;
 
   my %values = (
     cni => {
@@ -728,10 +750,20 @@ sub _helm_values {
     operator => { replicas => 1 },
   );
 
+  $values{kubeProxyReplacement} = JSON()->true;
+  $values{k8sServicePort}       = '6443';
+
   if ($distribution eq 'rke2') {
-    $values{kubeProxyReplacement} = JSON()->true;
-    $values{k8sServiceHost}       = '127.0.0.1';
-    $values{k8sServicePort}       = '6443';
+    $values{k8sServiceHost} = '127.0.0.1';
+  }
+  else {
+    # k3s: the control plane address (validated in _resolve_opts), and
+    # Cilium's own pool on k3s' cluster-cidr, as kubernetes-ocp k178.
+    $values{k8sServiceHost} = $k8s_service_host if defined $k8s_service_host;
+    $values{ipam} = {
+      mode     => 'cluster-pool',
+      operator => { clusterPoolIPv4PodCIDRList => [ $paths->{cluster_cidr} ] },
+    };
   }
 
   $values{gatewayAPI} = { enabled => JSON()->true } if $gateway_api;
@@ -793,9 +825,10 @@ sub _write_helm_values {
 
   # Install Cilium on a K3s cluster with explicit version
   install_cilium(
-    distribution => 'k3s',
-    version      => '1.17.0',
-    cli_version  => 'v0.16.23',
+    distribution     => 'k3s',
+    k8s_service_host => '10.0.0.1',    # the control plane, not localhost
+    version          => '1.17.0',
+    cli_version      => 'v0.16.23',
   );
 
   # Upgrade an existing Cilium installation
@@ -816,10 +849,11 @@ local C<kubeconfig> is given.
 
 The server must already be running with its own CNI switched off in
 C<config.yaml>, so that Cilium is the only one: on RKE2 C<cni: none> and
-C<disable-kube-proxy: true> (Cilium also takes over kube-proxy's role), on
-K3s C<flannel-backend: none> and C<disable-network-policy: true> (kube-proxy
-stays; unverified). L<Rex::Rancher::Server/install_server> sets these
-options by default when C<cilium =E<gt> 1>.
+C<disable-kube-proxy: true>, on K3s C<flannel-backend: none>,
+C<disable-network-policy: true>, C<disable-kube-proxy: true> and
+C<cluster-cidr: 10.42.0.0/16>; on both Cilium takes over kube-proxy's role.
+L<Rex::Rancher::Server/install_server> sets these options by default when
+C<cilium =E<gt> 1>.
 
 =head2 Helm values
 
@@ -831,19 +865,23 @@ C</tmp/cilium-values-E<lt>distE<gt>.yaml>:
 =item RKE2
 
 C<kubeProxyReplacement: true>, C<k8sServiceHost: 127.0.0.1>,
-C<k8sServicePort: "6443">, C<cni.exclusive: false>, C<operator.replicas: 1>.
+C<k8sServicePort: "6443">, C<cni.exclusive: false>, C<operator.replicas: 1>,
+C<ipam.mode: kubernetes>.
 
 =item K3s
 
-C<cni.exclusive: true>, C<operator.replicas: 1>.
+C<kubeProxyReplacement: true>, C<k8sServiceHost:> C<k8s_service_host>,
+C<k8sServicePort: "6443">, C<cni.exclusive: true>, C<operator.replicas: 1>,
+C<ipam.mode: cluster-pool> with
+C<ipam.operator.clusterPoolIPv4PodCIDRList: [10.42.0.0/16]> (K3s's
+C<cluster-cidr>).
 
 =back
 
-Both distributions use C<ipam.mode: kubernetes> and share the same CNI
-binary/config paths (C</opt/cni/bin>, C</etc/cni/net.d>). C<gateway_api>
-adds C<gatewayAPI.enabled: true>, and C<helm_values> is merged over all of
-it. On RKE2 C<--set kubeProxyReplacement=true> is also passed on the command
-line and wins over any value file.
+Both distributions share the same CNI binary/config paths (C</opt/cni/bin>,
+C</etc/cni/net.d>). C<gateway_api> adds C<gatewayAPI.enabled: true>, and
+C<helm_values> is merged over all of it. C<--set kubeProxyReplacement=true>
+is also passed on the command line and wins over any value file.
 
 =head2 Default versions
 

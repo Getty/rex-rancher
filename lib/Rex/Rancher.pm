@@ -171,7 +171,9 @@ L<Rex::Rancher::Server/install_server>.
 Additional TLS Subject Alternative Names for the API server certificate.
 Accepts a string (single SAN or comma-separated list) or an arrayref.
 The first SAN is used as the server address when patching the kubeconfig
-(see C<kubeconfig_file> below).
+(see C<kubeconfig_file> below), and on K3s with Cilium as the address Cilium
+reaches the API server at (see C<k8s_service_host>), so it must be reachable
+from every node.
 
 =item C<kubeconfig_file>
 
@@ -238,27 +240,39 @@ See L<Rex::Rancher::Server/install_server> for the structure.
 =item C<cilium>
 
 Whether Cilium is the cluster's CNI. Default: C<1>: the distribution's own
-CNI is switched off in C<config.yaml> (RKE2: C<cni: none> and
-C<disable-kube-proxy: true>, Cilium replaces kube-proxy; K3s:
-C<flannel-backend: none> and C<disable-network-policy: true>, kube-proxy stays
-and the K3s path is unverified) and Cilium is installed in step 5. Set to
+CNI and kube-proxy are switched off in C<config.yaml> (RKE2: C<cni: none>
+and C<disable-kube-proxy: true>; K3s: C<flannel-backend: none>,
+C<disable-network-policy: true>, C<disable-kube-proxy: true> and
+C<cluster-cidr: 10.42.0.0/16>) and Cilium is installed in step 5 with
+kube-proxy replacement. K3s carries the configuration kubernetes-ocp
+verified live, but has not been run live through Rex::Rancher, which
+defaults to an older Cilium (see L<Rex::Rancher::Cilium>). Set to
 C<0> and Rex::Rancher does nothing CNI-related: the distribution's built-in
 CNI comes up (Canal for RKE2, Flannel for K3s) and the pipeline skips
 L<Rex::Rancher::Cilium/install_cilium> entirely. Passing
-C<gateway_api>, C<cilium_version>, C<cilium_cli_version> or
-C<cilium_helm_values> together with C<cilium =E<gt> 0> dies before the node
-is touched.
+C<gateway_api>, C<cilium_version>, C<cilium_cli_version>,
+C<cilium_helm_values> or C<k8s_service_host> together with
+C<cilium =E<gt> 0> dies before the node is touched.
 
 =item C<cilium_version>, C<cilium_cli_version>, C<cilium_helm_values>
 
 Passed to L<Rex::Rancher::Cilium/install_cilium> as C<version>,
 C<cli_version> and C<helm_values>.
 
+=item C<k8s_service_host>
+
+K3s only: the control plane address Cilium reaches the API server at from
+every node, passed to L<Rex::Rancher::Cilium/install_cilium>. Default: the
+first C<tls_san>. Without either, a K3s deploy with Cilium dies before the
+node is touched: K3s agents serve the API on C<127.0.0.1:6444>, so no
+localhost address works on every node. Passing it on RKE2 dies, also before
+the node is touched.
+
 =item C<gateway_api>, C<gateway_api_version>, C<gateway_api_channel>
 
 Passed to L<Rex::Rancher::Cilium/install_cilium> unchanged. C<gateway_api>
-needs C<kubeconfig_file> and is rke2-only; invalid Cilium options die before
-the node is touched.
+needs C<kubeconfig_file>; invalid Cilium options die before the node is
+touched.
 
 With C<gateway_api>, Cilium's CRDs have to be the only ones: RKE2 v1.37+
 would otherwise install its own C<rke2-gateway-api-crd> chart over them
@@ -298,8 +312,16 @@ sub rancher_deploy_server {
     ( map { exists $opts{"cilium_$_"} ? ( $_ => $opts{"cilium_$_"} ) : () }
         qw( version cli_version helm_values ) ),
     ( map { exists $opts{$_} ? ( $_ => $opts{$_} ) : () }
-        qw( gateway_api gateway_api_version gateway_api_channel ) ),
+        qw( gateway_api gateway_api_version gateway_api_channel k8s_service_host ) ),
   );
+  # k3s: Cilium reaches the API at the control plane's address, which is the
+  # first tls_san, the name the certificate is made for. No fallback to the
+  # kubeconfig_server (this machine's view) or localhost (agents have no
+  # 6443 there); install_cilium dies without one.
+  if ($distribution eq 'k3s' && !exists $cilium_opts{k8s_service_host}) {
+    my $first_san = _kubeconfig_server_addr(tls_san => $opts{tls_san});
+    $cilium_opts{k8s_service_host} = $first_san if defined $first_san && length $first_san;
+  }
   my $cilium = exists $opts{cilium} ? $opts{cilium} : 1;
 
   # Refuse bad or contradictory Cilium options before the node is touched,
@@ -310,7 +332,8 @@ sub rancher_deploy_server {
   else {
     my @set = (
       ( $opts{gateway_api} ? 'gateway_api' : () ),
-      ( grep { defined $opts{$_} } qw( cilium_version cilium_cli_version cilium_helm_values ) ),
+      ( grep { defined $opts{$_} }
+          qw( cilium_version cilium_cli_version cilium_helm_values k8s_service_host ) ),
     );
     die "cilium => 0 keeps the distribution's built-in CNI, but @set "
       . "configure Cilium: drop them or leave cilium on\n" if @set;
@@ -407,8 +430,9 @@ The server-only options have no effect on an agent and are ignored:
 C<tls_san>, C<disable>, C<kubeconfig_file>,
 C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
 C<cilium_helm_values>, C<gateway_api>, C<gateway_api_version>,
-C<gateway_api_channel> and C<gpu_device_plugin>. Whether a K3s agent runs
-Flannel or leaves the CNI to Cilium follows the server's C<config.yaml>.
+C<gateway_api_channel>, C<k8s_service_host> and C<gpu_device_plugin>. Whether
+a K3s agent runs Flannel and kube-proxy or leaves both to Cilium follows the
+server's C<config.yaml>.
 
 =cut
 
@@ -576,7 +600,7 @@ sub _install_opts {
   return ( %opts, nvidia_runtime_path => $opts{nvidia_runtime_path} // $steps{runtime_path} );
 }
 
-# gateway_api (rke2 only, validated earlier): RKE2 v1.37+'s own Gateway API
+# gateway_api on rke2 (validated earlier): RKE2 v1.37+'s own Gateway API
 # CRD chart must stay off, or it overwrites what install_cilium applies. The
 # default disable list gains it; a caller's own list is theirs to keep.
 sub _gateway_api_disable {
@@ -773,7 +797,7 @@ L<Kubernetes::REST>.
 =item 4. B<Cilium CNI> (skipped with C<cilium =E<gt> 0>, which leaves the
 distribution's own CNI in place) — Cilium CLI installed on the remote host,
 Cilium installed, upgraded or left alone with distribution-appropriate Helm
-values (kube-proxy replacement on RKE2 only).
+values (kube-proxy replacement on both).
 
 =item 5. B<NVIDIA device plugin> (C<gpu =E<gt> 1> + C<kubeconfig_file>, unless
 C<gpu_device_plugin =E<gt> 0>) — DaemonSet

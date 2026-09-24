@@ -9,7 +9,7 @@ Handles the full lifecycle of a Rancher-based Kubernetes deployment from a Rex t
 - **Node preparation** — hostname, timezone, swap off, kernel modules, sysctl
 - **Control plane installation** — RKE2 or K3s via official install scripts
 - **Agent/worker node joining** — joins nodes to an existing cluster
-- **Cilium CNI** — installs Cilium by default (`cilium => 0` keeps the distribution's own CNI); kube-proxy replacement on RKE2
+- **Cilium CNI** — installs Cilium by default (`cilium => 0` keeps the distribution's own CNI) with kube-proxy replacement on RKE2 and K3s; optional Gateway API CRDs
 - **GPU support** — NVIDIA driver + Container Toolkit + CDI + device plugin (via [Rex::GPU](https://metacpan.org/pod/Rex::GPU))
 - **Registry mirrors** — configures `registries.yaml` for private pull-through caches
 - **Local kubeconfig management** — fetches and patches kubeconfig for external access
@@ -70,8 +70,11 @@ set connection => 'LibSSH';
 
 ### Supported / verified distributions
 
-RKE2 is the verified, supported distribution. K3s is implemented but
-**unverified** on real hosts (`install_server` warns about it).
+RKE2 is the verified, supported distribution. K3s carries the configuration
+kubernetes-ocp verified live (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API v1.6.1), but has not been run
+live through Rex::Rancher itself, which defaults to Cilium 1.17.0
+(`install_server` warns about it). On K3s the first `tls_san` (or
+`k8s_service_host`) must be the control plane address every node reaches.
 
 Verified on Debian, Ubuntu, and RHEL/Rocky. openSUSE Leap / SLES is
 **unverified and unsupported** — node preparation there relies on Rex's

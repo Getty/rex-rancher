@@ -97,6 +97,47 @@ for my $dist (qw( rke2 k3s )) {
   ok(!exists $cilium_opts{kubeconfig}, 'no kubeconfig_file: install_cilium without kubeconfig');
 }
 
+# k3s: Cilium's API address is the first tls_san unless k8s_service_host
+# says otherwise; neither dies before the node is touched; rke2 gets none.
+{
+  @ran = ();
+  Rex::Rancher::rancher_deploy_server(%server, distribution => 'k3s',
+    tls_san => [ '203.0.113.7', 'cp.example.com' ]);
+  is($cilium_opts{k8s_service_host}, '203.0.113.7', 'k3s: first tls_san is the Cilium API address');
+  is($ran[-1], 'install_cilium', 'k3s: install_cilium runs');
+
+  Rex::Rancher::rancher_deploy_server(%server, distribution => 'k3s',
+    tls_san => '203.0.113.7,cp.example.com', k8s_service_host => '10.0.0.1');
+  is($cilium_opts{k8s_service_host}, '10.0.0.1', 'k3s: explicit k8s_service_host wins');
+
+  Rex::Rancher::rancher_deploy_server(%server, distribution => 'k3s', tls_san => 'cp',
+    gateway_api => 1, gateway_api_version => 'v1.6.1', gateway_api_channel => 'standard');
+  ok($cilium_opts{gateway_api}, 'k3s: gateway_api reaches install_cilium');
+
+  @ran = ();
+  ok(!eval { Rex::Rancher::rancher_deploy_server(%server, distribution => 'k3s'); 1 },
+    'k3s without tls_san or k8s_service_host: dies');
+  like($@, qr/k3s needs k8s_service_host/, 'k3s without an address: names the option');
+  is_deeply(\@ran, [], 'k3s without an address: before any remote step');
+
+  @ran = ();
+  ok(!eval { Rex::Rancher::rancher_deploy_server(%server, distribution => 'k3s',
+    tls_san => 'localhost'); 1 }, 'k3s with a loopback tls_san: dies');
+  is_deeply(\@ran, [], 'k3s loopback: before any remote step');
+
+  @ran = ();
+  Rex::Rancher::rancher_deploy_server(%server, distribution => 'k3s', cilium => 0);
+  ok(!grep({ $_ eq 'install_cilium' } @ran), 'k3s, cilium => 0: no address needed');
+
+  @ran = ();
+  ok(!eval { Rex::Rancher::rancher_deploy_server(%server, distribution => 'k3s', cilium => 0,
+    k8s_service_host => 'cp'); 1 }, 'k3s, cilium => 0 + k8s_service_host: dies');
+  like($@, qr/cilium => 0 .*\bk8s_service_host\b/, 'cilium => 0 + k8s_service_host: named');
+
+  Rex::Rancher::rancher_deploy_server(%server, tls_san => 'cp.example.com');
+  ok(!exists $cilium_opts{k8s_service_host}, 'rke2: no k8s_service_host derived');
+}
+
 # API up: install_cilium gets the saved kubeconfig.
 @ran = ();
 Rex::Rancher::rancher_deploy_server(%server);

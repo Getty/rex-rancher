@@ -147,7 +147,7 @@ sub install_agent {
   Rex::Rancher::Server::_nvidia_runtime_path($paths) if $opts{nvidia_runtime_path};
   _run_installer($distribution, $version, $server, $method);
   Rex::Rancher::Server::_verify_installed_version($distribution, $version);
-  _enable_service($paths);
+  _enable_service($paths, $distribution);
 
   Rex::Logger::info("$distribution agent installed and running");
 }
@@ -220,9 +220,13 @@ sub _installer_cmd {
   my ($distribution, $version, $server) = @_;
 
   if ($distribution eq 'k3s') {
+    # INSTALL_K3S_SKIP_START: the script's own `systemctl restart` of the
+    # Type=notify unit blocks until the agent has joined, forever for one
+    # that cannot reach $server; _enable_service starts it bounded instead.
     my @env;
     push @env, "K3S_URL=$server";
     push @env, "INSTALL_K3S_VERSION=$version" if $version;
+    push @env, 'INSTALL_K3S_SKIP_START=true';
     my $env = join(" ", @env);
     return "curl -sfL https://get.k3s.io | $env sh -s - agent";
   }
@@ -234,15 +238,20 @@ sub _installer_cmd {
 }
 
 sub _enable_service {
-  my ($paths) = @_;
+  my ($paths, $distribution) = @_;
 
   my $service = $paths->{service};
+  # k3s: restart, as the install script did before INSTALL_K3S_SKIP_START,
+  # so a re-run still picks up a new binary and config.yaml. rke2's
+  # installer never started the agent.
+  my $verb = ($distribution // '') eq 'k3s' ? 'restart' : 'start';
   Rex::Logger::info("Enabling and starting $service");
   run "systemctl enable $service", auto_die => 1;
   # --no-block, same as the server: a start that fails or outlasts systemd's
   # activation timeout ends in _wait_for_service, which reports the journal,
-  # instead of a bare systemctl error.
-  run "systemctl start --no-block $service", auto_die => 1;
+  # instead of a bare systemctl error (or, for an agent that cannot reach
+  # its server, a Type=notify start that never returns).
+  run "systemctl $verb --no-block $service", auto_die => 1;
   Rex::Rancher::Server::_wait_for_service($service);
 }
 
@@ -299,7 +308,11 @@ is active (journal tail in the error if it is not)
 
 For RKE2 the installer is fetched from L<https://get.rke2.io> with
 C<INSTALL_RKE2_TYPE=agent>. For K3s the installer from L<https://get.k3s.io>
-is used with the C<K3S_URL> environment variable. For both distributions the
+is used with the C<K3S_URL> environment variable and
+C<INSTALL_K3S_SKIP_START>: instead of the script's own blocking restart, the
+agent is restarted with C<--no-block> and waited on for at most 10 minutes,
+so an agent that cannot reach its server dies with its journal instead of
+hanging the deploy. For both distributions the
 token is read from C<config.yaml> and never passed on the installer command
 line, where C<ps> would show it. C<config.yaml> and C<registries.yaml> are
 written C<0600 root:root>.

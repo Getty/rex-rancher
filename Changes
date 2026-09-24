@@ -1,13 +1,22 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
-  - Cilium is the only CNI unless cilium => 0: rke2 gets cni: none and
-    disable-kube-proxy (Cilium replaces kube-proxy); k3s now gets
-    flannel-backend: none and disable-network-policy and keeps its own
-    kube-proxy (before, k3s ran Flannel under Cilium; re-running an existing
-    k3s cluster switches Flannel off). cilium => 0 skips Cilium and leaves
-    the distribution's CNI; cilium_*/gateway_api options with it die.
-    K3s is unverified on real hosts; RKE2 is the supported distribution.
+  - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
+    gets cni: none and disable-kube-proxy; k3s now gets flannel-backend:
+    none, disable-network-policy, disable-kube-proxy and cluster-cidr
+    10.42.0.0/16, and Cilium runs with kubeProxyReplacement, its
+    cluster-pool on that range and k8sServiceHost at the new
+    k8s_service_host (default: first tls_san; a k3s deploy without one
+    dies before touching the host). gateway_api works on k3s too. Before,
+    k3s ran Flannel and kube-proxy under Cilium; re-running an existing k3s
+    cluster switches both off and changes Cilium's IPAM mode, so redeploy
+    it instead. cilium => 0 skips Cilium and leaves the distribution's CNI;
+    cilium_*/gateway_api/k8s_service_host options with it die. K3s carries
+    the configuration kubernetes-ocp verified live but is not yet run live
+    through Rex::Rancher; RKE2 is the supported distribution.
+  - k3s agents are no longer started by the install script (its blocking
+    restart hung on an unreachable server) but restarted with --no-block
+    and waited on for at most 10 minutes, like rke2.
   - install_cilium reads the Helm release via kubeconfig: install, upgrade,
     purge a stale release or no-op. New helm_values and gateway_api options
     (gateway_api_version; gateway_api_channel, default experimental so

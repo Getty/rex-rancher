@@ -88,7 +88,8 @@ subtest 'script method: installer lines unchanged' => sub {
   is( Rex::Rancher::Agent::_installer_cmd( 'rke2', undef, 'https://cp1:9345' ),
     'curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent sh -', 'rke2 agent' );
   is( Rex::Rancher::Agent::_installer_cmd( 'k3s', undef, 'https://cp1:6443' ),
-    'curl -sfL https://get.k3s.io | K3S_URL=https://cp1:6443 sh -s - agent', 'k3s agent' );
+    'curl -sfL https://get.k3s.io | K3S_URL=https://cp1:6443 INSTALL_K3S_SKIP_START=true sh -s - agent',
+    'k3s agent: the script does not start it (bounded start follows)' );
 };
 
 # ---- arch ------------------------------------------------------------------
@@ -237,8 +238,8 @@ subtest 'artifact install commands' => sub {
     'k3s server' );
   is( Rex::Rancher::Server::_k3s_artifact_install_cmd( $ks, 'https://cp1:6443', 'v1.30.4+k3s1', 'agent' ),
     'K3S_URL=https://cp1:6443 INSTALL_K3S_SKIP_DOWNLOAD=binary INSTALL_K3S_BIN_DIR=/usr/local/bin'
-      . ' INSTALL_K3S_VERSION=v1.30.4+k3s1 sh /tmp/k3s-artifacts/install.sh agent',
-    'k3s agent' );
+      . ' INSTALL_K3S_VERSION=v1.30.4+k3s1 INSTALL_K3S_SKIP_START=true sh /tmp/k3s-artifacts/install.sh agent',
+    'k3s agent: the script does not start it' );
   for my $c (
     Rex::Rancher::Server::_rke2_artifact_install_cmd( $rs, 'v1', 'agent' ),
     Rex::Rancher::Server::_k3s_artifact_install_cmd( $ks, 'https://cp1:6443', 'v1', 'agent' ),

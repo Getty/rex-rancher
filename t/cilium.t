@@ -6,8 +6,9 @@ use Test::More;
 # Offline tests for Rex::Rancher::Cilium.
 #
 # 1. Helm values: the per-distribution defaults are unchanged, caller values
-#    deep-merge over them, gateway_api adds gatewayAPI.enabled, and the
-#    rke2-only kube-proxy replacement stays off k3s.
+#    deep-merge over them, gateway_api adds gatewayAPI.enabled, and k3s gets
+#    kube-proxy replacement at the control plane address (never loopback)
+#    with its pool on k3s' cluster-cidr, as kubernetes-ocp k178.
 # 2. Release handling: Helm's release Secrets decode to status, chart version
 #    and values, and _release_action turns that into install / noop / upgrade
 #    / reinstall (or dies where acting could take down a working network).
@@ -126,13 +127,41 @@ subtest 'rke2 defaults unchanged' => sub {
   ok( !exists $v->{gatewayAPI}, 'gateway API off by default' );
 };
 
-subtest 'k3s defaults unchanged, no kube-proxy replacement' => sub {
-  my $v = values_for( distribution => 'k3s' );
+subtest 'k3s: kube-proxy replacement at the control plane, pool = cluster-cidr' => sub {
+  my $v = values_for( distribution => 'k3s', k8s_service_host => '203.0.113.7' );
   is_deeply( $v, {
     cni => { binPath => '/opt/cni/bin', confPath => '/etc/cni/net.d', exclusive => $T },
-    ipam     => { mode => 'kubernetes' },
-    operator => { replicas => 1 },
-  }, 'same values the old heredoc wrote' );
+    ipam => {
+      mode     => 'cluster-pool',
+      operator => { clusterPoolIPv4PodCIDRList => ['10.42.0.0/16'] },
+    },
+    operator             => { replicas => 1 },
+    kubeProxyReplacement => $T,
+    k8sServiceHost       => '203.0.113.7',
+    k8sServicePort       => '6443',
+  }, 'the kubernetes-ocp k178 values, plus the CNI paths and one operator' );
+  my $yaml = Rex::Rancher::Cilium::_helm_values_yaml($v);
+  like( $yaml, qr/^k8sServicePort: '6443'$/m, 'port stays a YAML string' );
+  like( $yaml, qr/^kubeProxyReplacement: true$/m, 'kubeProxyReplacement boolean' );
+  like( $yaml, qr/^    clusterPoolIPv4PodCIDRList:\n    - 10\.42\.0\.0\/16$/m, 'pool as a YAML list' );
+};
+
+subtest 'k3s: the API address is required and never loopback' => sub {
+  my $r = $C->can('_resolve_opts');
+  eval { $r->( distribution => 'k3s' ) };
+  like( $@, qr/k3s needs k8s_service_host.*127\.0\.0\.1:6444/, 'missing: dies, says why' );
+  for my $lo (qw( 127.0.0.1 localhost LOCALHOST ::1 )) {
+    eval { $r->( distribution => 'k3s', k8s_service_host => $lo ) };
+    like( $@, qr/needs k8s_service_host.*got '\Q$lo\E'/, "$lo: dies" );
+  }
+  eval { $r->( distribution => 'k3s', helm_values => { k8sServiceHost => 'localhost' } ) };
+  like( $@, qr/got 'localhost'/, 'loopback through helm_values: dies' );
+  is( values_for( distribution => 'k3s', helm_values => { k8sServiceHost => 'cp' } )->{k8sServiceHost},
+    'cp', 'helm_values k8sServiceHost takes the place of k8s_service_host' );
+  is( values_for( distribution => 'k3s', k8s_service_host => 'a', helm_values => { k8sServiceHost => 'b' } )
+    ->{k8sServiceHost}, 'b', 'helm_values wins, as everywhere' );
+  eval { $r->( distribution => 'rke2', k8s_service_host => '203.0.113.7' ) };
+  like( $@, qr/k8s_service_host is k3s-only/, 'rke2: refused, not silently ignored' );
 };
 
 subtest 'caller values deep-merge over the defaults' => sub {
@@ -166,12 +195,11 @@ subtest 'gateway_api_channel defaults to experimental' => sub {
 subtest 'option validation dies before touching the host' => sub {
   my $r = $C->can('_resolve_opts');
   my %gw = ( gateway_api => 1, gateway_api_version => 'v1.2.0', kubeconfig => '/kc' );
-  eval { $r->( distribution => 'k3s', %gw ) };
-  like( $@, qr/gateway_api is rke2-only/, 'gateway_api refused on k3s' );
-  eval { $r->( distribution => 'k3s', helm_values => { kubeProxyReplacement => $T } ) };
-  like( $@, qr/kubeProxyReplacement on k3s/, 'kube-proxy replacement refused on k3s' );
-  eval { $r->( distribution => 'k3s', helm_values => { k8sServiceHost => 'x' } ) };
-  like( $@, qr/k8sServiceHost on k3s/, 'k8sServiceHost refused on k3s' );
+  my $k3s_gw = $r->( distribution => 'k3s', k8s_service_host => 'cp', %gw );
+  ok( $k3s_gw->{gateway_api} && $k3s_gw->{values}{gatewayAPI}{enabled}, 'gateway_api allowed on k3s' );
+  ok( eval { $r->( distribution => 'k3s', k8s_service_host => 'cp',
+    helm_values => { kubeProxyReplacement => $T, k8sServicePort => '6443' } ); 1 },
+    'k3s may set kube-proxy replacement keys' );
   eval { $r->( distribution => 'rke2', %gw, kubeconfig => undef ) };
   like( $@, qr/needs kubeconfig/, 'gateway_api needs kubeconfig' );
   eval { $r->( distribution => 'rke2', %gw, gateway_api_version => undef ) };
@@ -191,9 +219,10 @@ subtest 'cilium command lines' => sub {
   my $rke2 = $cmd->( 'install', $C->can('_resolve_opts')->( distribution => 'rke2' ), '/tmp/v.yaml' );
   is( $rke2, 'KUBECONFIG=/etc/rancher/rke2/rke2.yaml cilium install --version 1.17.0 '
     .'--helm-values /tmp/v.yaml --set kubeProxyReplacement=true', 'rke2 install' );
-  my $k3s = $cmd->( 'upgrade', $C->can('_resolve_opts')->( distribution => 'k3s', version => '1.18.1' ), '/tmp/v.yaml' );
+  my $k3s = $cmd->( 'upgrade', $C->can('_resolve_opts')->( distribution => 'k3s',
+    k8s_service_host => 'cp', version => '1.18.1' ), '/tmp/v.yaml' );
   is( $k3s, 'KUBECONFIG=/etc/rancher/k3s/k3s.yaml cilium upgrade --version 1.18.1 '
-    .'--helm-values /tmp/v.yaml', 'k3s upgrade, no kube-proxy replacement' );
+    .'--helm-values /tmp/v.yaml --set kubeProxyReplacement=true', 'k3s upgrade, kube-proxy replacement' );
 };
 
 subtest 'gateway API bundle' => sub {
@@ -296,7 +325,7 @@ subtest 'with kubeconfig: other version upgrades' => sub {
 subtest 'with kubeconfig: fresh cluster installs and checks the DaemonSet' => sub {
   @cmds = ();
   $api = FakeAPI->new( secrets => [], daemonset => 1 );
-  install_cilium( distribution => 'k3s', kubeconfig => '/kc' );
+  install_cilium( distribution => 'k3s', k8s_service_host => 'cp', kubeconfig => '/kc' );
   is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['install'], 'one install' );
 
   $api = FakeAPI->new( secrets => [], daemonset => 0 );

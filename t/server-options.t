@@ -14,7 +14,8 @@ use Test::More;
 #   traefik + servicelb on k3s -- the latter moved from --disable flags on the
 #   k3s installer line into config.yaml, so the installer line must no longer
 #   carry them.
-# - the cilium gate (cni/disable-kube-proxy rke2-only) is untouched by disable.
+# - the cilium keys (cni on rke2, flannel-backend/disable-kube-proxy on k3s)
+#   are untouched by disable.
 #
 # This proves the config hash and the command strings, not a deploy.
 # -----------------------------------------------------------------------------
@@ -77,10 +78,12 @@ subtest 'rke2: OCP disable list, cilium gate intact' => sub {
   like($yaml, qr/^disable-kube-proxy: true$/m, 'yaml: real boolean');
 };
 
-subtest 'k3s: disable does not reintroduce the rke2-only cilium keys' => sub {
+subtest 'k3s: disable does not touch the cilium keys' => sub {
   my $c = cfg('k3s', 'tok', undef, undef, undef, 1, undef, ['traefik']);
-  ok(!exists $c->{cni},                  'no cni on k3s');
-  ok(!exists $c->{'disable-kube-proxy'}, 'no disable-kube-proxy on k3s');
+  ok(!exists $c->{cni},                'no rke2 cni key on k3s');
+  ok($c->{'disable-kube-proxy'},       'disable-kube-proxy kept');
+  is($c->{'flannel-backend'}, 'none',  'flannel-backend kept');
+  is_deeply($c->{disable}, ['traefik'], 'caller list used');
 };
 
 subtest 'rke2 installer command' => sub {

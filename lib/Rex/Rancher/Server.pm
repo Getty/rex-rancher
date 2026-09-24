@@ -46,6 +46,10 @@ my %PATHS = (
     token_file   => '/var/lib/rancher/k3s/server/node-token',
     server_token => '/var/lib/rancher/k3s/server/token',
     disable      => ['traefik', 'servicelb'],
+    # k3s' built-in default, written out with cilium because Cilium's
+    # cluster-pool IPAM has to hand out the same range (Rex::Rancher::Cilium
+    # _paths_for holds the same value, t/server-config.t keeps them equal).
+    cluster_cidr => '10.42.0.0/16',
     binary       => 'k3s',
     release_url  => 'https://github.com/k3s-io/k3s/releases/download',
     artifact_dir => '/tmp/k3s-artifacts',
@@ -87,10 +91,9 @@ Options:
 
 =item C<distribution>
 
-C<rke2> (default) or C<k3s>. B<Only rke2 is verified and supported.> The k3s
-path installs and runs, but is not deploy-verified: Cilium's kube-proxy
-replacement is wired for rke2 only (see L</cilium> and L<Rex::Rancher::Cilium>),
-so on k3s kube-proxy is left in place.
+C<rke2> (default) or C<k3s>. B<rke2 is the verified distribution.> The k3s
+path carries the configuration kubernetes-ocp verified live (see L</cilium>),
+but has not itself been run live through Rex::Rancher.
 
 =item C<token>
 
@@ -203,13 +206,18 @@ distribution's default CNI (Canal on RKE2, Flannel on K3s).
 On B<rke2>, C<cni: none> and C<disable-kube-proxy: true> are written,
 preparing the node for Cilium with full kube-proxy replacement.
 
-On B<k3s>, C<flannel-backend: none> and C<disable-network-policy: true> are
-written instead: Flannel and k3s's embedded network policy controller are
-switched off, but kube-proxy stays, because Cilium's kube-proxy replacement
-is rke2-only. Both keys are server settings that k3s agents take from the
-server; an additional server joining with C<server> gets the same keys, as
-k3s requires them to match across servers. The k3s path is not
-deploy-verified.
+On B<k3s>, C<flannel-backend: none>, C<disable-network-policy: true>,
+C<disable-kube-proxy: true> and C<cluster-cidr: 10.42.0.0/16> are written:
+Flannel, k3s's embedded network policy controller and kube-proxy are
+switched off, and Cilium takes over all three with kube-proxy replacement.
+C<cluster-cidr> is k3s's own default, written out because Cilium's
+cluster-pool IPAM is given the same range (see L<Rex::Rancher::Cilium>). These
+are server settings that k3s agents take from the server; an additional
+server joining with C<server> gets the same keys, as k3s requires them to
+match across servers. The same keys and Cilium values were verified live in
+kubernetes-ocp (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API v1.6.1); the
+k3s path through Rex::Rancher has not been run live, and differs in the
+Cilium version it defaults to (see L<Rex::Rancher::Cilium>).
 
 =item C<nvidia_runtime_path>
 
@@ -249,8 +257,8 @@ sub install_server {
 
   my $distribution = $opts{distribution} // 'rke2';
   Rex::Logger::info(
-    "k3s is not deploy-verified in Rex::Rancher; only rke2 is supported. "
-      . "Cilium kube-proxy replacement is skipped on k3s.", "warn")
+    "k3s has not been run live through Rex::Rancher; rke2 is the verified "
+      . "distribution.", "warn")
     if $distribution eq 'k3s';
   my $paths        = _paths($distribution);
   # Validated before anything touches the host (the token lookup reads it).
@@ -468,13 +476,12 @@ sub _build_server_config {
     'token' => $token,
   );
 
-  # With cilium, Cilium is the only CNI on both distributions. rke2: cni:none
-  # + disable-kube-proxy hand the CNI and kube-proxy roles to Cilium, whose
-  # kube-proxy replacement (kubeProxyReplacement/k8sServiceHost/Port) is wired
-  # for rke2 only (see Rex::Rancher::Cilium). k3s: Flannel and the embedded
-  # network policy controller go, kube-proxy stays -- disabling it on k3s left
-  # Service/ClusterIP routing dead with nothing replacing it. Both keys are
-  # server-side; k3s agents take them from the server. k3s is unverified.
+  # With cilium, Cilium is the only CNI and replaces kube-proxy on both
+  # distributions (Rex::Rancher::Cilium wires kubeProxyReplacement). rke2:
+  # cni:none + disable-kube-proxy. k3s: Flannel, the embedded network policy
+  # controller and kube-proxy go; cluster-cidr is stated so Cilium's
+  # cluster-pool gets the same range (as kubernetes-ocp k178, verified live
+  # there). All server-side; k3s agents take them from the server.
   if ($cilium) {
     if ($distribution eq 'rke2') {
       $config{'cni'}                = 'none';
@@ -483,6 +490,8 @@ sub _build_server_config {
     else {
       $config{'flannel-backend'}        = 'none';
       $config{'disable-network-policy'} = JSON()->true;
+      $config{'disable-kube-proxy'}     = JSON()->true;
+      $config{'cluster-cidr'}           = _paths($distribution)->{cluster_cidr};
     }
   }
 
@@ -851,6 +860,8 @@ sub _k3s_artifact_install_cmd {
   push @env, "K3S_URL=$server" if $server;
   push @env, 'INSTALL_K3S_SKIP_DOWNLOAD=binary', 'INSTALL_K3S_BIN_DIR=/usr/local/bin',
     "INSTALL_K3S_VERSION=$version";
+  # Agent: no start from the script, see Rex::Rancher::Agent::_installer_cmd.
+  push @env, 'INSTALL_K3S_SKIP_START=true' if $role eq 'agent';
   my $cmd = join(' ', @env) . " sh $spec->{script} $role";
   $cmd .= ' --write-kubeconfig-mode=644' if $role eq 'server';
   return $cmd;
@@ -1032,9 +1043,10 @@ same key names (C<token>, C<tls-san>, C<node-name>, C<node-label>,
 C<disable>, C<cni>, etc.). When
 C<cilium =E<gt> 1> (the default), the distribution's own CNI is switched off
 so that Cilium is the only one: on RKE2 C<cni: none> and
-C<disable-kube-proxy: true> (Cilium's kube-proxy replacement takes over), on
-K3s C<flannel-backend: none> and C<disable-network-policy: true> (kube-proxy
-stays; unverified). See L</install_server>'s C<cilium>.
+C<disable-kube-proxy: true>, on K3s C<flannel-backend: none>,
+C<disable-network-policy: true>, C<disable-kube-proxy: true> and
+C<cluster-cidr: 10.42.0.0/16>; on both, Cilium's kube-proxy replacement takes
+over. See L</install_server>'s C<cilium>.
 
 Registry mirrors are written to C<registries.yaml> in the same directory.
 Both files are C<0600 root:root>: C<config.yaml> holds the join token,
