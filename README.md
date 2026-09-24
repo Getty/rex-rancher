@@ -9,7 +9,7 @@ Handles the full lifecycle of a Rancher-based Kubernetes deployment from a Rex t
 - **Node preparation** — hostname, timezone, swap off, kernel modules, sysctl
 - **Control plane installation** — RKE2 or K3s via official install scripts
 - **Agent/worker node joining** — joins nodes to an existing cluster
-- **Cilium CNI** — installs Cilium with kube-proxy replacement (default)
+- **Cilium CNI** — installs Cilium by default (`cilium => 0` keeps the distribution's own CNI); kube-proxy replacement on RKE2
 - **GPU support** — NVIDIA driver + Container Toolkit + CDI + device plugin (via [Rex::GPU](https://metacpan.org/pod/Rex::GPU))
 - **Registry mirrors** — configures `registries.yaml` for private pull-through caches
 - **Local kubeconfig management** — fetches and patches kubeconfig for external access
@@ -35,7 +35,7 @@ task 'deploy_server', 'gpu-node.example.com', sub {
 };
 
 # Join worker nodes
-task 'deploy_agents', group('workers'), sub {
+task 'deploy_agents', group => 'workers', sub {
     rancher_deploy_agent(
         distribution => 'rke2',
         token        => 'my-cluster-secret',
@@ -48,7 +48,7 @@ task 'deploy_agents', group('workers'), sub {
 
 | Module | Purpose |
 |--------|---------|
-| `Rex::Rancher` | Top-level: `rancher_deploy_server`, `rancher_deploy_agent` |
+| `Rex::Rancher` | Top-level: `rancher_deploy_server`, `rancher_deploy_agent`, `rancher_scan_known_hosts` (re-exports `wait_for_api`, `untaint_node`, `deploy_nvidia_device_plugin`) |
 | `Rex::Rancher::Server` | Control plane install, kubeconfig/token retrieval |
 | `Rex::Rancher::Agent` | Worker node join |
 | `Rex::Rancher::Node` | Node preparation (kernel, swap, modules) |
@@ -64,11 +64,14 @@ use Rex::LibSSH;
 set connection => 'LibSSH';
 ```
 
-`Rex::GPU` is required only when using `gpu => 1`. With newer `Rex::GPU` versions, the GPU generation decides both whether a GPU gets a driver and which one: every Maxwell-or-newer GPU does, consumer and laptop cards (GeForce MX, GT 1030, GTX 9xx, laptop RTX) included, so a re-deploy with `gpu => 1` on such a node now installs the driver and, with `reboot => 1`, reboots it. Kepler and older GPUs are skipped with a warning; a Kepler-only node deploys without `nvidia.com/gpu`, and the device-plugin step ends with a warning. Conflicting GPU mixes such as V100 + B200 and a missing package source for the required driver make the deploy die after node preparation, before the driver or Kubernetes is installed; so does an NVIDIA vGPU guest (Azure NVadsA10 v5, AWS G6f, ...) without an already working licensed vGPU driver, even next to a passed-through GPU. HGX B200/B300 nodes get the driver plus a warning that the NVLink fabric (Fabric Manager, `nvlsm`, OFED, kernel >= 5.17) is not set up by `Rex::GPU`, GB200/GB300 an `nvidia-imex` hint — see "GPU hardware support" in the `Rex::Rancher` POD.
+`Rex::GPU` is required only when using `gpu => 1` with the default `gpu_setup => 1`; with `gpu_setup => 0` (e.g. the NVIDIA GPU Operator provides driver and toolkit) it is not needed, and `gpu_device_plugin => 0` skips the device plugin as well. With newer `Rex::GPU` versions, the GPU generation decides both whether a GPU gets a driver and which one: every Maxwell-or-newer GPU does, consumer and laptop cards (GeForce MX, GT 1030, GTX 9xx, laptop RTX) included, so a re-deploy with `gpu => 1` on such a node now installs the driver and, with `reboot => 1`, reboots it. Kepler and older GPUs are skipped with a warning; a Kepler-only node deploys without `nvidia.com/gpu`, and the device-plugin step ends with a warning. Conflicting GPU mixes such as V100 + B200 and a missing package source for the required driver make the deploy die after node preparation, before the driver or Kubernetes is installed; so does an NVIDIA vGPU guest (Azure NVadsA10 v5, AWS G6f, ...) without an already working licensed vGPU driver, even next to a passed-through GPU. HGX B200/B300 nodes get the driver plus a warning that the NVLink fabric (Fabric Manager, `nvlsm`, OFED, kernel >= 5.17) is not set up by `Rex::GPU`, GB200/GB300 an `nvidia-imex` hint — see "GPU hardware support" in the `Rex::Rancher` POD.
 
-**Verifying a deploy:** `prove -lr t/` only checks that the modules compile — there is no integration test. To trust a pipeline change, run the live-deploy checklist in [`eg/DEPLOY-CHECKLIST.md`](eg/DEPLOY-CHECKLIST.md) against a real node.
+**Verifying a deploy:** `prove -lr t/` runs a compile check and offline unit tests only — there is no integration test. To trust a pipeline change, deploy a real node with [`eg/hetzner-gpu.Rexfile`](eg/hetzner-gpu.Rexfile).
 
 ### Supported / verified distributions
+
+RKE2 is the verified, supported distribution. K3s is implemented but
+**unverified** on real hosts (`install_server` warns about it).
 
 Verified on Debian, Ubuntu, and RHEL/Rocky. openSUSE Leap / SLES is
 **unverified and unsupported** — node preparation there relies on Rex's

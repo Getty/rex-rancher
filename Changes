@@ -1,74 +1,46 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
-  - rancher_deploy_server with cilium => 0 skips install_cilium and keeps the
-    built-in CNI; cilium_* or gateway_api options alongside it die up front.
-  - New gpu_setup and gpu_device_plugin options (default on) for gpu => 1:
-    switch off the Rex::GPU host setup and/or the device plugin when the
-    NVIDIA GPU Operator provides them; Rex::GPU is then not needed.
-  - New nvidia_runtime_path option (on for gpu => 1, gpu_setup => 0): puts a
-    PATH into /etc/default/rke2-{server,agent} so rke2 finds a host-installed
-    NVIDIA container runtime (DGX OS). No effect on k3s.
+  - Cilium is the only CNI unless cilium => 0: rke2 gets cni: none and
+    disable-kube-proxy (Cilium replaces kube-proxy); k3s now gets
+    flannel-backend: none and disable-network-policy and keeps its own
+    kube-proxy (before, k3s ran Flannel under Cilium; re-running an existing
+    k3s cluster switches Flannel off). cilium => 0 skips Cilium and leaves
+    the distribution's CNI; cilium_*/gateway_api options with it die.
+    K3s is unverified on real hosts; RKE2 is the supported distribution.
   - install_cilium reads the Helm release via kubeconfig: install, upgrade,
     purge a stale release or no-op. New helm_values and gateway_api options
-    (gateway_api_version, gateway_api_channel: default experimental, which
-    Cilium up to 1.19 needs for TLSRoute);
-    rancher_deploy_server passes cilium_* and gateway_api_* through, and with
-    gateway_api on rke2 also disables RKE2 v1.37's rke2-gateway-api-crd chart;
-    install_cilium dies while that chart's release owns the CRDs.
-  - New install_method => 'artifact' for server and agent: checksum-verified
-    release download for the node's arch. Pinned versions are verified after
-    install; a service that fails to start dies with its journal tail.
-  - New install_server options version, node_name and disable (also taken by
-    rancher_deploy_server). The rke2 default now also disables rke2-traefik
-    and rke2-traefik-crd (RKE2 v1.36+ deploys Traefik by default); K3s
-    disables traefik/servicelb via config.yaml instead of installer flags.
-  - Without a token, install_server reuses the host's existing server token,
-    so a re-run never rotates a live cluster's token. The token reaches K3s
-    (server and agent) via config.yaml only, never the installer command line;
-    config.yaml and registries.yaml are written 0600 root:root, re-runs too.
-  - Document gpu => 1 with newer Rex::GPU versions ("GPU hardware support"):
-    GeForce MX/GT/GTX 9xx and laptop GPUs now get a driver (and reboot),
-    Kepler-only nodes deploy without a GPU; unsupported mixes/OSes still die,
-    as does a vGPU guest without a working licensed driver; HGX B200/B300
-    get a warning about the NVLink fabric setup Rex::GPU leaves to the
-    operator.
-  - Fix K3s Service/ClusterIP routing: with cilium enabled the server config
-    wrote cni:none + disable-kube-proxy:true for both distributions, but
-    Cilium's kube-proxy replacement is wired for rke2 only, so on K3s
-    kube-proxy was disabled with nothing replacing it. These keys (and the
-    rke2-ingress-nginx disable) are now gated to rke2; K3s keeps its own
-    kube-proxy and default CNI. Extracted the pure _build_server_config for
-    offline unit testing (t/server-config.t). RKE2 is the verified/supported
-    distribution; K3s is documented as unverified and install_server warns on
-    it (karr #5).
-  - Warn loudly when the saved kubeconfig would still point at
-    https://127.0.0.1: rancher_deploy_server now emits a warning (rather than
-    silently saving an unusable file) when no server address can be derived
-    (no tls_san / kubeconfig_server) or when the derived address is loopback
-    (127.0.0.1, localhost, ::1). The file is still saved; only the silence is
-    removed.
-  - Pre-connect host-key scan for Rex::LibSSH >= 0.004, which now verifies
-    the server host key against known_hosts (CWE-322 fix). New exported
-    rancher_scan_known_hosts($host) runs ssh-keyscan locally and seeds the
-    key before the first verified connect, so provisioning a fresh SFTP-less
-    Hetzner box no longer dies with "host key is not in known_hosts". It
-    keeps verification on rather than disabling strict_hostkeycheck, and is
-    idempotent. Wired via a 'before ALL' pre-connect hook in
-    eg/hetzner-gpu.Rexfile — the canonical operator pattern.
-  - Fixed requirement details.
-  - Document the supported distribution set: node preparation is verified on
-    Debian, Ubuntu and RHEL/Rocky; openSUSE Leap / SLES is now marked
-    unverified and unsupported (the base-package step falls through to Rex's
-    generic pkg/zypper path and has never run on real SUSE hardware). No
-    behaviour change — documentation only.
-  - Add eg/DEPLOY-CHECKLIST.md, a stage-by-stage live-deploy verification
-    checklist (host-key scan, node prep, GPU, install_server, kubeconfig
-    patch, wait_for_api, Cilium, device plugin, untaint) covering both RKE2
-    and K3s where they differ — the honest gate for a pipeline change, since
-    the suite proves compilation only. README points at it. t/00-load.t now
-    also compile-checks Rex::Rancher::K8s directly (was loaded only
-    transitively). No behaviour change.
+    (gateway_api_version; gateway_api_channel, default experimental so
+    Cilium up to 1.16 keeps TLSRoute), passed through by
+    rancher_deploy_server. gateway_api on rke2 disables RKE2 v1.37's
+    rke2-gateway-api-crd chart; install_cilium dies while it owns the CRDs.
+  - New install_server/rancher_deploy_server options version, node_name and
+    disable; install_method => 'artifact' (checksum-verified download) for
+    server and agent. Pinned versions are verified after install; a service
+    that fails to start dies with its journal tail.
+  - Default disables: rke2 rke2-ingress-nginx, rke2-traefik, rke2-traefik-crd
+    (RKE2 v1.36+ ships Traefik); k3s traefik, servicelb via config.yaml.
+  - Tokens: without one, install_server reuses the host's existing server
+    token instead of rotating it; K3s gets it via config.yaml only.
+    config.yaml and registries.yaml are written 0600 root:root.
+  - New gpu_setup and gpu_device_plugin options (default on) for gpu => 1,
+    to leave the host setup and/or device plugin to the NVIDIA GPU Operator
+    (Rex::GPU is then not needed), and nvidia_runtime_path (rke2, on for
+    gpu_setup => 0) for a host-installed NVIDIA runtime (DGX OS).
+  - Document gpu => 1 with newer Rex::GPU ("GPU hardware support"):
+    generation-based driver choice, Kepler-only nodes deploy without a GPU,
+    vGPU guests without a working licensed driver die, B200/B300 warn about
+    the NVLink fabric; a die comes before any driver package is installed,
+    but not necessarily before every host change.
+  - New rancher_scan_known_hosts($host) seeds known_hosts via ssh-keyscan for
+    Rex::LibSSH >= 0.004's host-key check (CWE-322), used from a 'before ALL'
+    hook; see eg/hetzner-gpu.Rexfile.
+  - Warn when the saved kubeconfig would still point at 127.0.0.1.
+  - Requires Kubernetes::REST and IO::K8s 1.108, Rex::LibSSH 0.004; declare
+    YAML::PP and JSON::MaybeXS.
+  - openSUSE/SLES documented as unverified; agent options, the wait_for_api
+    timeout and node preparation steps documented accurately.
+  - eg/hetzner-gpu.Rexfile reduced to working tasks.
 
 0.001     2026-03-29 04:21:30Z
   - Initial release
