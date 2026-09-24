@@ -35,7 +35,8 @@ subtest 'k3s + cilium: no rke2-only kube-proxy override (karr #5)' => sub {
   ok(!exists $c->{'disable-kube-proxy'},
     'k3s keeps its own kube-proxy — Cilium replacement is rke2-only');
   ok(!exists $c->{cni},     'no cni:none on k3s');
-  ok(!exists $c->{disable}, 'no rke2-specific disable list on k3s');
+  is_deeply($c->{disable}, ['traefik', 'servicelb'],
+    'k3s default disable list (traefik, servicelb), no rke2 names');
 };
 
 subtest 'rke2 without cilium: no kube-proxy override, ingress still disabled' => sub {

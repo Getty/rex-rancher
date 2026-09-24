@@ -1,6 +1,9 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - New install_server options version, node_name and disable (also taken by
+    rancher_deploy_server). K3s now disables traefik/servicelb via
+    config.yaml instead of installer flags; the default set is unchanged.
   - Without a token, install_server reuses the host's existing server token,
     so a re-run never rotates a live cluster's token. The token reaches K3s
     (server and agent) via config.yaml only, never the installer command line;

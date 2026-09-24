@@ -132,7 +132,26 @@ C<https://127.0.0.1> and cannot reach the cluster from the operator's machine.
 =item C<kubeconfig_server>
 
 Explicit server address to use when patching the kubeconfig. Overrides the
-C<tls_san>-based default.
+C<tls_san>-based default, so the kubeconfig can point at an address that is
+not the first C<tls_san> entry (e.g. the node's advertised host while
+C<tls_san> lists every control-plane address). Only the kubeconfig is
+affected; the address must still be a name in the API server certificate
+(the node's own IPs and hostname, or a C<tls_san> entry).
+
+=item C<version>
+
+Pinned distribution version (C<INSTALL_RKE2_VERSION> / C<INSTALL_K3S_VERSION>).
+Default: latest stable. See L<Rex::Rancher::Server/install_server>.
+
+=item C<node_name>
+
+Kubernetes node name (C<node-name> in C<config.yaml>). Default: the hostname.
+
+=item C<disable>
+
+Packaged components to switch off (C<disable> in C<config.yaml>). Default:
+C<rke2-ingress-nginx> on rke2, C<traefik> and C<servicelb> on k3s; a given
+list replaces the default. See L<Rex::Rancher::Server/install_server>.
 
 =item C<node_labels>
 

@@ -32,6 +32,7 @@ my %PATHS = (
     kubeconfig   => '/etc/rancher/rke2/rke2.yaml',
     token_file   => '/var/lib/rancher/rke2/server/node-token',
     server_token => '/var/lib/rancher/rke2/server/token',
+    disable      => ['rke2-ingress-nginx'],
   },
   k3s => {
     config_dir   => '/etc/rancher/k3s/',
@@ -40,6 +41,7 @@ my %PATHS = (
     kubeconfig   => '/etc/rancher/k3s/k3s.yaml',
     token_file   => '/var/lib/rancher/k3s/server/node-token',
     server_token => '/var/lib/rancher/k3s/server/token',
+    disable      => ['traefik', 'servicelb'],
   },
 );
 
@@ -102,6 +104,27 @@ Additional TLS Subject Alternative Names for the API server certificate,
 as an arrayref or a comma-separated string. Include the load balancer
 address, public IP, or DNS name so that kubeconfig clients can connect.
 
+=item C<version>
+
+Pinned version string, e.g. C<v1.30.4+rke2r1> for RKE2 or C<v1.30.4+k3s1>
+for K3s, handed to the installer as C<INSTALL_RKE2_VERSION> /
+C<INSTALL_K3S_VERSION>. If omitted, the latest stable release is installed.
+
+=item C<node_name>
+
+Kubernetes node name, written as C<node-name> to C<config.yaml>. If omitted,
+the system hostname is used.
+
+=item C<disable>
+
+Packaged components to switch off, as an arrayref or a comma-separated
+string, written as C<disable> to C<config.yaml>. The names are
+distribution-specific. Default: C<['rke2-ingress-nginx']> on rke2,
+C<['traefik', 'servicelb']> on k3s. A given list replaces the default rather
+than extending it; C<[]> disables nothing. Independent of C<cilium>.
+
+  disable => [qw( rke2-ingress-nginx rke2-traefik rke2-traefik-crd )],
+
 =item C<node_labels>
 
 Node labels applied at join time, as an arrayref of C<key=value> strings.
@@ -142,6 +165,8 @@ broke Service/ClusterIP routing on k3s (karr #5).
     token        => 'my-cluster-secret',
     tls_san      => ['loadbalancer.example.com'],
     node_labels  => ['role=control-plane'],
+    version      => 'v1.30.4+rke2r1',
+    node_name    => 'cp-01',
   );
 
 =cut
@@ -161,6 +186,9 @@ sub install_server {
   my $node_labels  = $opts{node_labels};
   my $registries   = $opts{registries};
   my $cilium       = exists $opts{cilium} ? $opts{cilium} : 1;
+  my $version      = $opts{version};
+  my $node_name    = $opts{node_name};
+  my $disable      = $opts{disable};
 
   Rex::Logger::info("Installing $distribution server (control plane)...");
 
@@ -168,7 +196,8 @@ sub install_server {
   file $paths->{config_dir}, ensure => 'directory';
 
   # Write config.yaml
-  _write_config($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium);
+  _write_config($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium,
+    $node_name, $disable);
 
   # Write registries.yaml if configured
   if ($registries) {
@@ -177,10 +206,10 @@ sub install_server {
 
   # Install and start
   if ($distribution eq 'k3s') {
-    _install_k3s($paths, $server);
+    _install_k3s($paths, $server, $version);
   }
   else {
-    _install_rke2($paths);
+    _install_rke2($paths, $version);
   }
 
   Rex::Logger::info("$distribution server installation complete");
@@ -351,7 +380,8 @@ sub _generate_token {
 #
 
 sub _build_server_config {
-  my ($distribution, $token, $server, $tls_san, $node_labels, $cilium) = @_;
+  my ($distribution, $token, $server, $tls_san, $node_labels, $cilium,
+    $node_name, $disable) = @_;
 
   $distribution //= 'rke2';
 
@@ -370,12 +400,20 @@ sub _build_server_config {
       $config{'cni'}                = 'none';
       $config{'disable-kube-proxy'} = JSON()->true;
     }
-    # rke2-ingress-nginx is an rke2-specific bundled addon; disabling it is a
-    # deployment choice for this fleet and inert on k3s.
-    $config{'disable'} = ['rke2-ingress-nginx'];
   }
 
+  # Packaged components to switch off. Undef means the per-distribution
+  # default from %PATHS (rke2: rke2-ingress-nginx; k3s: traefik + servicelb,
+  # formerly --disable flags on the k3s installer line -- config.yaml carries
+  # the same flag, keeps caller-supplied names out of the shell, and matches
+  # rke2). An explicit empty list disables nothing. Independent of cilium.
+  my @disable = !defined $disable       ? @{ _paths($distribution)->{disable} }
+              : ref $disable eq 'ARRAY' ? @{$disable}
+              :                           split(/,/, $disable);
+  $config{'disable'} = \@disable if @disable;
+
   $config{server} = $server if $server;
+  $config{'node-name'} = $node_name if $node_name;
 
   if ($tls_san) {
     my @sans = ref $tls_san eq 'ARRAY' ? @{$tls_san} : split(/,/, $tls_san);
@@ -391,10 +429,12 @@ sub _build_server_config {
 }
 
 sub _write_config {
-  my ($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium) = @_;
+  my ($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium,
+    $node_name, $disable) = @_;
 
   my $config =
-    _build_server_config($distribution, $token, $server, $tls_san, $node_labels, $cilium);
+    _build_server_config($distribution, $token, $server, $tls_san, $node_labels, $cilium,
+      $node_name, $disable);
 
   my $config_file = $paths->{config_dir} . "config.yaml";
   Rex::Logger::info("Writing config to $config_file");
@@ -408,14 +448,14 @@ sub _write_config {
 #
 
 sub _install_rke2 {
-  my ($paths) = @_;
+  my ($paths, $version) = @_;
 
   Rex::Logger::info("Installing RKE2 via install script...");
 
   # Download and run the RKE2 install script.
   # auto_die => 0: the script emits GPG key import info on STDERR which can
   # cause a non-zero exit on some distros (Rocky 10). Verify via rpm/dpkg instead.
-  run "curl -sfL " . $paths->{install_url} . " | sh -", auto_die => 0;
+  run _rke2_server_install_cmd($paths, $version), auto_die => 0;
   my $check = run "command -v rke2 2>/dev/null", auto_die => 0;
   die "RKE2 install script failed — rke2 binary not found\n"
     unless $check && $check =~ /rke2/;
@@ -431,32 +471,42 @@ sub _install_rke2 {
   _wait_for_kubeconfig($paths);
 }
 
+sub _rke2_server_install_cmd {
+  my ($paths, $version) = @_;
+
+  my $env_str = $version ? "INSTALL_RKE2_VERSION=$version " : '';
+  return "curl -sfL " . $paths->{install_url} . " | ${env_str}sh -";
+}
+
 #
 # K3s installation (simple curl | sh approach)
 #
 
 sub _install_k3s {
-  my ($paths, $server) = @_;
+  my ($paths, $server, $version) = @_;
 
   Rex::Logger::info("Installing K3s via install script...");
 
   # No K3S_TOKEN here: the token is already in config.yaml (written before the
   # installer runs, same as rke2), and anything on this line shows up in ps.
-  my $cmd = _k3s_server_install_cmd($paths, $server);
+  my $cmd = _k3s_server_install_cmd($paths, $server, $version);
 
   run $cmd, auto_die => 1;
 
   _wait_for_kubeconfig($paths);
 }
 
+# traefik/servicelb are disabled via config.yaml `disable:` (see
+# _build_server_config), not as --disable flags here.
 sub _k3s_server_install_cmd {
-  my ($paths, $server) = @_;
+  my ($paths, $server, $version) = @_;
 
-  my $env_str = $server ? "K3S_URL=$server " : '';
+  my @env;
+  push @env, "K3S_URL=$server"              if $server;
+  push @env, "INSTALL_K3S_VERSION=$version" if $version;
+  my $env_str = join('', map { "$_ " } @env);
   return "curl -sfL " . $paths->{install_url}
     . " | ${env_str}sh -s - server"
-    . " --disable=traefik"
-    . " --disable=servicelb"
     . " --write-kubeconfig-mode=644";
 }
 
@@ -573,13 +623,14 @@ the caller using L<Rex::Rancher::K8s/wait_for_api>.
 The official install script at L<https://get.k3s.io> is used, with
 C<K3S_URL> set when joining an existing server. The token is read from
 C<config.yaml> and never passed on the command line. Traefik and
-ServiceLB are disabled by default to leave room for Cilium and external
-load balancers.
+ServiceLB are disabled by default (C<disable> in C<config.yaml>, see
+L</install_server>) to leave room for Cilium and external load balancers.
 
 =head2 Config layout
 
 Both distributions use C</etc/rancher/E<lt>distE<gt>/config.yaml> with the
-same key names (C<token>, C<tls-san>, C<node-label>, C<cni>, etc.). When
+same key names (C<token>, C<tls-san>, C<node-name>, C<node-label>,
+C<disable>, C<cni>, etc.). When
 C<cilium =E<gt> 1> (the default), C<cni: none> and
 C<disable-kube-proxy: true> are written so that Cilium's kube-proxy
 replacement is used.
