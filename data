@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-09-24T02:35:45Z
+created: 2026-09-23T20:34:06Z
+id: 16
+priority: medium
+started: 2026-09-24T01:33:28Z
+status: done
+tags:
+- security
+- server
+- agent
+title: config.yaml mit Token ohne expliziten Modus geschrieben (Server+Agent, rke2+k3s)
+updated: 2026-09-24T02:35:48Z
+---
+
+Server.pm _write_config und Agent.pm _write_config schreiben config.yaml (enthaelt token:) per `file` ohne mode => ... -- Rechte haengen von umask/Backend ab (typisch 0644, fuer jeden lokalen User lesbar). Seit #12 ist config.yaml der einzige Token-Weg (nicht mehr argv), daher sollte die Datei 0600 root sein. Beide Distributionen, Server und Agent gemeinsam; registries.yaml (auth-Passwoerter) gleich mitpruefen. Pruefen, dass `file ..., mode => 600` unter Rex::LibSSH ohne SFTP funktioniert. Gefunden bei #12.
+
+2026-09-24 01:54 Implemented (uncommitted): Server::_write_secret_file pre-creates Rex tmp (.rex.tmp.<name>) 0600 via install, then file(), then chown root:root && chmod 600 (auto_die). Used for server+agent config.yaml and shared registries helper (also update_registries). t/secret-files.t offline; Local-backend probe: precreate->0600, plain file()->0644, rerun same content needs the chmod. Live run pending.
+
+2026-09-24 01:54 Ready for review; not committed; needs live run on SFTP-less LibSSH host
