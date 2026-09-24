@@ -1,0 +1,22 @@
+---
+class: standard
+completed: 2026-09-24T03:22:14Z
+created: 2026-09-24T02:38:02Z
+id: 17
+priority: medium
+started: 2026-09-24T03:12:40Z
+status: done
+tags:
+- server
+- rke2
+- cilium
+title: rke2 default disable list misses rke2-traefik/rke2-traefik-crd (newer RKE2
+  bundles Traefik)
+updated: 2026-09-24T03:22:17Z
+---
+
+The default install_server disable list on rke2 is only rke2-ingress-nginx (kept unchanged when disable became configurable). OCP (kubernetes-ocp share/Rexfile ~603) reports that newer RKE2 releases also bundle Traefik, and its helm-install job CrashLoopBackOffs on a Cilium-owned cluster ("Required CRDs are missing"); OCP therefore disables rke2-ingress-nginx, rke2-traefik and rke2-traefik-crd. Callers can now pass disable => [...] themselves, but the default still leaves Traefik on for rke2 with cilium => 1. Decide whether the rke2 default should grow (user-visible default change, needs Changes + live run on a current RKE2), and confirm from RKE2 release notes which version introduced the Traefik chart. Default lives in %PATHS in lib/Rex/Rancher/Server.pm.
+
+2026-09-24 03:21 Default now rke2-ingress-nginx, rke2-traefik, rke2-traefik-crd (Server.pm %PATHS), POD in Server.pm/Rancher.pm, tests, Changes rewritten. Evidence: rke2-traefik(-crd) charts in chart_versions.yaml from v1.30.3+rke2r1 GA (opt-in; ingress-controller default ingress-nginx through v1.35), default for new clusters from v1.36, ingress-nginx standalone removed v1.37. Unknown disable names are no-ops: k3s Stage()/Skips are map lookups, and RKE2 itself disables nonexistent rke2-{canal,cilium,flannel}-crd on every cni selection. Not committed. Live run on current RKE2 still pending.
+
+2026-09-24 03:21 Implemented uncommitted in working tree; prove green (compile/offline only). Needs maintainer review + live run on RKE2 v1.36+ and one pre-v1.30.3.
