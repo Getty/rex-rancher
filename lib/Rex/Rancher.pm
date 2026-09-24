@@ -50,7 +50,7 @@ The full pipeline for a GPU server deployment:
 
 =item 1. C<prepare_node> — hostname, timezone, swap off, kernel modules, sysctl
 
-=item 2. C<gpu_setup> (only with C<gpu =E<gt> 1>) — driver + toolkit + CDI + containerd config
+=item 2. C<gpu_setup> (only with C<gpu =E<gt> 1>, unless C<gpu_setup =E<gt> 0>) — driver + toolkit + CDI + containerd config
 
 =item 3. C<install_server> — write config, run installer, wait for the service to be active, then for the kubeconfig file
 
@@ -61,7 +61,7 @@ save to C<kubeconfig_file>, wait for API with L<Rex::Rancher::K8s/wait_for_api>
 upgrade or leave Cilium alone according to its Helm release (read through the
 saved kubeconfig once the API answered; without one, plain C<cilium install>)
 
-=item 6. C<deploy_nvidia_device_plugin> (only with C<gpu =E<gt> 1> and C<kubeconfig_file>)
+=item 6. C<deploy_nvidia_device_plugin> (only with C<gpu =E<gt> 1> and C<kubeconfig_file>, unless C<gpu_device_plugin =E<gt> 0>)
 
 =back
 
@@ -76,16 +76,36 @@ Kubernetes distribution to install. C<rke2> (default) or C<k3s>.
 =item C<gpu>
 
 If true, detect GPUs and run the full GPU setup pipeline via L<Rex::GPU>
-before installing the Kubernetes distribution. Requires L<Rex::GPU> to be
-installed. Default: C<0>. Driver selection depends on the GPU generation,
-and some hardware/OS combinations make the deploy die instead — see
-L</GPU hardware support>.
+before installing the Kubernetes distribution, and deploy the NVIDIA device
+plugin once the API answers. Requires L<Rex::GPU> to be installed unless
+C<gpu_setup =E<gt> 0>. Default: C<0>; without it no GPU step runs and
+C<gpu_setup>/C<gpu_device_plugin> are ignored. Driver selection depends on the
+GPU generation, and some hardware/OS combinations make the deploy die instead
+— see L</GPU hardware support>.
+
+=item C<gpu_setup>
+
+With C<gpu =E<gt> 1>: whether step 2 runs L<Rex::GPU>'s C<gpu_setup> (driver,
+container toolkit, CDI, containerd config). Default: C<1>. Pass C<0> when the
+NVIDIA GPU Operator (C<driver.enabled>, C<toolkit.enabled>) or the host image
+provides these; L<Rex::GPU> is then not loaded and need not be installed.
+
+=item C<gpu_device_plugin>
+
+With C<gpu =E<gt> 1>: whether step 6 deploys the NVIDIA device plugin
+DaemonSet. Default: C<1>. Pass C<0> when the GPU Operator runs its own device
+plugin (C<devicePlugin.enabled>) — two plugins would both advertise
+C<nvidia.com/gpu>. With C<gpu_setup =E<gt> 0> and this left on, the driver and
+the C<nvidia> runtime must already be on the host, or the plugin finds no GPU
+and the deploy ends with a warning.
 
 =item C<reboot>
 
 If true, reboot the host after GPU driver installation and wait for it to
-come back before proceeding. Only meaningful with C<gpu =E<gt> 1>. Required
-on first deploy when C<nouveau> was previously loaded. Default: C<0>.
+come back before proceeding. Only meaningful when L<Rex::GPU>'s C<gpu_setup>
+runs (C<gpu =E<gt> 1> without C<gpu_setup =E<gt> 0>); otherwise it is ignored
+with a warning. Required on first deploy when C<nouveau> was previously
+loaded. Default: C<0>.
 
 =item C<hostname>
 
@@ -239,7 +259,8 @@ sub rancher_deploy_server {
   # otherwise install_cilium keeps its remote-only path.
   install_cilium(%cilium_opts, $api_up ? ( kubeconfig => $local_kc ) : ());
 
-  if ($opts{gpu} && $local_kc) {
+  my %gpu_steps = _gpu_steps(%opts);
+  if ($gpu_steps{device_plugin} && $local_kc) {
     deploy_nvidia_device_plugin(kubeconfig => $local_kc);
   }
 
@@ -252,8 +273,10 @@ Full worker node deployment: prepare the node, optionally set up GPU
 support, install the Kubernetes agent, and join the existing cluster.
 
 The pipeline is shorter than L</rancher_deploy_server> — there is no
-Cilium installation or kubeconfig retrieval. GPU support via
-C<gpu =E<gt> 1> works identically to the server case.
+Cilium installation or kubeconfig retrieval. GPU host setup via
+C<gpu =E<gt> 1> (and C<gpu_setup>, C<reboot>) works identically to the server
+case; there is no device plugin step, so C<gpu_device_plugin> has no effect
+here.
 
 Options: same as L</rancher_deploy_server> plus:
 
@@ -412,14 +435,30 @@ sub _run_local_capture {
   return defined $content ? $content : '';
 }
 
+# Which GPU steps run, from the options alone. Without gpu nothing does; with
+# gpu each step runs unless its own switch turns it off.
+sub _gpu_steps {
+  my (%opts) = @_;
+  return ( setup => 0, device_plugin => 0 ) unless $opts{gpu};
+  return (
+    setup         => ( $opts{gpu_setup}         // 1 ) ? 1 : 0,
+    device_plugin => ( $opts{gpu_device_plugin} // 1 ) ? 1 : 0,
+  );
+}
+
 sub _gpu_setup_if_requested {
   my ($distribution, %opts) = @_;
 
-  return unless $opts{gpu};
+  my %steps = _gpu_steps(%opts);
+  if ($opts{gpu} && !$steps{setup}) {
+    Rex::Logger::info("gpu_setup => 0: Rex::GPU not used, driver, toolkit and containerd config are left to the host or the GPU Operator");
+    Rex::Logger::info("reboot is ignored with gpu_setup => 0", "warn") if $opts{reboot};
+  }
+  return unless $steps{setup};
 
   my $loaded = eval { require Rex::GPU; Rex::GPU->import(); 1 };
   unless ($loaded) {
-    die "gpu => 1 requested but Rex::GPU is not installed. Install the Rex-GPU distribution.\n";
+    die "gpu => 1 requested but Rex::GPU is not installed. Install the Rex-GPU distribution, or pass gpu_setup => 0 if the GPU Operator or the host provides the driver.\n";
   }
 
   Rex::GPU::gpu_setup(
@@ -553,7 +592,9 @@ framework. It handles everything from raw Linux node preparation through to
 a running CNI and GPU device plugin.
 
 GPU support is optional. Pass C<gpu =E<gt> 1> and install L<Rex::GPU>
-separately. Rex::Rancher works identically for non-GPU nodes.
+separately. Rex::Rancher works identically for non-GPU nodes. Clusters that
+hand the GPU to the NVIDIA GPU Operator pass C<gpu_setup =E<gt> 0> and/or
+C<gpu_device_plugin =E<gt> 0> and need no L<Rex::GPU>.
 
 When deploying a GPU server node, the full pipeline runs automatically:
 
@@ -562,7 +603,7 @@ When deploying a GPU server node, the full pipeline runs automatically:
 =item 1. B<Node preparation> — hostname, timezone, locale, NTP, swap off,
 kernel modules (br_netfilter, overlay), sysctl for Kubernetes networking.
 
-=item 2. B<GPU setup> (C<gpu =E<gt> 1>) — NVIDIA driver via DKMS, optional
+=item 2. B<GPU setup> (C<gpu =E<gt> 1>, unless C<gpu_setup =E<gt> 0>) — NVIDIA driver via DKMS, optional
 reboot, Container Toolkit, CDI specs, containerd runtime config. Handled by
 L<Rex::GPU>.
 
@@ -573,7 +614,8 @@ wait for API server readiness via L<Kubernetes::REST>.
 =item 4. B<Cilium CNI> — Cilium CLI installed on the remote host, Cilium
 deployed with distribution-appropriate Helm values.
 
-=item 5. B<NVIDIA device plugin> (C<gpu =E<gt> 1> + C<kubeconfig_file>) — DaemonSet
+=item 5. B<NVIDIA device plugin> (C<gpu =E<gt> 1> + C<kubeconfig_file>, unless
+C<gpu_device_plugin =E<gt> 0>) — DaemonSet
 applied via the Kubernetes API, wait for C<nvidia.com/gpu> capacity on the
 node. No C<kubectl> required anywhere.
 
@@ -605,8 +647,8 @@ For fine-grained control, use the individual modules directly:
 
 =head2 GPU hardware support
 
-With C<gpu =E<gt> 1>, driver choice and hardware checks are made by
-L<Rex::GPU>'s C<gpu_setup>; Rex::Rancher passes only the distribution and
+With C<gpu =E<gt> 1> (and C<gpu_setup> not switched off), driver choice and
+hardware checks are made by L<Rex::GPU>'s C<gpu_setup>; Rex::Rancher passes only the distribution and
 C<reboot>. Newer L<Rex::GPU> versions behave as follows:
 
 =over
