@@ -285,6 +285,15 @@ subtest 'release action' => sub {
     eval { $act->( $rel->( status => $st ) ) };
     like( $@, qr/stuck in $st.*sh\.helm\.release\.v1\.cilium\.v3/s, "$st: dies naming the secret" );
   }
+  my $pool = { %$want, ipam => { mode => 'cluster-pool' } };
+  eval { $act->( $rel->(), undef, $pool ) };
+  like( $@, qr/runs ipam\.mode kubernetes, the requested values ipam\.mode cluster-pool.*Redeploy.*mode => 'kubernetes'/s,
+    'deployed: changing ipam.mode dies naming both modes' );
+  eval { $act->( $rel->( status => 'failed' ), undef, $pool ) };
+  like( $@, qr/runs ipam\.mode kubernetes/, 'failed upgrade: same refusal' );
+  is( $act->( $rel->( config => { %$deployed_cfg, ipam => {} } ), undef, $pool ), 'upgrade',
+    'no ipam.mode in the release: not refused' );
+  is( $act->( $rel->(), '1.18.0' ), 'upgrade', 'same ipam.mode: upgrade as before' );
   eval { $act->( $rel->( status => 'superseded' ) ) };
   like( $@, qr/unexpected state 'superseded'/, 'unknown state dies' );
 };
@@ -320,6 +329,20 @@ subtest 'with kubeconfig: other version upgrades' => sub {
     helm_secret( revision => 1, status => 'deployed', chart_version => '1.16.5', config => $deployed_cfg ) ] );
   install_cilium( distribution => 'rke2', kubeconfig => '/kc' );
   is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'exactly one upgrade' );
+};
+
+subtest 'with kubeconfig: k3s release on ipam kubernetes dies before upgrade' => sub {
+  @cmds = ();
+  $api = FakeAPI->new( secrets => [
+    helm_secret( revision => 1, status => 'deployed', chart_version => '1.17.0', config => $deployed_cfg ) ] );
+  eval { install_cilium( distribution => 'k3s', k8s_service_host => 'cp', kubeconfig => '/kc' ) };
+  like( $@, qr/runs ipam\.mode kubernetes, the requested values ipam\.mode cluster-pool/, 'dies naming both modes' );
+  is( scalar cilium_cmds(), 0, 'no cilium upgrade' );
+
+  @cmds = ();
+  install_cilium( distribution => 'k3s', k8s_service_host => 'cp', kubeconfig => '/kc',
+    helm_values => { ipam => { mode => 'kubernetes' } } );
+  is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'matching helm_values: upgrade' );
 };
 
 subtest 'with kubeconfig: fresh cluster installs and checks the DaemonSet' => sub {

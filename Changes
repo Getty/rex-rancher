@@ -9,8 +9,9 @@ Revision history for Rex-Rancher
     k8s_service_host (default: first tls_san; a k3s deploy without one
     dies before touching the host). gateway_api works on k3s too. Before,
     k3s ran Flannel and kube-proxy under Cilium; re-running an existing k3s
-    cluster switches both off and changes Cilium's IPAM mode, so redeploy
-    it instead. cilium => 0 skips Cilium and leaves the distribution's CNI;
+    cluster switches both off, and install_cilium with a kubeconfig dies
+    rather than change a deployed release's ipam.mode, so redeploy it
+    instead. cilium => 0 skips Cilium and leaves the distribution's CNI;
     cilium_*/gateway_api/k8s_service_host options with it die. K3s carries
     the configuration kubernetes-ocp verified live but is not yet run live
     through Rex::Rancher; RKE2 is the supported distribution.

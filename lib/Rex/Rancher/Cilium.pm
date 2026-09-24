@@ -84,6 +84,11 @@ removed (C<cilium uninstall>, then its Helm release Secrets) and Cilium is
 installed fresh. No working Cilium exists in these states, so nothing
 running is taken down.
 
+=item * an upgrade that would change C<ipam.mode> (the release sets one
+explicitly and the requested values differ): dies before C<cilium upgrade>,
+naming both modes. Cilium cannot switch IPAM mode under running pods;
+redeploy the cluster, or pass the deployed mode in C<helm_values>.
+
 =item * C<pending-upgrade> or C<pending-rollback>: dies. An earlier run was
 interrupted or another is still running, and the deployed revision still
 carries the pod network; the message names the Secret to delete once no
@@ -504,15 +509,18 @@ sub _release_action {
   if ($status eq 'deployed') {
     my $same_version = defined $release->{chart_version}
       && _norm_version($release->{chart_version}) eq _norm_version($version);
-    return $same_version && _values_subset($values, $release->{config})
-      ? 'noop' : 'upgrade';
+    return 'noop' if $same_version && _values_subset($values, $release->{config});
+    _refuse_ipam_change($release, $values);
+    return 'upgrade';
   }
 
   if ($status eq 'failed') {
     # A failed upgrade leaves the previous revision deployed: upgrade again.
     # A failed first install has nothing deployed: Helm refuses to upgrade it
     # ("has no deployed releases") and to install over it.
-    return $release->{has_deployed} ? 'upgrade' : 'reinstall';
+    return 'reinstall' unless $release->{has_deployed};
+    _refuse_ipam_change($release, $values);
+    return 'upgrade';
   }
 
   return 'reinstall'
@@ -529,6 +537,22 @@ sub _release_action {
   }
 
   die "Helm release " . RELEASE_NAME . " is in unexpected state '$status'\n";
+}
+
+# Cilium cannot switch IPAM mode under running pods: an upgrade that changes
+# ipam.mode leaves them without addresses. Only an ipam.mode the release set
+# explicitly is compared; without one the deployed mode is not known here.
+sub _refuse_ipam_change {
+  my ($release, $values) = @_;
+
+  my $have = eval { $release->{config}{ipam}{mode} };
+  my $want = eval { $values->{ipam}{mode} };
+  return unless defined $have && defined $want && $have ne $want;
+
+  die "Helm release " . RELEASE_NAME . " runs ipam.mode $have, the requested "
+    . "values ipam.mode $want: Cilium cannot change the IPAM mode of a running "
+    . "cluster (pods lose their addresses). Redeploy the cluster, or pass "
+    . "helm_values => { ipam => { mode => '$have' } } to keep it.\n";
 }
 
 sub _norm_version {
