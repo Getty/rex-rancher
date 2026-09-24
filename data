@@ -1,0 +1,24 @@
+---
+class: standard
+completed: 2026-09-24T02:39:28Z
+created: 2026-09-23T20:23:28Z
+id: 11
+priority: medium
+started: 2026-09-24T02:35:52Z
+status: done
+tags:
+- ocp
+- server
+- escalated-from:kubernetes-ocp#155
+title: '#10a install_server: version-Pin, node_name, konfigurierbare disable-Liste,
+  Kubeconfig-Server explizit'
+updated: 2026-09-24T02:39:32Z
+---
+
+- version-Pin fuer install_server (Agent kann es schon) -- Rexfile ~572/725
+- node_name -- Rexfile ~603
+- disable-Liste konfigurierbar (OCP: rke2-ingress-nginx, rke2-traefik, rke2-traefik-crd) -- Server.pm:339
+- Kubeconfig-Server explizit setzbar (OCP nimmt advertised_host, nicht ersten tls_san)
+Referenz: kubernetes-ocp/share/Rexfile (von dort portieren). Teil von #10. rke2 und k3s gemeinsam; Offline-Test wo erreichbar.
+
+2026-09-24 02:38 Implemented (uncommitted): version, node_name, disable on install_server, passed through rancher_deploy_server. k3s traefik/servicelb moved from --disable flags to config.yaml disable. kubeconfig_server already existed; POD clarified. Tests: t/server-options.t. Needs live run on rke2 + k3s. Follow-up: k17 (rke2 traefik default).
