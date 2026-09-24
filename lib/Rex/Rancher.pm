@@ -57,7 +57,9 @@ The full pipeline for a GPU server deployment:
 =item 4. Fetch kubeconfig locally, patch C<127.0.0.1> to the real server address,
 save to C<kubeconfig_file>, wait for API with L<Rex::Rancher::K8s/wait_for_api>
 
-=item 5. C<install_cilium> — install Cilium CLI on remote, apply via C<cilium install>
+=item 5. C<install_cilium> — install Cilium CLI on remote, then install,
+upgrade or leave Cilium alone according to its Helm release (read through the
+saved kubeconfig once the API answered; without one, plain C<cilium install>)
 
 =item 6. C<deploy_nvidia_device_plugin> (only with C<gpu =E<gt> 1> and C<kubeconfig_file>)
 
@@ -174,6 +176,17 @@ See L<Rex::Rancher::Server/install_server> for the structure.
 Whether to configure Cilium CNI. Default: C<1>. Set to C<0> to keep the
 distribution's built-in CNI (Canal for RKE2, Flannel for K3s).
 
+=item C<cilium_version>, C<cilium_cli_version>, C<cilium_helm_values>
+
+Passed to L<Rex::Rancher::Cilium/install_cilium> as C<version>,
+C<cli_version> and C<helm_values>.
+
+=item C<gateway_api>, C<gateway_api_version>, C<gateway_api_channel>
+
+Passed to L<Rex::Rancher::Cilium/install_cilium> unchanged. C<gateway_api>
+needs C<kubeconfig_file> and is rke2-only; invalid Cilium options die before
+the node is touched.
+
 =back
 
 =cut
@@ -199,6 +212,16 @@ sub rancher_deploy_server {
   my $distribution    = $opts{distribution}    // 'rke2';
   my $kubeconfig_file = $opts{kubeconfig_file};
 
+  my %cilium_opts = (
+    distribution => $distribution,
+    ( map { exists $opts{"cilium_$_"} ? ( $_ => $opts{"cilium_$_"} ) : () }
+        qw( version cli_version helm_values ) ),
+    ( map { exists $opts{$_} ? ( $_ => $opts{$_} ) : () }
+        qw( gateway_api gateway_api_version gateway_api_channel ) ),
+  );
+  # Refuse bad Cilium options before the node is touched, not at step 7.
+  Rex::Rancher::Cilium::_resolve_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
+
   _check_connection();
   prepare_node(%opts);
 
@@ -210,9 +233,11 @@ sub rancher_deploy_server {
   # install_server only waits for the kubeconfig file to appear on the remote;
   # actual API readiness is confirmed here via Rex::Rancher::K8s::wait_for_api.
   my $local_kc = _save_kubeconfig_locally($distribution, $kubeconfig_file, %opts);
-  wait_for_api(kubeconfig => $local_kc) if $local_kc;
+  my $api_up = $local_kc && wait_for_api(kubeconfig => $local_kc);
 
-  install_cilium(distribution => $distribution);
+  # Only an API that answered from here can report the Helm release state;
+  # otherwise install_cilium keeps its remote-only path.
+  install_cilium(%cilium_opts, $api_up ? ( kubeconfig => $local_kc ) : ());
 
   if ($opts{gpu} && $local_kc) {
     deploy_nvidia_device_plugin(kubeconfig => $local_kc);

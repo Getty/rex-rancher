@@ -1,6 +1,9 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - install_cilium reads the Helm release via kubeconfig: install, upgrade,
+    purge a stale release or no-op. New helm_values and gateway_api options;
+    rancher_deploy_server passes cilium_* and gateway_api_* through.
   - New install_method => 'artifact' for server and agent: checksum-verified
     release download for the node's arch. Pinned versions are verified after
     install; a service that fails to start dies with its journal tail.
