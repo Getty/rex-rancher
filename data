@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-24T03:08:26Z
+created: 2026-09-24T02:49:57Z
+id: 19
+priority: medium
+started: 2026-09-24T03:03:17Z
+status: done
+tags:
+- ocp
+- gpu
+- rke2
+title: 'RKE2: kein PATH fuer nvidia-container-runtime bei gpu_setup => 0 (Host-/Vendor-Toolkit)'
+updated: 2026-09-24T03:08:30Z
+---
+
+rke2-server/-agent.service setzen keinen PATH; RKE2 findet ein Host-Toolkit in /usr/bin (DGX, vorinstalliert) nur, wenn /etc/default/rke2-{server,agent} ein PATH= traegt. Mit gpu_setup => 0 schreibt Rex::Rancher das nicht (bisher uebernimmt Rex::GPU die containerd-Seite). Operator-Toolkit unter /usr/local/nvidia/toolkit ist laut OCP nicht betroffen (RKE2 prependet das). K3s: Unit hat PATH, nicht betroffen. Referenz: kubernetes-ocp/share/Rexfile _configure_nvidia_runtime_path (~1050-1087), vor Service-Start aufgerufen. Muss vor dem Installer laufen (Runtime-Scan nur beim Start).
+
+2026-09-24 03:07 Implemented on branch worktree-agent-acba0fefa75eb0715 (39198dc): nvidia_runtime_path option on install_server/install_agent, auto-on in pipelines for gpu=>1,gpu_setup=>0. Needs live check on a DGX/rke2 node (runtimes.nvidia in generated config.toml). Rancher.pm touched in _gpu_steps + install_server/install_agent call lines (merge with k18).
