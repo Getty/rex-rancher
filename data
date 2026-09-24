@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-09-24T17:50:12Z
+claimed_by: main
+class: standard
+completed: 2026-09-24T17:50:12Z
+created: 2026-09-24T17:35:33Z
+id: 27
+priority: low
+started: 2026-09-24T17:50:12Z
+status: done
+title: Changes {{$NEXT}} missing bullet for 0b97665 GPU-die-timing correction
+updated: 2026-09-24T17:50:12Z
+---
+
+Commit 0b97665 ("Say what a gpu => 1 die may already have changed on the host", Refs k25) corrects a previously wrong claim in Rex::Rancher.pm POD ("GPU hardware support"): it no longer claims a gpu_setup die happens before ANY host change. It now says at most pciutils has been installed for detection, or - for index-dependent sources on e.g. Ubuntu - the package index has already been refreshed and repositories added/enabled before the die.
+
+This is exactly the kind of option-semantics correction an operator doing incident triage after a failed gpu => 1 deploy would rely on, and it is not covered by the existing "{{$NEXT}}" bullet about GPU hardware support (which only covers driver-generation selection, vGPU guest die and the NVLink warning - see 551f109, bf69987, 01f85f7).
+
+Add a short bullet to Changes under {{$NEXT}}, or fold a clause into the existing GPU hardware support bullet, naming the corrected die-timing claim.
+
+Found during pre-release audit at 0b97665. Assign to rex-rancher-worker.
