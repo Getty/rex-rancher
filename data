@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-24T04:08:40Z
+created: 2026-09-24T03:44:48Z
+id: 22
+priority: low
+started: 2026-09-24T04:05:32Z
+status: done
+tags:
+- cilium
+- gateway-api
+- docs
+title: 'gateway_api_channel POD: TLSRoute is standard-channel since Gateway API v1.5'
+updated: 2026-09-24T04:08:44Z
+---
+
+Cilium.pm POD (gateway_api_channel) says Cilium requires TLSRoute "which only the experimental channel carries" and defaults to experimental. RKE2 v1.37 rke2-gateway-api-crd 1.6.101 (Gateway API v1.6.1) ships tlsroutes/tcproutes/udproutes annotated channel: standard (crdfiles/). True for the v1.2-era bundles, stale for v1.5+. Decide: version-dependent wording, and whether the experimental default still makes sense for current Cilium (experimental-over-standard is refused by the v1.5+ safe-upgrades VAP). Needs checking against Cilium docs per version.
+
+Researched: default stays experimental (Cilium 1.17 + GW API v1.2 standard has no TLSRoute). POD rewritten version-dependent; t/cilium.t pins default; Changes entry extended. Uncommitted.
