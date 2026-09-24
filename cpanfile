@@ -5,7 +5,7 @@ requires 'IO::Socket::SSL';
 requires 'JSON::MaybeXS';
 requires 'Kubernetes::REST', '1.108';
 requires 'Rex', '1.14.0';
-requires 'Rex::LibSSH', '0.004';
+recommends 'Rex::LibSSH', '0.004';
 requires 'YAML::PP';
 
 on 'test' => sub {

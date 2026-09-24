@@ -36,8 +36,9 @@ Revision history for Rex-Rancher
     Rex::LibSSH >= 0.004's host-key check (CWE-322), used from a 'before ALL'
     hook; see eg/hetzner-gpu.Rexfile.
   - Warn when the saved kubeconfig would still point at 127.0.0.1.
-  - Requires Kubernetes::REST and IO::K8s 1.108, Rex::LibSSH 0.004; declare
-    YAML::PP and JSON::MaybeXS.
+  - Requires Kubernetes::REST and IO::K8s 1.108; declare
+    YAML::PP and JSON::MaybeXS. Rex::LibSSH is now only recommended: needed
+    for SFTP-less hosts, not for hosts with SFTP (Rex's OpenSSH backend).
   - openSUSE/SLES documented as unverified; agent options, the wait_for_api
     timeout and node preparation steps documented accurately.
   - eg/hetzner-gpu.Rexfile reduced to working tasks.

@@ -57,7 +57,7 @@ task 'deploy_agents', group => 'workers', sub {
 
 ## Requirements
 
-`Rex::LibSSH` is required for Hetzner and other SFTP-less servers:
+`Rex::LibSSH` (a recommended, not required, dependency) is needed for Hetzner and other SFTP-less servers; on hosts with SFTP, Rex's built-in `OpenSSH` connection works too:
 
 ```perl
 use Rex::LibSSH;
