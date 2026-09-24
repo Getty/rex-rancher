@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-24T20:03:21Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T20:03:21Z
+created: 2026-09-24T17:43:03Z
+id: 32
+priority: low
+started: 2026-09-24T19:58:38Z
+status: done
+title: rancher_deploy_agent skips _check_connection
+updated: 2026-09-24T20:03:21Z
+---
+
+SFTP-less host over OpenSSH on the agent path crashes in Rex Fs layer instead of dying with the LibSSH hint (server path checks). Found in doc audit.
+
+2026-09-24 20:02 Committed (666997a); offline tests green; needs a live run (eg/hetzner-gpu.Rexfile) before trust.
