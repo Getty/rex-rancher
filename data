@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-24T20:03:36Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T20:03:36Z
+created: 2026-09-24T17:48:09Z
+id: 35
+priority: medium
+started: 2026-09-24T20:00:39Z
+status: done
+title: 'wait_for_api timeout: gateway_api then dies with misleading ''needs kubeconfig'''
+updated: 2026-09-24T20:03:36Z
+---
+
+rancher_deploy_server: wait_for_api returning 0 only warns; install_cilium then gets no kubeconfig and _resolve_opts dies "gateway_api needs kubeconfig" although kubeconfig_file was given, and deploy_nvidia_device_plugin still runs against the unreachable API. Documented as-is in rancher_deploy_server POD (k30); behaviour fix (die naming the unreachable API, or skip) is open. Pipeline change: needs a live run.
+
+2026-09-24 20:02 Committed (33116ba); offline tests green; needs a live run (eg/hetzner-gpu.Rexfile) before trust.
