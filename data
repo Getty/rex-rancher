@@ -1,0 +1,23 @@
+---
+class: standard
+completed: 2026-09-24T01:33:20Z
+created: 2026-09-23T20:23:32Z
+id: 12
+priority: high
+started: 2026-09-23T20:31:58Z
+status: done
+tags:
+- ocp
+- server
+- security
+- escalated-from:kubernetes-ocp#155
+title: '#10b Token: vorhandenes Server-Token wiederverwenden, K3s-Token nicht auf
+  Kommandozeile'
+updated: 2026-09-24T01:33:24Z
+---
+
+- ohne uebergebenes Token vorhandenes /var/lib/rancher/{rke2,k3s}/server/token lesen statt neu erzeugen (OCP k150/k154) -- Server.pm:147 vs Rexfile ~571/1009
+- K3s: K3S_TOKEN nicht auf der Kommandozeile (sichtbar in ps) -- Server.pm ~408-421
+Referenz: kubernetes-ocp/share/Rexfile (von dort portieren). Teil von #10. rke2 und k3s gemeinsam; Offline-Test wo erreichbar.
+
+2026-09-23 20:34 Umgesetzt (uncommitted): _resolve_token/_existing_server_token (run cat, auto_die=>0, Fehler => undef), K3S_TOKEN aus Server- und Agent-Installer-Kommando entfernt, t/token.t, Changes+POD. Folgeticket k16 fuer config.yaml-Rechte. Live-Lauf steht aus.
