@@ -188,6 +188,11 @@ the derived address is itself loopback (C<127.0.0.1>, C<localhost>, C<::1>),
 the file is still saved but a warning is logged: it will keep pointing at
 C<https://127.0.0.1> and cannot reach the cluster from the operator's machine.
 
+If the kubeconfig cannot be fetched from the host or written to
+C<kubeconfig_file>, the deploy dies naming the cause, like the API timeout
+above: the server is installed, Cilium and the device plugin are not, and a
+re-run picks up from there.
+
 =item C<kubeconfig_server>
 
 Explicit server address to use when patching the kubeconfig. Overrides the
@@ -616,10 +621,19 @@ sub _save_kubeconfig_locally {
 
   return unless $output_file;
 
+  # kubeconfig_file was asked for: without it wait_for_api, the Helm-aware
+  # Cilium path, gateway_api and the device plugin cannot run, so a failed
+  # fetch or write stops the deploy instead of degrading to the remote-only
+  # path. The server is installed by now; a re-run reuses its token.
+  my $stopped = "; $distribution server is installed, Cilium and later steps "
+    . "did not run. Fix the cause and re-run, or omit kubeconfig_file to "
+    . "install Cilium through the remote host only\n";
+
   my $content = eval { get_kubeconfig($distribution) };
   unless ($content) {
-    Rex::Logger::info("Could not fetch kubeconfig from remote — skipping local save", "warn");
-    return;
+    my $err = $@ ? $@ =~ s/\s+\z//r : 'empty file';
+    die "Could not fetch the kubeconfig from the $distribution server "
+      . "($err)$stopped";
   }
 
   # RKE2/K3s writes 127.0.0.1 in the kubeconfig; patch to the real address
@@ -650,12 +664,10 @@ sub _save_kubeconfig_locally {
   }
 
   open(my $fh, '>', $output_file)
-    or do {
-      Rex::Logger::info("Could not write kubeconfig to $output_file: $!", "warn");
-      return;
-    };
+    or die "Could not write the kubeconfig to $output_file: $!$stopped";
   print $fh $content;
-  close $fh;
+  close $fh
+    or die "Could not write the kubeconfig to $output_file: $!$stopped";
 
   Rex::Logger::info("Kubeconfig saved to $output_file");
   return $output_file;

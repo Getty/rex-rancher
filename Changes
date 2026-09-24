@@ -44,9 +44,10 @@ Revision history for Rex-Rancher
   - Requires Kubernetes::REST and IO::K8s 1.108; declare
     YAML::PP and JSON::MaybeXS. Rex::LibSSH is now only recommended: needed
     for SFTP-less hosts, not for hosts with SFTP (Rex's OpenSSH backend).
-  - rancher_deploy_server dies, naming the address, when the API does not
-    answer through kubeconfig_file within wait_for_api's timeout, instead of
-    carrying on to Cilium and the device plugin.
+  - rancher_deploy_server with kubeconfig_file dies, naming the cause, when
+    the kubeconfig cannot be fetched or written or the API does not answer
+    within wait_for_api's timeout, instead of carrying on to Cilium and the
+    device plugin.
   - openSUSE/SLES documented as unverified; agent options and node
     preparation steps documented accurately.
   - eg/hetzner-gpu.Rexfile reduced to working tasks.
