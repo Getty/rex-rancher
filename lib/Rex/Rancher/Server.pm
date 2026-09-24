@@ -32,7 +32,7 @@ my %PATHS = (
     kubeconfig   => '/etc/rancher/rke2/rke2.yaml',
     token_file   => '/var/lib/rancher/rke2/server/node-token',
     server_token => '/var/lib/rancher/rke2/server/token',
-    disable      => ['rke2-ingress-nginx'],
+    disable      => ['rke2-ingress-nginx', 'rke2-traefik', 'rke2-traefik-crd'],
     binary       => 'rke2',
     release_url  => 'https://github.com/rancher/rke2/releases/download',
     artifact_dir => '/tmp/rke2-artifacts',
@@ -161,11 +161,16 @@ the system hostname is used.
 
 Packaged components to switch off, as an arrayref or a comma-separated
 string, written as C<disable> to C<config.yaml>. The names are
-distribution-specific. Default: C<['rke2-ingress-nginx']> on rke2,
+distribution-specific. Default: C<['rke2-ingress-nginx', 'rke2-traefik',
+'rke2-traefik-crd']> on rke2 (no bundled ingress controller: RKE2 ships the
+Traefik charts since v1.30.3, opt-in, and deploys Traefik by default on new
+clusters since v1.36; a name the installed RKE2 does not ship is ignored),
 C<['traefik', 'servicelb']> on k3s. A given list replaces the default rather
 than extending it; C<[]> disables nothing. Independent of C<cilium>.
 
-  disable => [qw( rke2-ingress-nginx rke2-traefik rke2-traefik-crd )],
+  # keep the default and also drop metrics-server
+  disable => [qw( rke2-ingress-nginx rke2-traefik rke2-traefik-crd
+                  rke2-metrics-server )],
 
 =item C<node_labels>
 
@@ -471,10 +476,11 @@ sub _build_server_config {
   }
 
   # Packaged components to switch off. Undef means the per-distribution
-  # default from %PATHS (rke2: rke2-ingress-nginx; k3s: traefik + servicelb,
-  # formerly --disable flags on the k3s installer line -- config.yaml carries
-  # the same flag, keeps caller-supplied names out of the shell, and matches
-  # rke2). An explicit empty list disables nothing. Independent of cilium.
+  # default from %PATHS (rke2: ingress-nginx + traefik charts, unknown chart
+  # names are ignored by RKE2; k3s: traefik + servicelb, formerly --disable
+  # flags on the k3s installer line -- config.yaml carries the same flag,
+  # keeps caller-supplied names out of the shell, and matches rke2). An
+  # explicit empty list disables nothing. Independent of cilium.
   my @disable = !defined $disable       ? @{ _paths($distribution)->{disable} }
               : ref $disable eq 'ARRAY' ? @{$disable}
               :                           split(/,/, $disable);

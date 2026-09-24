@@ -10,9 +10,10 @@ use Test::More;
 #   INSTALL_K3S_VERSION; without it the line is exactly what it was before.
 # - node_name becomes `node-name:` in config.yaml.
 # - disable replaces the per-distribution default list in config.yaml; the
-#   default (undef) is rke2-ingress-nginx on rke2 and traefik + servicelb on
-#   k3s -- the latter moved from --disable flags on the k3s installer line into
-#   config.yaml, so the installer line must no longer carry them.
+#   default (undef) is rke2-ingress-nginx + rke2-traefik(-crd) on rke2 and
+#   traefik + servicelb on k3s -- the latter moved from --disable flags on the
+#   k3s installer line into config.yaml, so the installer line must no longer
+#   carry them.
 # - the cilium gate (cni/disable-kube-proxy rke2-only) is untouched by disable.
 #
 # This proves the config hash and the command strings, not a deploy.
@@ -27,7 +28,7 @@ sub cfg { Rex::Rancher::Server::_build_server_config(@_) }
 sub paths { Rex::Rancher::Server::_paths(@_) }
 
 my %DEFAULT = (
-  rke2 => ['rke2-ingress-nginx'],
+  rke2 => ['rke2-ingress-nginx', 'rke2-traefik', 'rke2-traefik-crd'],
   k3s  => ['traefik', 'servicelb'],
 );
 

@@ -26,7 +26,8 @@ subtest 'rke2 + cilium: kube-proxy replacement config present' => sub {
   is($c->{token}, 'tok',   'token set');
   is($c->{cni},   'none',  'cni:none — Cilium owns the CNI');
   ok($c->{'disable-kube-proxy'}, 'disable-kube-proxy true (Cilium replaces it on rke2)');
-  is_deeply($c->{disable}, ['rke2-ingress-nginx'], 'rke2 ingress disabled');
+  is_deeply($c->{disable}, [qw( rke2-ingress-nginx rke2-traefik rke2-traefik-crd )],
+    'rke2 bundled ingress controllers disabled');
 };
 
 subtest 'k3s + cilium: no rke2-only kube-proxy override (karr #5)' => sub {
@@ -43,7 +44,8 @@ subtest 'rke2 without cilium: no kube-proxy override, ingress still disabled' =>
   my $c = cfg('rke2', 'tok', undef, undef, undef, 0);
   ok(!exists $c->{'disable-kube-proxy'}, 'no disable-kube-proxy without cilium');
   ok(!exists $c->{cni},                  'no cni:none without cilium');
-  is_deeply($c->{disable}, ['rke2-ingress-nginx'], 'rke2 ingress still disabled');
+  is_deeply($c->{disable}, [qw( rke2-ingress-nginx rke2-traefik rke2-traefik-crd )],
+    'rke2 bundled ingress controllers still disabled');
 };
 
 subtest 'server / tls_san / node_labels passthrough' => sub {

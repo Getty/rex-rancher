@@ -189,8 +189,9 @@ Kubernetes node name (C<node-name> in C<config.yaml>). Default: the hostname.
 =item C<disable>
 
 Packaged components to switch off (C<disable> in C<config.yaml>). Default:
-C<rke2-ingress-nginx> on rke2, C<traefik> and C<servicelb> on k3s; a given
-list replaces the default. See L<Rex::Rancher::Server/install_server>.
+C<rke2-ingress-nginx>, C<rke2-traefik> and C<rke2-traefik-crd> on rke2,
+C<traefik> and C<servicelb> on k3s; a given list replaces the default. See
+L<Rex::Rancher::Server/install_server>.
 
 =item C<node_labels>
 

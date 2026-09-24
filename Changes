@@ -16,8 +16,9 @@ Revision history for Rex-Rancher
     release download for the node's arch. Pinned versions are verified after
     install; a service that fails to start dies with its journal tail.
   - New install_server options version, node_name and disable (also taken by
-    rancher_deploy_server). K3s now disables traefik/servicelb via
-    config.yaml instead of installer flags; the default set is unchanged.
+    rancher_deploy_server). The rke2 default now also disables rke2-traefik
+    and rke2-traefik-crd (RKE2 v1.36+ deploys Traefik by default); K3s
+    disables traefik/servicelb via config.yaml instead of installer flags.
   - Without a token, install_server reuses the host's existing server token,
     so a re-run never rotates a live cluster's token. The token reaches K3s
     (server and agent) via config.yaml only, never the installer command line;
