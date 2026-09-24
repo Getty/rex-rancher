@@ -1,0 +1,24 @@
+---
+class: standard
+completed: 2026-09-24T02:46:46Z
+created: 2026-09-23T20:23:37Z
+id: 13
+priority: medium
+started: 2026-09-24T02:39:36Z
+status: done
+tags:
+- ocp
+- server
+- escalated-from:kubernetes-ocp#155
+title: '#10c Installationsmethode waehlbar (Artefakt-Vordownload mit Checksumme) +
+  Service-Wait mit Journal-Diagnose'
+updated: 2026-09-24T02:46:50Z
+---
+
+- Artefakt-Vordownload fuer Node-Arch (arm64) mit Checksumme statt curl|sh -- Rexfile ~638-734
+- auf aktiven Service warten, bei Fehlschlag Journal-Diagnose, statt nur auf Kubeconfig-Datei -- Rexfile ~757-805
+Referenz: kubernetes-ocp/share/Rexfile (von dort portieren). Teil von #10. rke2 und k3s gemeinsam; Offline-Test wo erreichbar.
+
+2026-09-24 02:38 From k11: install_server now takes version (INSTALL_RKE2_VERSION). _install_rke2 keeps auto_die => 0 + 'command -v rke2' verify (GPG noise on Rocky 10). Consequence: on a host that already has rke2, a failed pinned install/upgrade (typo'd or non-existent version) is swallowed and the old binary passes the check. A version check (rke2 --version vs requested) belongs with the install-method rework here.
+
+2026-09-24 02:45 Implemented (uncommitted): install_method script|artifact (server+agent, rke2+k3s), sha256 verify against official sha256sum-ARCH.txt, arch via uname -m on host, version verify after install (rke2/k3s --version), systemctl is-active wait w/ journal tail in die; agent start now --no-block + wait. Tests: t/install-method.t. Needs live runs: rke2+k3s, amd64+arm64, Debian+Rocky, SFTP-less Hetzner.
