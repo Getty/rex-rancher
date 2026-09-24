@@ -89,6 +89,16 @@ With C<gpu =E<gt> 1>: whether step 2 runs L<Rex::GPU>'s C<gpu_setup> (driver,
 container toolkit, CDI, containerd config). Default: C<1>. Pass C<0> when the
 NVIDIA GPU Operator (C<driver.enabled>, C<toolkit.enabled>) or the host image
 provides these; L<Rex::GPU> is then not loaded and need not be installed.
+On rke2, C<gpu_setup =E<gt> 0> also turns on C<nvidia_runtime_path>.
+
+=item C<nvidia_runtime_path>
+
+Passed to L<Rex::Rancher::Server/install_server> (and
+L<Rex::Rancher::Agent/install_agent>): write a C<PATH> to
+C</etc/default/rke2-server> (C<rke2-agent>) before the first start, so rke2
+finds a host-installed C<nvidia-container-runtime> (DGX OS, a preinstalled
+toolkit in C</usr/bin>); skipped when there is none on the host. Default: on
+for C<gpu =E<gt> 1, gpu_setup =E<gt> 0>, off otherwise. No effect on k3s.
 
 =item C<gpu_device_plugin>
 
@@ -264,7 +274,7 @@ sub rancher_deploy_server {
 
   _gpu_setup_if_requested($distribution, %opts);
 
-  install_server(%opts);
+  install_server(_install_opts(%opts));
 
   # Fetch and save kubeconfig locally, then wait for the API from this machine.
   # install_server only waits for the kubeconfig file to appear on the remote;
@@ -326,7 +336,7 @@ sub rancher_deploy_agent {
 
   _gpu_setup_if_requested($distribution, %opts);
 
-  install_agent(%opts);
+  install_agent(_install_opts(%opts));
 
   Rex::Logger::info("$distribution agent deployment complete");
 }
@@ -454,14 +464,26 @@ sub _run_local_capture {
 }
 
 # Which GPU steps run, from the options alone. Without gpu nothing does; with
-# gpu each step runs unless its own switch turns it off.
+# gpu each step runs unless its own switch turns it off. runtime_path: the
+# rke2 unit PATH for a toolkit the host brought, needed only without gpu_setup
+# (Rex::GPU's containerd drop-in names the runtime by absolute path).
 sub _gpu_steps {
   my (%opts) = @_;
-  return ( setup => 0, device_plugin => 0 ) unless $opts{gpu};
+  return ( setup => 0, device_plugin => 0, runtime_path => 0 ) unless $opts{gpu};
+  my $setup = ( $opts{gpu_setup} // 1 ) ? 1 : 0;
   return (
-    setup         => ( $opts{gpu_setup}         // 1 ) ? 1 : 0,
+    setup         => $setup,
     device_plugin => ( $opts{gpu_device_plugin} // 1 ) ? 1 : 0,
+    runtime_path  => $setup ? 0 : 1,
   );
+}
+
+# The options install_server/install_agent get: the caller's, plus
+# nvidia_runtime_path from the GPU switches unless the caller set it.
+sub _install_opts {
+  my (%opts) = @_;
+  my %steps = _gpu_steps(%opts);
+  return ( %opts, nvidia_runtime_path => $opts{nvidia_runtime_path} // $steps{runtime_path} );
 }
 
 sub _gpu_setup_if_requested {

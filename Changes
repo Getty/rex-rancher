@@ -6,6 +6,9 @@ Revision history for Rex-Rancher
   - New gpu_setup and gpu_device_plugin options (default on) for gpu => 1:
     switch off the Rex::GPU host setup and/or the device plugin when the
     NVIDIA GPU Operator provides them; Rex::GPU is then not needed.
+  - New nvidia_runtime_path option (on for gpu => 1, gpu_setup => 0): puts a
+    PATH into /etc/default/rke2-{server,agent} so rke2 finds a host-installed
+    NVIDIA container runtime (DGX OS). No effect on k3s.
   - install_cilium reads the Helm release via kubeconfig: install, upgrade,
     purge a stale release or no-op. New helm_values and gateway_api options;
     rancher_deploy_server passes cilium_* and gateway_api_* through.

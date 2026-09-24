@@ -36,6 +36,7 @@ my %PATHS = (
     binary       => 'rke2',
     release_url  => 'https://github.com/rancher/rke2/releases/download',
     artifact_dir => '/tmp/rke2-artifacts',
+    env_file     => '/etc/default/rke2-server',
   },
   k3s => {
     config_dir   => '/etc/rancher/k3s/',
@@ -48,6 +49,8 @@ my %PATHS = (
     binary       => 'k3s',
     release_url  => 'https://github.com/k3s-io/k3s/releases/download',
     artifact_dir => '/tmp/k3s-artifacts',
+    # No env_file: k3s needs no PATH for the NVIDIA runtime lookup
+    # (see _nvidia_runtime_path).
   },
 );
 
@@ -197,6 +200,20 @@ kube-proxy replacement is rke2-only, so k3s keeps its own kube-proxy and
 default Flannel CNI. Disabling kube-proxy without the matching Cilium config
 broke Service/ClusterIP routing on k3s (karr #5).
 
+=item C<nvidia_runtime_path>
+
+If true, and C<nvidia-container-runtime> is on the host's C<PATH>, write
+C<PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin> to
+C</etc/default/rke2-server> before the installer runs. The rke2 unit sets no
+C<PATH>, and rke2 looks for the NVIDIA runtime only when the service starts;
+without it a host- or vendor-installed toolkit (C</usr/bin>, e.g. DGX OS) is
+not wired into containerd. Other lines of the file are kept, an existing
+C<PATH=> line is replaced. If the file changed while the service is already
+running, a warning asks for a restart; nothing is restarted. The GPU
+Operator's toolkit (C</usr/local/nvidia/toolkit>) is found by rke2 without
+this. No effect on k3s. Default: C<0>; L<Rex::Rancher/rancher_deploy_server>
+turns it on for C<gpu =E<gt> 1, gpu_setup =E<gt> 0>.
+
 =back
 
   install_server(
@@ -250,6 +267,10 @@ sub install_server {
   if ($registries) {
     _generate_registries_yaml($paths->{config_dir}, $registries);
   }
+
+  # Before the installer: rke2 looks for the NVIDIA runtime only when its
+  # service starts.
+  _nvidia_runtime_path($paths) if $opts{nvidia_runtime_path};
 
   # Install and start
   if ($distribution eq 'k3s') {
@@ -577,6 +598,61 @@ sub _k3s_server_install_cmd {
   return "curl -sfL " . $paths->{install_url}
     . " | ${env_str}sh -s - server"
     . " --write-kubeconfig-mode=644";
+}
+
+#
+# NVIDIA runtime lookup: a PATH for the rke2 unit.
+# Shared with Rex::Rancher::Agent (rke2-agent has the same unit shape).
+#
+
+# systemd's own default directories, not the SSH session's PATH: this becomes
+# the environment of a service running as root.
+my $RUNTIME_PATH_LINE = 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+
+# rke2-server/-agent.service carry no Environment= and read
+# EnvironmentFile=-/etc/default/%N; rke2 scans PATH for nvidia-container-runtime
+# at service start only, and the RKE2 GPU docs say to set PATH there. The rke2
+# install script does not touch /etc/default, so this survives the install.
+# k3s has no env_file in %PATHS: its agent code does the same scan and wired a
+# host toolkit plus the nvidia RuntimeClass on a DGX without help
+# (kubernetes-ocp, _configure_nvidia_runtime_path).
+sub _nvidia_runtime_path {
+  my ($paths) = @_;
+  my $env_file = $paths->{env_file} or return;
+
+  unless (can_run('nvidia-container-runtime')) {
+    Rex::Logger::info("nvidia-container-runtime not on PATH, $env_file left alone "
+      . "(the GPU Operator's toolkit is found without it)");
+    return;
+  }
+
+  my $current = run "cat $env_file 2>/dev/null", auto_die => 0;
+  my $content = _env_with_runtime_path($? == 0 ? $current : '');
+  unless (defined $content) {
+    Rex::Logger::info("$env_file already carries the PATH for the NVIDIA runtime");
+    return;
+  }
+
+  Rex::Logger::info("Writing PATH to $env_file for the NVIDIA runtime lookup");
+  run "mkdir -p /etc/default", auto_die => 1;
+  # No secret in here: the file keeps its mode, a new one gets root's umask.
+  file $env_file, content => $content;
+
+  # Only on a re-run: the service reads the file when it starts.
+  my $service = $paths->{service};
+  run "systemctl is-active --quiet $service", auto_die => 0;
+  Rex::Logger::info("$service is running: restart it to pick up the new PATH", 'warn')
+    if $? == 0;
+}
+
+# Pure: the env file with exactly one PATH line (ours, last), every other line
+# kept in order. undef when the file already is exactly that.
+sub _env_with_runtime_path {
+  my ($current) = @_;
+  $current //= '';
+  my @keep = grep { !/^\s*PATH=/ } split /\n/, $current;
+  my $content = join('', map { $_."\n" } @keep, $RUNTIME_PATH_LINE);
+  return $content eq $current ? undef : $content;
 }
 
 #

@@ -25,12 +25,14 @@ my %PATHS = (
     config_file => '/etc/rancher/rke2/config.yaml',
     registries_file => '/etc/rancher/rke2/registries.yaml',
     service => 'rke2-agent.service',
+    env_file => '/etc/default/rke2-agent',
   },
   k3s => {
     config_dir => '/etc/rancher/k3s',
     config_file => '/etc/rancher/k3s/config.yaml',
     registries_file => '/etc/rancher/k3s/registries.yaml',
     service => 'k3s-agent.service',
+    # No env_file: see Rex::Rancher::Server::_nvidia_runtime_path.
   },
 );
 
@@ -97,6 +99,15 @@ Private registry mirror configuration hashref. Same structure as
 L<Rex::Rancher::Server/install_server>'s C<registries> option. Written to
 C<registries.yaml> in the distribution config directory.
 
+=item C<nvidia_runtime_path>
+
+If true, and C<nvidia-container-runtime> is on the host's C<PATH>, write a
+C<PATH=> line to C</etc/default/rke2-agent> before the installer runs, so rke2
+finds a host-installed NVIDIA runtime at service start. Same behaviour as
+L<Rex::Rancher::Server/install_server>'s C<nvidia_runtime_path>; no effect on
+k3s. Default: C<0>; L<Rex::Rancher/rancher_deploy_agent> turns it on for
+C<gpu =E<gt> 1, gpu_setup =E<gt> 0>.
+
 =back
 
   install_agent(
@@ -123,6 +134,8 @@ sub install_agent {
 
   _write_config($paths, $distribution, %opts);
   _write_registries($paths, %opts);
+  # Before the installer and the first start, as on the server.
+  Rex::Rancher::Server::_nvidia_runtime_path($paths) if $opts{nvidia_runtime_path};
   _run_installer($distribution, $version, $server, $method);
   Rex::Rancher::Server::_verify_installed_version($distribution, $version);
   _enable_service($paths);
