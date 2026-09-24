@@ -23,7 +23,7 @@ clone). House rules and the delegation lock: `.claude/rules/rex-rancher-rules.md
 ## Build and test
 
 ```bash
-prove -lr t/        # only t/00-load.t today — a compile check, not a deploy proof
+prove -lr t/        # compile check + offline unit tests (run faked) — not a deploy proof
 dzil build
 dzil test
 ```

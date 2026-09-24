@@ -81,12 +81,21 @@ Never assume `file`/`upload` can rely on SFTP here. Connection backends and why:
 These look like sloppy error handling and are deliberate; each exists because the naive
 version broke a real deploy:
 
-- **Cilium re-deploy** (`install_cilium`): `cilium install` runs with `auto_die => 0`,
-  and output matching `/cannot re-use a name/i` is swallowed as success — the Helm
-  release already exists. Removing this makes every re-run of a deploy fail.
-- **RKE2 installer** (`_install_rke2`): `curl … | sh -` runs with `auto_die => 0`
-  because the script prints GPG key-import noise to STDERR (seen on Rocky 10); success is
-  confirmed separately with `command -v rke2`, and *that* missing is the real failure.
+- **Cilium re-deploy** (`install_cilium`): with a local `kubeconfig` the Helm release
+  Secrets are read and `_release_action` picks install / noop / upgrade / reinstall, or
+  dies on `pending-upgrade`/`pending-rollback` (the deployed revision still carries the
+  pod network). Only *without* `kubeconfig` does `cilium install` still run with
+  `auto_die => 0` and swallow `/cannot re-use a name/i` as success — removing that makes
+  every re-run without `kubeconfig_file` fail. `rancher_deploy_server` passes the
+  kubeconfig only once `wait_for_api` answered.
+- **RKE2 installer** (`_install_rke2`, `install_method => 'script'`): `curl … | sh -` runs
+  with `auto_die => 0` because the script prints GPG key-import noise to STDERR (seen on
+  Rocky 10); success is confirmed with `command -v rke2` and, when `version` is pinned,
+  `_verify_installed_version` (a failed pinned upgrade leaves the old binary). The
+  `artifact` method uses the tarball path (no GPG import) and runs with `auto_die => 1`.
+- **Secrets on disk**: `config.yaml` (join token) and `registries.yaml` go through
+  `_write_secret_file` (0600 root:root, pre-created Rex tmp file). The token never goes
+  on an installer command line (`ps`), for either distribution.
 - **Fresh Hetzner boot** (`_install_base_packages`): on Debian/Ubuntu, `unattended-upgrades`
   and the `apt-daily` timers are stopped first, then `apt-get update` runs with
   `-o DPkg::Lock::Timeout=120` and `auto_die => 0`. `DPkg::Lock::Timeout` covers only the
@@ -101,8 +110,12 @@ disabling the bundled CNI without installing Cilium leaves the cluster with no n
 
 ## Options that have sharp edges
 
-- `token` — auto-generated (`_generate_token`, must be ≥32 chars) when omitted; a worker
-  join needs the *same* token, fetched with `get_token`.
+- `token` — when omitted, the host's existing `server/token` is reused
+  (`_resolve_token`); only a fresh server gets `_generate_token` (≥32 chars). Rotating
+  it on a live control plane kills the next restart ("encrypted with different token").
+  A worker join needs the *same* token, fetched with `get_token`.
+- `version` — the RKE2/K3s version. Cilium's is `cilium_version` on
+  `rancher_deploy_server`; never reuse `version` for it.
 - `tls_san` — accepts a string, comma-separated list, or arrayref; **the first entry
   doubles as the kubeconfig server address** in step 5. A missing/oddly-ordered `tls_san`
   produces a kubeconfig still pointing at `127.0.0.1`.
@@ -124,11 +137,12 @@ connection types, `run`/`pkg`/`auto_die`: skill `rex`.
 ## Verification
 
 ```bash
-prove -lr t/        # -r so any future t/ subdirs run; today only t/00-load.t
+prove -lr t/        # -r so any future t/ subdirs run
 ```
 
-`t/00-load.t` is a **compile check only** — it proves the six modules load, nothing about
-a deploy. There is no integration test and no way to exercise a real install without a
+`t/00-load.t` is a compile check; the other files are offline unit tests of the pure
+parts (config builders, installer command strings, release decisions) with `run`/`file`
+replaced by fakes (pattern: `t/token.t`). None of it says anything about a deploy. There is no integration test and no way to exercise a real install without a
 throwaway host. A green suite here is not evidence that a pipeline change works; a change
 to install ordering, the kubeconfig patch, or the K8s API objects can only be trusted
 after a live deploy against a real node (see `eg/hetzner-gpu.Rexfile`). Say plainly that

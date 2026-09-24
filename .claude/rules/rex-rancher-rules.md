@@ -49,15 +49,15 @@ key, or a `K8s.pm` API object. `README.md` and `Changes` wording are not.
 Every install function runs an OS installer, `modprobe`, `swapoff` and `systemctl` on a
 remote host as root, then drives its Kubernetes API. A wrong step order or a swallowed
 error leaves a half-provisioned node, not a red test. The `auto_die => 0` sites are
-deliberate — the Cilium "cannot re-use a name" swallow, the RKE2 `command -v rke2` verify,
-the unattended-upgrades stop before `apt-get` — each exists because the strict version
-broke a real deploy. Don't tighten one without naming the failure it re-opens. Details:
+deliberate — the Cilium "cannot re-use a name" swallow (now only without a kubeconfig),
+the RKE2 `command -v rke2` verify, the unattended-upgrades stop before `apt-get` — each
+exists because the strict version broke a real deploy. Don't tighten one without naming the failure it re-opens. Details:
 skill `rex-rancher-core`.
 
-## A green suite proves compilation, not a deploy
+## A green suite proves the pure logic, not a deploy
 
-`t/` holds only `t/00-load.t` — a compile check on the six modules. There is no
-integration test and no way to exercise a real install without a throwaway host. Never
+`t/` holds a compile check (`t/00-load.t`) and offline unit tests with `run` faked.
+There is no integration test and no way to exercise a real install without a throwaway host. Never
 report green as evidence for a pipeline change; a change to install ordering, the
 `127.0.0.1` kubeconfig patch, or a `K8s.pm` object is only trustworthy after a live run
 against a real node (`eg/hetzner-gpu.Rexfile`).
