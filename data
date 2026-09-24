@@ -1,0 +1,19 @@
+---
+claimed_at: 2026-09-24T20:19:26Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T20:19:26Z
+created: 2026-09-24T20:14:32Z
+id: 39
+priority: low
+started: 2026-09-24T20:17:06Z
+status: done
+tags:
+- k3s
+title: k3s server install still blocks on the script's own restart
+updated: 2026-09-24T20:19:26Z
+---
+
+k36 ported kubernetes-ocp k185 for k3s agents only (INSTALL_K3S_SKIP_START + restart --no-block + _wait_for_service). The k3s server installer (_k3s_server_install_cmd, _k3s_artifact_install_cmd role server) still lets get.k3s.io run its blocking systemctl restart of the Type=notify k3s unit; an HA join (server => ...) that cannot reach its first server hangs the deploy without timeout. OCP did not change this either (k185 note: "Not touched: k3s SERVER installer"). Done: same SKIP_START + restart --no-block for the server, _wait_for_service already follows; offline tests; needs a live k3s run. Found while working k36.
+
+Committed e41aa06. rke2 server already non-blocking (installer does not start it; start --no-block + wait), left as is. Offline only; needs a live k3s server run incl. an HA join.
