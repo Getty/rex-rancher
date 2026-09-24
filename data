@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-24T17:50:34Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T17:50:34Z
+created: 2026-09-24T17:42:54Z
+id: 30
+priority: medium
+started: 2026-09-24T17:43:48Z
+status: done
+title: Doc fixes from pre-release doc audit (lib/ POD)
+updated: 2026-09-24T17:50:34Z
+---
+
+From the 0b97665 doc audit: KPR/cni:none rke2-only in Server.pm Config layout, Cilium.pm Prerequisites; Agent.pm synopsis registry_cache (nonexistent); Rancher.pm rancher_deploy_agent "same as server" misleading (list what install_agent really takes); rancher_deploy_server missing locale/ntp/server; wait_for_api timeout behaviour; Node.pm step list missing unattended-upgrades/apt-daily stop; Node.pm synopsis hostname/locale comment; Rancher.pm DESCRIPTION cilium step qualifiers; internal karr refs in POD/runtime warning; token 48 chars wording; Cilium.pm synopsis JSON()->true import; K8s.pm nvidia runtime credit with gpu_setup => 0; K8s.pm kubeconfig "absolute path"; node_name listed twice.
+
+2026-09-24 17:48 All listed POD fixes applied in lib/; karr refs removed; drift -> k34, k35. Uncommitted.
