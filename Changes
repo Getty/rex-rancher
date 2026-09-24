@@ -1,5 +1,7 @@
 Revision history for Rex-Rancher
 
+{{$NEXT}}
+
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
     gets cni: none and disable-kube-proxy; k3s now gets flannel-backend:
