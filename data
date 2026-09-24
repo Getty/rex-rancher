@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-24T17:50:43Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T17:50:43Z
+created: 2026-09-24T17:42:59Z
+id: 31
+priority: high
+started: 2026-09-24T17:43:43Z
+status: done
+title: 'eg/: drop stale material (DEPLOY-CHECKLIST, broken Rexfile tasks)'
+updated: 2026-09-24T17:50:43Z
+---
+
+Maintainer: remove outdated stuff under eg/ for now. DEPLOY-CHECKLIST.md stale since k5/k14/k17. hetzner-gpu.Rexfile: prepare/rke2/add_registry/get_token call non-exported functions, rke2 never writes kubeconfig, header names wrong file, status cilium command uses local KUBECONFIG path remotely.
+
+eg cleanup done in working tree (uncommitted): DEPLOY-CHECKLIST.md removed, broken Rexfile tasks removed, header/status/gpu_status fixed. Orchestrator: README:69 link + Changes bullet (Changes line 65 still announces DEPLOY-CHECKLIST under {{$NEXT}}?).
