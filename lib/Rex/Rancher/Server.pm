@@ -26,18 +26,20 @@ use vars qw(@EXPORT);
 
 my %PATHS = (
   rke2 => {
-    config_dir  => '/etc/rancher/rke2/',
-    service     => 'rke2-server',
-    install_url => 'https://get.rke2.io',
-    kubeconfig  => '/etc/rancher/rke2/rke2.yaml',
-    token_file  => '/var/lib/rancher/rke2/server/node-token',
+    config_dir   => '/etc/rancher/rke2/',
+    service      => 'rke2-server',
+    install_url  => 'https://get.rke2.io',
+    kubeconfig   => '/etc/rancher/rke2/rke2.yaml',
+    token_file   => '/var/lib/rancher/rke2/server/node-token',
+    server_token => '/var/lib/rancher/rke2/server/token',
   },
   k3s => {
-    config_dir  => '/etc/rancher/k3s/',
-    service     => 'k3s',
-    install_url => 'https://get.k3s.io',
-    kubeconfig  => '/etc/rancher/k3s/k3s.yaml',
-    token_file  => '/var/lib/rancher/k3s/server/node-token',
+    config_dir   => '/etc/rancher/k3s/',
+    service      => 'k3s',
+    install_url  => 'https://get.k3s.io',
+    kubeconfig   => '/etc/rancher/k3s/k3s.yaml',
+    token_file   => '/var/lib/rancher/k3s/server/node-token',
+    server_token => '/var/lib/rancher/k3s/server/token',
   },
 );
 
@@ -77,8 +79,15 @@ so on k3s kube-proxy and the default CNI are left in place.
 
 =item C<token>
 
-Shared secret used for node joining. Auto-generated (48 random base64 chars)
-if omitted.
+Shared secret used for node joining. If omitted, the token the server is
+already sealed with (C</var/lib/rancher/rke2/server/token>, K3s:
+C</var/lib/rancher/k3s/server/token>) is reused, so re-running
+C<install_server> on a live control plane never rotates its token. Only on a
+fresh server (no such file) is a new one generated (48 random base64 chars).
+A passed C<token> always wins.
+
+The token is written to C<config.yaml> only; it is never put on the installer
+command line or into its environment, where C<ps> would show it.
 
 =item C<server>
 
@@ -144,7 +153,7 @@ sub install_server {
       . "Cilium kube-proxy replacement is skipped on k3s (see karr #5).", "warn")
     if $distribution eq 'k3s';
   my $paths        = _paths($distribution);
-  my $token        = $opts{token} // _generate_token();
+  my $token        = _resolve_token($paths, $opts{token});
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
   my $node_labels  = $opts{node_labels};
@@ -166,7 +175,7 @@ sub install_server {
 
   # Install and start
   if ($distribution eq 'k3s') {
-    _install_k3s($paths, $token, $server);
+    _install_k3s($paths, $server);
   }
   else {
     _install_rke2($paths);
@@ -301,6 +310,31 @@ sub get_token {
   return $content;
 }
 
+# Never rotate the token a control plane is already sealed with: the datastore
+# encryption key derives from it at bootstrap and is only re-checked at the
+# NEXT start, so a fresh token in config.yaml arms a fatal "bootstrap data
+# already found and encrypted with different token" on the next restart.
+sub _resolve_token {
+  my ($paths, $given) = @_;
+  return $given if defined $given;
+  my $existing = _existing_server_token($paths);
+  if (defined $existing) {
+    Rex::Logger::info("Reusing existing cluster token from " . $paths->{server_token});
+    return $existing;
+  }
+  return _generate_token();
+}
+
+# Read over the exec channel (no SFTP). A missing or unreadable file means
+# "fresh server" and degrades to undef; it must never abort the install.
+sub _existing_server_token {
+  my ($paths) = @_;
+  my $out = run "cat " . $paths->{server_token} . " 2>/dev/null", auto_die => 0;
+  return unless $? == 0 && defined $out;
+  $out =~ s/\s+\z//;
+  return length $out ? $out : undef;
+}
+
 sub _generate_token {
   my $token = run "head -c 36 /dev/urandom | base64 | tr -d '\\n/+='  | head -c 48",
     auto_die => 0;
@@ -400,27 +434,28 @@ sub _install_rke2 {
 #
 
 sub _install_k3s {
-  my ($paths, $token, $server) = @_;
+  my ($paths, $server) = @_;
 
   Rex::Logger::info("Installing K3s via install script...");
 
-  my @env;
-  push @env, "K3S_TOKEN=$token";
-
-  if ($server) {
-    push @env, "K3S_URL=$server";
-  }
-
-  my $env_str = join(" ", @env);
-  my $cmd = "curl -sfL " . $paths->{install_url}
-    . " | $env_str sh -s - server"
-    . " --disable=traefik"
-    . " --disable=servicelb"
-    . " --write-kubeconfig-mode=644";
+  # No K3S_TOKEN here: the token is already in config.yaml (written before the
+  # installer runs, same as rke2), and anything on this line shows up in ps.
+  my $cmd = _k3s_server_install_cmd($paths, $server);
 
   run $cmd, auto_die => 1;
 
   _wait_for_kubeconfig($paths);
+}
+
+sub _k3s_server_install_cmd {
+  my ($paths, $server) = @_;
+
+  my $env_str = $server ? "K3S_URL=$server " : '';
+  return "curl -sfL " . $paths->{install_url}
+    . " | ${env_str}sh -s - server"
+    . " --disable=traefik"
+    . " --disable=servicelb"
+    . " --write-kubeconfig-mode=644";
 }
 
 #
@@ -513,8 +548,9 @@ the caller using L<Rex::Rancher::K8s/wait_for_api>.
 
 =head2 K3s installation
 
-The official install script at L<https://get.k3s.io> is used with
-C<K3S_TOKEN> and optionally C<K3S_URL> environment variables. Traefik and
+The official install script at L<https://get.k3s.io> is used, with
+C<K3S_URL> set when joining an existing server. The token is read from
+C<config.yaml> and never passed on the command line. Traefik and
 ServiceLB are disabled by default to leave room for Cilium and external
 load balancers.
 

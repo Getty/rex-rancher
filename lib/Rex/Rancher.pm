@@ -102,7 +102,10 @@ Timezone string, e.g. C<Europe/Berlin>. Default: C<UTC>.
 
 =item C<token>
 
-Shared cluster secret used for node joining. Auto-generated if omitted.
+Shared cluster secret used for node joining. If omitted, the token of an
+already-installed server on the host is reused (a re-run never rotates it);
+only a fresh server gets a generated one. See
+L<Rex::Rancher::Server/install_server>.
 
 =item C<tls_san>
 

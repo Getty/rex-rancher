@@ -108,7 +108,7 @@ sub install_agent {
 
   _write_config($paths, $distribution, %opts);
   _write_registries($paths, %opts);
-  _run_installer($distribution, $version, $server, $token);
+  _run_installer($distribution, $version, $server);
   _enable_service($paths);
 
   Rex::Logger::info("$distribution agent installed and running");
@@ -145,25 +145,30 @@ sub _write_registries {
 }
 
 sub _run_installer {
-  my ($distribution, $version, $server, $token) = @_;
+  my ($distribution, $version, $server) = @_;
 
   Rex::Logger::info("Running $distribution agent installer");
+
+  run _installer_cmd($distribution, $version, $server), auto_die => 1;
+}
+
+# The token is NOT passed here for either distribution: _write_config has
+# already put it into config.yaml, and anything on this line shows up in ps.
+sub _installer_cmd {
+  my ($distribution, $version, $server) = @_;
 
   if ($distribution eq 'k3s') {
     my @env;
     push @env, "K3S_URL=$server";
-    push @env, "K3S_TOKEN=$token";
     push @env, "INSTALL_K3S_VERSION=$version" if $version;
     my $env = join(" ", @env);
-    run "curl -sfL https://get.k3s.io | $env sh -s - agent", auto_die => 1;
+    return "curl -sfL https://get.k3s.io | $env sh -s - agent";
   }
-  else {
-    my @env;
-    push @env, "INSTALL_RKE2_TYPE=agent";
-    push @env, "INSTALL_RKE2_VERSION=$version" if $version;
-    my $env = join(" ", @env);
-    run "curl -sfL https://get.rke2.io | $env sh -", auto_die => 1;
-  }
+  my @env;
+  push @env, "INSTALL_RKE2_TYPE=agent";
+  push @env, "INSTALL_RKE2_VERSION=$version" if $version;
+  my $env = join(" ", @env);
+  return "curl -sfL https://get.rke2.io | $env sh -";
 }
 
 sub _enable_service {
@@ -223,7 +228,9 @@ node for either RKE2 or K3s. It handles:
 
 For RKE2 the installer is fetched from L<https://get.rke2.io> with
 C<INSTALL_RKE2_TYPE=agent>. For K3s the installer from L<https://get.k3s.io>
-is used with C<K3S_URL> and C<K3S_TOKEN> environment variables.
+is used with the C<K3S_URL> environment variable. For both distributions the
+token is read from C<config.yaml> and never passed on the installer command
+line, where C<ps> would show it.
 
 Registry configuration uses the same YAML structure and helper as
 L<Rex::Rancher::Server>, so mirrors configured for the server are directly
