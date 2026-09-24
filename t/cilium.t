@@ -154,6 +154,15 @@ subtest 'gateway_api sets gatewayAPI.enabled' => sub {
   ok( $v->{gatewayAPI}{enabled}, 'gatewayAPI.enabled true' );
 };
 
+subtest 'gateway_api_channel defaults to experimental' => sub {
+  my $r = $C->can('_resolve_opts');
+  my %gw = ( gateway_api => 1, gateway_api_version => 'v1.2.0', kubeconfig => '/kc' );
+  is( $r->( distribution => 'rke2', %gw )->{gateway_api_channel}, 'experimental',
+    'no channel: experimental (keeps TLSRoute for Cilium <= 1.19)' );
+  is( $r->( distribution => 'rke2', %gw, gateway_api_channel => 'standard' )->{gateway_api_channel},
+    'standard', 'explicit standard kept' );
+};
+
 subtest 'option validation dies before touching the host' => sub {
   my $r = $C->can('_resolve_opts');
   my %gw = ( gateway_api => 1, gateway_api_version => 'v1.2.0', kubeconfig => '/kc' );

@@ -173,10 +173,20 @@ C<version> supports; there is no default because the two are version-locked.
 
 =item C<gateway_api_channel>
 
-C<experimental> (default) or C<standard>. Cilium requires C<TLSRoute>, which
-only the experimental channel carries. Gateway API v1.5+ ships an admission
-policy that refuses experimental CRDs on top of standard ones, so a cluster
-keeps the channel it started with.
+C<experimental> (default) or C<standard>. What Cilium needs depends on both
+versions. Cilium up to 1.16 requires C<TLSRoute> v1alpha2, which only the
+experimental channel carries. Cilium 1.17 to 1.19 require standard-channel
+CRDs only and handle C<TLSRoute> v1alpha2 when it is there; before Gateway
+API v1.5 the standard channel has no C<TLSRoute>, so C<standard> costs TLS
+passthrough. Gateway API v1.5 moved C<TLSRoute> (as v1) into the standard
+channel, v1.6 also C<TCPRoute> and C<UDPRoute>; Cilium 1.20 requires
+C<TLSRoute> v1 and C<BackendTLSPolicy> v1, which the v1.5+ standard channel
+carries. The default stays C<experimental> so the default Cilium keeps
+C<TLSRoute>.
+
+Gateway API v1.5+ ships an admission policy that refuses experimental CRDs
+on top of standard ones: a cluster that started on C<standard> cannot move
+to C<experimental>.
 
 =back
 
