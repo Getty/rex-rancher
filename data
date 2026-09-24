@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-09-24T13:34:36Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T14:39:46Z
+created: 2026-09-24T04:09:17Z
+id: 24
+priority: medium
+started: 2026-09-24T13:32:33Z
+status: done
+title: 'Rex::GPU downstream: document k49 (B200/B300 NVLink warning) and k24 (vGPU
+  guest detection) for gpu => 1'
+updated: 2026-09-24T14:39:46Z
+---
+
+Aus dem Rex::GPU Pre-Release-Audit (0.002, main f53c97a): Rancher.pm/README/Changes wurden in bf69987 (05:10) fuer die generation-basierte Compute-Klassifizierung (k45/k54/k55) synchronisiert. Zwei spaetere Rex::GPU-Tickets sind dort noch NICHT dokumentiert:
+
+- k49 (75cf4f5, 05:43): install_driver warnt jetzt einmalig auf HGX B200/B300 (Device-ID 2901/2909/3182), dass die NVLink-Fabric (Fabric Manager, nvlsm, OFED, Kernel >=5.17) fehlt, bzw. gibt auf GB200/GB300 (2941/31c2/31c3) einen IMEX-Hinweis. Kein Verhaltensbruch fuer gpu => 1, aber ein neuer Log-/Warnpfad, der die Rancher-Deploy-Ausgabe auf solchen Hosts aendert.
+
+- k24 (34e9534, 05:48): gpu_detect erkennt NVIDIA-vGPU-Gastgeraete (Azure NVadsA10 v5, AWS G6f, ...) per (Device-ID, Subsystem-ID). install_driver (und damit gpu_setup / Rancher gpu => 1) STIRBT jetzt VOR jeder Host-Aenderung, wenn ein vGPU-Gast ohne bereits funktionierenden (lizenzierten) Treiber erkannt wird -- auch gemischt mit einem Passthrough-GPU auf demselben Host. Das ist ein neuer Abbruchpfad fuer gpu => 1 auf Cloud-vGPU-Hosts, der noch nirgends in Rancher.pm/README dokumentiert ist.
+
+Vorschlag: wie bei k20/bf69987 einen kurzen POD-Abschnitt bzw. Bullet in Rancher.pm "GPU hardware support" und README ergaenzen, der beide Faelle nennt. Keine Code-Aenderung in Rex::GPU noetig; dies ist eine reine Downstream-Doku-Luecke.
+
+Filed by rex-gpu-release-checker as part of the Rex::GPU 0.002 pre-release audit (nicht freigegeben, kein Code hier geaendert).
+
+2026-09-24 13:34 Docs written (Rancher.pm GPU hardware support: 2 bullets; README GPU paragraph; Changes GPU bullet extended). Verified against rex-gpu 34e9534/75cf4f5 + HEAD. Uncommitted, awaiting review.
