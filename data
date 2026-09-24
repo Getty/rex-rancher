@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-09-24T20:15:42Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T20:15:42Z
+created: 2026-09-24T20:01:50Z
+id: 37
+priority: low
+started: 2026-09-24T20:06:10Z
+status: done
+title: 'rancher_deploy_server: kubeconfig fetch/save failure still yields misleading
+  gateway_api error'
+updated: 2026-09-24T20:15:42Z
+---
+
+After k35 a wait_for_api timeout dies cleanly, but when kubeconfig_file is given and _save_kubeconfig_locally returns undef (get_kubeconfig fails, local write fails) it only warns: wait_for_api is skipped, install_cilium runs without kubeconfig, and with gateway_api dies "gateway_api needs kubeconfig" although kubeconfig_file was given (the up-front _resolve_opts passed with kubeconfig_file). Device plugin is silently skipped under gpu => 1. Decide: die naming the failed fetch/write, same as the timeout. Found while working k35.
+
+2026-09-24 20:07 Done in 618e508: _save_kubeconfig_locally dies on fetch/empty/write failure; t/kubeconfig-save.t. Offline only; needs live run.
+
+Implemented, offline tests green, not live-run
