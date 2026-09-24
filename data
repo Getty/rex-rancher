@@ -1,0 +1,23 @@
+---
+claimed_at: 2026-09-24T20:15:38Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-24T20:15:38Z
+created: 2026-09-24T19:03:18Z
+id: 36
+priority: high
+started: 2026-09-24T20:07:37Z
+status: done
+tags:
+- k3s
+- cilium
+- escalated-from:kubernetes-ocp#178
+title: 'K3s: Cilium kube-proxy-Replacement + Gateway API wie in OCP (live verifiziert)'
+updated: 2026-09-24T20:15:38Z
+---
+
+Aus kubernetes-ocp k178 (live verifiziert 2026-09-24 auf 2 Debian-13-VMs, k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API v1.6.1 standard): K3s-Server-config.yaml mit flannel-backend: none, disable-network-policy: true, disable-kube-proxy: true, cluster-cidr: 10.42.0.0/16, disable: [traefik, servicelb], tls-san; Cilium mit kubeProxyReplacement=true, k8sServiceHost=<CP-Adresse> (NICHT localhost - Agents bedienen die API auf 127.0.0.1:6444), k8sServicePort=6443, ipam.operator.clusterPoolIPv4PodCIDRList=10.42.0.0/16. Ergebnis: 12/12 Pods Cilium-managed, GatewayClass accepted, Worker-Join ok. Rex::Rancher haelt auf k3s kube-proxy an und verweigert gateway_api -> fuer OCP-Integration (kubernetes-ocp k155) waere das ein Rueckschritt. Referenz: kubernetes-ocp share/Rexfile _k3s_server_config, _cilium_install_args, t/178-k3s-cilium.t. Ausserdem aus k185: Agent-Start mit --no-block + begrenzter Wartezeit statt blockierendem systemctl restart.
+
+2026-09-24 20:14 Done in b13cf2d: k3s config + Cilium KPR/cluster-pool/k8s_service_host (default first tls_san), gateway_api lifted, k3s agent SKIP_START + restart --no-block. Differs from OCP: Cilium default 1.17.0 (OCP 1.20.0), values via --helm-values incl. cni paths/operator.replicas/cni.exclusive, write-kubeconfig-mode on the installer line, gatewayAPI only with gateway_api. Offline only; needs live k3s run (server + agent).
+
+Implemented, offline tests green, not live-run
