@@ -66,13 +66,15 @@ saved kubeconfig once the API answered; without one, plain C<cilium install>)
 
 =back
 
-If the API does not answer within L<Rex::Rancher::K8s/wait_for_api>'s five
-minutes, that is only a warning: the pipeline carries on as if there were no
-saved kubeconfig for step 5, so C<install_cilium> takes its plain
-C<cilium install> path. With C<gateway_api> this then dies with
-"gateway_api needs kubeconfig", although C<kubeconfig_file> was given; the
-cause is the unreachable API (address, firewall, C<tls_san>), not the
-option. Step 6 still runs against the saved kubeconfig.
+If the API does not answer through the saved kubeconfig within
+L<Rex::Rancher::K8s/wait_for_api>'s five minutes, the deploy dies naming the
+address it tried: the distribution is installed and running, but Cilium and
+the device plugin are not, and the node stays C<NotReady> until a re-run
+(which reuses the token and picks up from there). The usual causes are the
+address (C<tls_san>, C<kubeconfig_server>), a firewall between this machine
+and port 6443, or a SAN missing from the certificate. Without
+C<kubeconfig_file> nothing is awaited and Cilium is installed through the
+remote host alone.
 
 Options:
 
@@ -322,8 +324,20 @@ sub rancher_deploy_server {
   my $local_kc = _save_kubeconfig_locally($distribution, $kubeconfig_file, %opts);
   my $api_up = $local_kc && wait_for_api(kubeconfig => $local_kc);
 
-  # Only an API that answered from here can report the Helm release state;
-  # otherwise install_cilium keeps its remote-only path.
+  # A saved kubeconfig whose API never answered: everything after needs that
+  # API (Helm release state, gateway_api, device plugin), so stop here rather
+  # than fall back to the remote-only Cilium path and fail later on a
+  # misleading error. The server itself is installed; a re-run picks up.
+  if ($local_kc && !$api_up) {
+    my $addr = _kubeconfig_server_addr(%opts) // '127.0.0.1';
+    die "Kubernetes API at $addr did not answer through $local_kc within "
+      . "wait_for_api's timeout; $distribution server is installed, Cilium "
+      . "and later steps did not run. Check that this machine reaches "
+      . "$addr:6443 (firewall, tls_san, kubeconfig_server), or omit "
+      . "kubeconfig_file to install Cilium through the remote host only\n";
+  }
+
+  # Without a saved kubeconfig install_cilium keeps its remote-only path.
   # cilium => 0: install_server kept Canal/Flannel, nothing to install here.
   install_cilium(%cilium_opts, $api_up ? ( kubeconfig => $local_kc ) : ()) if $cilium;
 
