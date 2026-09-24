@@ -57,7 +57,7 @@ The full pipeline for a GPU server deployment:
 =item 4. Fetch kubeconfig locally, patch C<127.0.0.1> to the real server address,
 save to C<kubeconfig_file>, wait for API with L<Rex::Rancher::K8s/wait_for_api>
 
-=item 5. C<install_cilium> — install Cilium CLI on remote, then install,
+=item 5. C<install_cilium> (skipped with C<cilium =E<gt> 0>) — install Cilium CLI on remote, then install,
 upgrade or leave Cilium alone according to its Helm release (read through the
 saved kubeconfig once the API answered; without one, plain C<cilium install>)
 
@@ -194,7 +194,11 @@ See L<Rex::Rancher::Server/install_server> for the structure.
 =item C<cilium>
 
 Whether to configure Cilium CNI. Default: C<1>. Set to C<0> to keep the
-distribution's built-in CNI (Canal for RKE2, Flannel for K3s).
+distribution's built-in CNI (Canal for RKE2, Flannel for K3s): the pipeline
+then skips L<Rex::Rancher::Cilium/install_cilium> entirely. Passing
+C<gateway_api>, C<cilium_version>, C<cilium_cli_version> or
+C<cilium_helm_values> together with C<cilium =E<gt> 0> dies before the node
+is touched.
 
 =item C<cilium_version>, C<cilium_cli_version>, C<cilium_helm_values>
 
@@ -239,8 +243,21 @@ sub rancher_deploy_server {
     ( map { exists $opts{$_} ? ( $_ => $opts{$_} ) : () }
         qw( gateway_api gateway_api_version gateway_api_channel ) ),
   );
-  # Refuse bad Cilium options before the node is touched, not at step 7.
-  Rex::Rancher::Cilium::_resolve_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
+  my $cilium = exists $opts{cilium} ? $opts{cilium} : 1;
+
+  # Refuse bad or contradictory Cilium options before the node is touched,
+  # not at step 7.
+  if ($cilium) {
+    Rex::Rancher::Cilium::_resolve_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
+  }
+  else {
+    my @set = (
+      ( $opts{gateway_api} ? 'gateway_api' : () ),
+      ( grep { defined $opts{$_} } qw( cilium_version cilium_cli_version cilium_helm_values ) ),
+    );
+    die "cilium => 0 keeps the distribution's built-in CNI, but @set "
+      . "configure Cilium: drop them or leave cilium on\n" if @set;
+  }
 
   _check_connection();
   prepare_node(%opts);
@@ -257,7 +274,8 @@ sub rancher_deploy_server {
 
   # Only an API that answered from here can report the Helm release state;
   # otherwise install_cilium keeps its remote-only path.
-  install_cilium(%cilium_opts, $api_up ? ( kubeconfig => $local_kc ) : ());
+  # cilium => 0: install_server kept Canal/Flannel, nothing to install here.
+  install_cilium(%cilium_opts, $api_up ? ( kubeconfig => $local_kc ) : ()) if $cilium;
 
   my %gpu_steps = _gpu_steps(%opts);
   if ($gpu_steps{device_plugin} && $local_kc) {

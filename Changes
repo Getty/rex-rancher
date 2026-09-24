@@ -1,6 +1,8 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - rancher_deploy_server with cilium => 0 skips install_cilium and keeps the
+    built-in CNI; cilium_* or gateway_api options alongside it die up front.
   - New gpu_setup and gpu_device_plugin options (default on) for gpu => 1:
     switch off the Rex::GPU host setup and/or the device plugin when the
     NVIDIA GPU Operator provides them; Rex::GPU is then not needed.
