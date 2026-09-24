@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-09-24T19:49:33Z
+claimed_by: main
+class: standard
+completed: 2026-09-24T19:49:33Z
+created: 2026-09-24T17:35:24Z
+id: 26
+priority: high
+started: 2026-09-24T19:49:33Z
+status: done
+title: 'cpanfile: Rex::LibSSH must be recommends, not requires'
+updated: 2026-09-24T19:49:33Z
+---
+
+cpanfile currently has:
+
+requires 'Rex::LibSSH', '0.004';
+
+This was deliberately changed from `recommends` to `requires` in commit a708642 ("Require Rex::LibSSH 0.004 host-key check, fix cpanfile deps"), but nothing under lib/ actually `use`s or `require`s Rex::LibSSH (checked: no hard use/require anywhere in lib/). It is invoked only indirectly, by the operators Rexfile via `set connection => "LibSSH"`, per the documented SFTP-less path (_check_connection in Rex::Rancher.pm dies with an actionable message pointing at Rex::LibSSH only when no SFTP subsystem is available and LibSSH was not selected).
+
+Making it a hard `requires` breaks installability for anyone deploying to a host that *does* have a working SFTP subsystem (the majority path outside Hetzner dedicated) - they would be forced to pull in Rex::LibSSH (and its Net::LibSSH/libssh C dependency) for no reason.
+
+Fix: change back to `recommends 'Rex::LibSSH', '0.004';` in cpanfile. Keep the 0.004 pin (matches the latest released CPAN version, GETTY/Rex-LibSSH-0.004.tar.gz - correct as-is).
+
+Found during pre-release audit at 0b97665. Assign to rex-rancher-worker.
