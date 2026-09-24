@@ -22,9 +22,9 @@ Revision history for Rex-Rancher
     so a re-run never rotates a live cluster's token. The token reaches K3s
     (server and agent) via config.yaml only, never the installer command line;
     config.yaml and registries.yaml are written 0600 root:root, re-runs too.
-  - Document gpu => 1 with newer Rex::GPU versions (new "GPU hardware
-    support" POD section): per-generation driver choice, passthrough VMs, and
-    the deploy aborting after node preparation on unsupported GPUs or OSes.
+  - Document gpu => 1 with newer Rex::GPU versions ("GPU hardware support"):
+    GeForce MX/GT/GTX 9xx and laptop GPUs now get a driver (and reboot),
+    Kepler-only nodes deploy without a GPU; unsupported mixes/OSes still die.
   - Fix K3s Service/ClusterIP routing: with cilium enabled the server config
     wrote cni:none + disable-kube-proxy:true for both distributions, but
     Cilium's kube-proxy replacement is wired for rke2 only, so on K3s

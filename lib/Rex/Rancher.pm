@@ -697,11 +697,22 @@ C<reboot>. Newer L<Rex::GPU> versions behave as follows:
 driver on Ubuntu; on Debian 12 and 13 the driver comes from NVIDIA's CUDA
 repository. Any other release or architecture makes C<gpu_setup> die.
 
-=item * B<Maxwell, Pascal, Volta> (e.g. P100, V100): pinned to the
-proprietary 580 driver branch.
+=item * B<Maxwell, Pascal, Volta> (e.g. P100, V100, GTX 9xx/10xx, GT 1030,
+GeForce MX): pinned to the proprietary 580 driver branch.
 
-=item * B<Kepler and older>: C<gpu_setup> dies. Earlier L<Rex::GPU> versions
-installed a non-working driver and the deploy carried on.
+=item * B<Which GPUs get a driver> is decided by generation, not by name:
+every Maxwell-or-newer GPU counts, consumer and laptop cards (GeForce MX,
+GT 1030, GTX 9xx, laptop RTX) included. Earlier L<Rex::GPU> versions skipped
+these, so a re-deploy with C<gpu =E<gt> 1> on such a node now installs the
+driver and, with C<reboot>, reboots it; afterwards the node reports
+C<nvidia.com/gpu>.
+
+=item * B<Kepler and older> (e.g. GT 710, GTX 7xx, Tesla K80/K40/K20): skipped
+with a warning, no driver is installed, and a newer GPU on the same host is
+still set up. A node whose only NVIDIA GPUs are Kepler no longer dies: the
+deploy carries on without a GPU, and step 6 deploys the device plugin, waits
+about two minutes for C<nvidia.com/gpu> and ends with a warning — pass
+C<gpu_device_plugin =E<gt> 0> (or leave out C<gpu>) for such a node.
 
 =item * B<VMs with a passed-through GPU> next to an emulated console are
 detected as GPU hosts and get the full GPU pipeline, including the driver
@@ -709,8 +720,9 @@ reboot — set C<reboot> accordingly.
 
 =item * B<Several compute GPUs>: the driver must satisfy all of them (Ada +
 V100 gives 580, Ada + B200 gives the open driver). If no driver fits (V100 +
-B200), or no package source serves the required driver for the OS (e.g.
-Debian 14 with Blackwell or V100), C<gpu_setup> dies.
+B200) and none is already installed, or no package source serves the
+required driver for the OS (e.g. Debian 14 with Blackwell or V100),
+C<gpu_setup> dies.
 
 =back
 
