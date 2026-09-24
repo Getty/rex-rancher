@@ -190,8 +190,9 @@ Kubernetes node name (C<node-name> in C<config.yaml>). Default: the hostname.
 
 Packaged components to switch off (C<disable> in C<config.yaml>). Default:
 C<rke2-ingress-nginx>, C<rke2-traefik> and C<rke2-traefik-crd> on rke2,
-C<traefik> and C<servicelb> on k3s; a given list replaces the default. See
-L<Rex::Rancher::Server/install_server>.
+C<traefik> and C<servicelb> on k3s; a given list replaces the default. With
+C<gateway_api> the rke2 default also holds C<rke2-gateway-api-crd> (see
+C<gateway_api> below). See L<Rex::Rancher::Server/install_server>.
 
 =item C<node_labels>
 
@@ -221,6 +222,14 @@ C<cli_version> and C<helm_values>.
 Passed to L<Rex::Rancher::Cilium/install_cilium> unchanged. C<gateway_api>
 needs C<kubeconfig_file> and is rke2-only; invalid Cilium options die before
 the node is touched.
+
+With C<gateway_api>, Cilium's CRDs have to be the only ones: RKE2 v1.37+
+would otherwise install its own C<rke2-gateway-api-crd> chart over them
+(older RKE2 ignores the name). Without a C<disable> of yours it is added to
+the default list; a C<disable> of yours that lacks it is used as given, with
+a warning. On a running cluster the change to C<config.yaml> takes effect
+only when C<rke2-server> restarts; until then
+L<Rex::Rancher::Cilium/install_cilium> dies while RKE2's release exists.
 
 =back
 
@@ -275,7 +284,7 @@ sub rancher_deploy_server {
 
   _gpu_setup_if_requested($distribution, %opts);
 
-  install_server(_install_opts(%opts));
+  install_server(_install_opts(%opts), _gateway_api_disable(%opts));
 
   # Fetch and save kubeconfig locally, then wait for the API from this machine.
   # install_server only waits for the kubeconfig file to appear on the remote;
@@ -485,6 +494,25 @@ sub _install_opts {
   my (%opts) = @_;
   my %steps = _gpu_steps(%opts);
   return ( %opts, nvidia_runtime_path => $opts{nvidia_runtime_path} // $steps{runtime_path} );
+}
+
+# gateway_api (rke2 only, validated earlier): RKE2 v1.37+'s own Gateway API
+# CRD chart must stay off, or it overwrites what install_cilium applies. The
+# default disable list gains it; a caller's own list is theirs to keep.
+sub _gateway_api_disable {
+  my (%opts) = @_;
+  return unless $opts{gateway_api} && ($opts{distribution} // 'rke2') eq 'rke2';
+
+  my $chart = 'rke2-gateway-api-crd';
+  my $disable = $opts{disable};
+  return ( disable => [ @{ Rex::Rancher::Server::_paths('rke2')->{disable} }, $chart ] )
+    unless defined $disable;
+
+  my @given = ref $disable eq 'ARRAY' ? @$disable : split(/,/, $disable);
+  Rex::Logger::info("gateway_api with a disable list lacking $chart: on RKE2 "
+    . "v1.37+ that chart overwrites the Gateway API CRDs Cilium relies on", 'warn')
+    unless grep { $_ eq $chart } @given;
+  return;
 }
 
 sub _gpu_setup_if_requested {

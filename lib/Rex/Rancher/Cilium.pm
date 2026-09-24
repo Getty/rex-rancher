@@ -39,6 +39,10 @@ use constant RELEASE_NAMESPACE => 'kube-system';
 # version and channel that were last applied.
 use constant GATEWAY_API_PROBE_CRD => 'gateways.gateway.networking.k8s.io';
 
+# RKE2 v1.37+ ships the Gateway API CRDs as its own Helm chart; the release
+# lives in RELEASE_NAMESPACE like Cilium's.
+use constant RKE2_GATEWAY_API_RELEASE => 'rke2-gateway-api-crd';
+
 # Keys that wire Cilium's kube-proxy replacement. RKE2 only: the K3s server
 # config keeps kube-proxy (Rex::Rancher::Server::_build_server_config).
 my @KPR_KEYS = qw( kubeProxyReplacement k8sServiceHost k8sServicePort );
@@ -152,6 +156,15 @@ applied through L<Kubernetes::REST> (no C<kubectl>). They are skipped when
 the cluster already carries that bundle version and channel; when they are
 applied to a cluster with a running C<cilium-operator>, the operator is
 restarted so it picks up the new CRDs.
+
+RKE2 v1.37+ ships the same CRDs as its own chart, C<rke2-gateway-api-crd>,
+which would overwrite them. L<Rex::Rancher/rancher_deploy_server> disables it
+for you; calling this directly, put it in C<install_server>'s C<disable>.
+While that chart's Helm release exists this dies before applying anything,
+naming the way out: disable the chart and restart C<rke2-server> (Helm
+uninstalls it but keeps its C<gateway.networking.k8s.io> CRDs, so Gateways
+and routes survive), or use RKE2's CRDs via C<helm_values> without
+C<gateway_api>.
 
 =item C<gateway_api_version>
 
@@ -388,12 +401,13 @@ sub _api {
   )->api;
 }
 
+# The release named $name (default: Cilium's), or undef when there is none.
 sub _read_release {
-  my ($api) = @_;
+  my ($api, $name) = @_;
 
   my $list = $api->list('Secret',
     namespace     => RELEASE_NAMESPACE,
-    labelSelector => 'owner=helm,name=' . RELEASE_NAME,
+    labelSelector => 'owner=helm,name=' . ($name // RELEASE_NAME),
   );
 
   return _release_from_secrets([ map {
@@ -591,6 +605,8 @@ sub _ensure_gateway_api_crds {
   my ($api, $o) = @_;
   my ($version, $channel) = @{$o}{qw( gateway_api_version gateway_api_channel )};
 
+  _refuse_rke2_gateway_api_chart($api);
+
   my $probe = eval { $api->get('CustomResourceDefinition', GATEWAY_API_PROBE_CRD) };
   my $annotations = $probe ? $probe->metadata->annotations : undef;
 
@@ -619,6 +635,25 @@ sub _ensure_gateway_api_crds {
 
   Rex::Logger::info("Gateway API CRDs $version ($channel) applied");
   return 1;
+}
+
+# Two owners would take the CRDs from each other: RKE2's chart applies with
+# take-ownership and force-conflicts once pods can run (after Cilium), and
+# its safe-upgrades policy then refuses our experimental bundle. Only a live
+# release counts: disabling the chart uninstalls it but keeps the CRDs
+# (helm.sh/resource-policy: keep), Helm annotations and all.
+sub _refuse_rke2_gateway_api_chart {
+  my ($api) = @_;
+  my $release = _read_release($api, RKE2_GATEWAY_API_RELEASE) or return;
+
+  die "The Gateway API CRDs belong to RKE2's Helm release "
+    . RKE2_GATEWAY_API_RELEASE . " ($release->{status}, chart "
+    . ($release->{chart_version} // 'unknown') . "), which would overwrite "
+    . "what gateway_api applies. Add " . RKE2_GATEWAY_API_RELEASE
+    . " to disable and restart rke2-server: the chart is uninstalled, its "
+    . "gateway.networking.k8s.io CRDs (and the Gateways and routes) are "
+    . "kept. Or drop gateway_api "
+    . "and set gatewayAPI.enabled in helm_values to use RKE2's CRDs.\n";
 }
 
 sub _wait_crd_established {
