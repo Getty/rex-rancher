@@ -769,11 +769,16 @@ C<gpu_setup> dies.
 
 =back
 
-Such a die happens before C<gpu_setup> changes anything on the host, and it
-is not caught: L</rancher_deploy_server> and L</rancher_deploy_agent> abort
-with it. It does, however, come after L<Rex::Rancher::Node/prepare_node> has
-already run, so base packages, hostname, timezone, locale, swap, kernel
-modules and sysctl are already changed; no Kubernetes distribution has been
+Such a die comes before any driver package is installed. At most
+C<pciutils> has been installed for detection (when C<lspci> was missing),
+unless the missing package source only shows once the package index is
+refreshed (e.g. Ubuntu, where no fitting driver package is found): then the
+package sources have already been prepared (C<apt-get update>, repositories
+added or enabled). The die is not caught: L</rancher_deploy_server> and
+L</rancher_deploy_agent> abort with it. It does, however, come after
+L<Rex::Rancher::Node/prepare_node> has already run, so base packages,
+hostname, timezone, locale, swap, kernel modules and sysctl are already
+changed; no Kubernetes distribution has been
 installed yet. See L<Rex::GPU> for the details of detection and driver
 selection.
 
