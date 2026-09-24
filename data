@@ -1,0 +1,14 @@
+---
+class: standard
+completed: 2026-09-24T04:09:11Z
+created: 2026-09-24T04:07:53Z
+id: 23
+priority: low
+started: 2026-09-24T04:09:11Z
+status: done
+title: 'kubernetes-cilium-concepts skill: TLSRoute/TCPRoute/UDPRoute channel claim
+  stale for Gateway API v1.5+'
+updated: 2026-09-24T04:09:11Z
+---
+
+SKILL.md line 31 says the experimental set adds TCP/UDP/TLSRoute. Gateway API v1.5.0 standard-install.yaml carries tlsroutes (v1, channel standard); v1.6.x standard also carries tcproutes/udproutes (v1). Also Cilium 1.20 requires TLSRoute v1 + BackendTLSPolicy v1 (operator/pkg/gateway-api/helpers/schemes.go RequiredGVKs), 1.17-1.19 treat TLSRoute v1alpha2 as optional, <=1.16 require it. Shared hardlinked skill: fix at the source per manage-skills, not in this repo copy.
