@@ -607,7 +607,12 @@ sub _install_k3s {
   }
   _verify_installed_version('k3s', $version);
 
-  # The K3s install script starts the service itself.
+  # INSTALL_K3S_SKIP_START: the script's own `systemctl restart` of the
+  # Type=notify unit blocks until k3s is up, forever for an HA join that
+  # cannot reach its first server. Restart (a re-run still picks up a new
+  # binary and config.yaml) with --no-block, then the bounded wait.
+  run "systemctl enable " . $paths->{service}, auto_die => 1;
+  run "systemctl restart --no-block " . $paths->{service}, auto_die => 1;
   _wait_for_service($paths->{service});
   _wait_for_kubeconfig($paths);
 }
@@ -620,6 +625,7 @@ sub _k3s_server_install_cmd {
   my @env;
   push @env, "K3S_URL=$server"              if $server;
   push @env, "INSTALL_K3S_VERSION=$version" if $version;
+  push @env, 'INSTALL_K3S_SKIP_START=true';   # started by _install_k3s
   my $env_str = join('', map { "$_ " } @env);
   return "curl -sfL " . $paths->{install_url}
     . " | ${env_str}sh -s - server"
@@ -860,8 +866,8 @@ sub _k3s_artifact_install_cmd {
   push @env, "K3S_URL=$server" if $server;
   push @env, 'INSTALL_K3S_SKIP_DOWNLOAD=binary', 'INSTALL_K3S_BIN_DIR=/usr/local/bin',
     "INSTALL_K3S_VERSION=$version";
-  # Agent: no start from the script, see Rex::Rancher::Agent::_installer_cmd.
-  push @env, 'INSTALL_K3S_SKIP_START=true' if $role eq 'agent';
+  # No start from the script, server or agent: see _install_k3s.
+  push @env, 'INSTALL_K3S_SKIP_START=true';
   my $cmd = join(' ', @env) . " sh $spec->{script} $role";
   $cmd .= ' --write-kubeconfig-mode=644' if $role eq 'server';
   return $cmd;
@@ -1030,8 +1036,11 @@ caller using L<Rex::Rancher::K8s/wait_for_api>.
 The official install script at L<https://get.k3s.io> is used (piped, or run
 against the checksum-verified binary with C<install_method =E<gt>
 'artifact'>), with C<K3S_URL> set when joining an existing server. The
-script starts the service; the same C<systemctl is-active> wait with journal
-diagnosis as for RKE2 follows, then the kubeconfig wait. The token is read from
+script runs with C<INSTALL_K3S_SKIP_START>: instead of its own blocking
+restart, C<k3s.service> is restarted with C<--no-block>, then the same
+C<systemctl is-active> wait (at most 10 minutes, journal tail on failure) as
+for RKE2 follows, so a joining server that cannot reach the first one dies
+instead of hanging the deploy. Then the kubeconfig wait. The token is read from
 C<config.yaml> and never passed on the command line. Traefik and
 ServiceLB are disabled by default (C<disable> in C<config.yaml>, see
 L</install_server>) to leave room for Cilium and external load balancers.

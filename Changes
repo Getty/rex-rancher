@@ -15,9 +15,9 @@ Revision history for Rex-Rancher
     cilium_*/gateway_api/k8s_service_host options with it die. K3s carries
     the configuration kubernetes-ocp verified live but is not yet run live
     through Rex::Rancher; RKE2 is the supported distribution.
-  - k3s agents are no longer started by the install script (its blocking
-    restart hung on an unreachable server) but restarted with --no-block
-    and waited on for at most 10 minutes, like rke2.
+  - k3s servers and agents are no longer started by the install script
+    (its blocking restart hung on an unreachable server) but restarted with
+    --no-block and waited on for at most 10 minutes, like rke2.
   - install_cilium reads the Helm release via kubeconfig: install, upgrade,
     purge a stale release or no-op. New helm_values and gateway_api options
     (gateway_api_version; gateway_api_channel, default experimental so

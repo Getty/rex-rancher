@@ -92,7 +92,7 @@ subtest 'k3s server install command has no token' => sub {
 
   $cmd = Rex::Rancher::Server::_k3s_server_install_cmd( $paths, 'https://cp1:6443' );
   unlike( $cmd, qr/K3S_TOKEN/, 'no K3S_TOKEN (HA join)' );
-  like( $cmd, qr/K3S_URL=https:\/\/cp1:6443 sh -s - server/, 'K3S_URL kept for HA join' );
+  like( $cmd, qr/K3S_URL=https:\/\/cp1:6443 INSTALL_K3S_SKIP_START=true sh -s - server/, 'K3S_URL kept for HA join' );
 };
 
 subtest 'agent install commands have no token' => sub {
