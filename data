@@ -1,0 +1,20 @@
+---
+class: standard
+completed: 2026-09-24T03:10:17Z
+created: 2026-09-24T02:51:12Z
+id: 20
+priority: medium
+started: 2026-09-24T03:08:43Z
+status: done
+title: 'Rex::GPU k54: gpu => 1 installiert jetzt Treiber auch fuer MX/GT 1030/GTX
+  9xx/Maxwell+ (vorher Skip)'
+updated: 2026-09-24T03:50:05Z
+---
+
+Upstream Rex::GPU d8cea8a (karr rex-gpu #54, unreleased): Compute-Erkennung nach GPU-Generation statt Name. Maxwell..Blackwell = compute (inkl. GeForce MX, GT 1030, GTX 9xx, Laptop-RTX), Kepler und aelter = Skip mit Warnung. Folge fuer Rancher-Deploys mit gpu => 1: Nodes, deren einzige NVIDIA-Karte so ein Chip ist, bekommen beim naechsten Deploy Treiberinstall + Reboot und melden nvidia.com/gpu. Pruefen: Doku/Changes in Rex::Rancher, ggf. Hinweis; kein Versions-Gate vorhanden (Rex::GPU ist nur recommends?).
+
+Nachtrag rex-gpu #55 (5300dfc): Node mit nur Kepler-Tesla (K80/K40/K20) stirbt bei gpu => 1 nicht mehr, sondern laeuft ohne GPU durch (Warnung im Log).
+
+2026-09-24 03:09 Docs updated (POD GPU hardware support, README, Changes bullet rewritten), uncommitted. Rex::GPU not declared in cpanfile at all (no recommends/suggests, no pin); CPAN has Rex-GPU 0.001, all described behaviour is unreleased upstream.
+
+Nachtrag rex-gpu #24: Auf einem NVIDIA-vGPU-Gast ohne lizenzierten vGPU-Treiber bricht gpu => 1 jetzt vor jeder Aenderung ab (vorher halber Erfolg: Datacenter-Treiber installiert, GPU nicht nutzbar). Mit GRID-Treiber laeuft es normal. Zusaetzlich #49: HGX B200/B300 loggen eine Warnung (Fabric Manager/NVLSM/OFED nicht automatisiert).
