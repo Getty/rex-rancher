@@ -9,6 +9,7 @@ use Rex::Commands::File;
 use Rex::Commands::Run;
 use Rex::Logger;
 use Rex::Rancher::Server;
+use YAML::PP;
 
 require Rex::Exporter;
 use base qw(Rex::Exporter);
@@ -93,6 +94,14 @@ L<Rex::Rancher::Server/install_server>.
 
 Override the Kubernetes node name. If omitted, the system hostname is used.
 
+=item C<node_labels>
+
+Node labels applied at join time (C<node-label> in C<config.yaml>), as an
+arrayref of C<key=value> strings. Same as
+L<Rex::Rancher::Server/install_server>'s C<node_labels>; like there, labels
+are only read when the agent registers, not on a re-run against a node that
+already joined.
+
 =item C<registries>
 
 Private registry mirror configuration hashref. Same structure as
@@ -143,24 +152,34 @@ sub install_agent {
   Rex::Logger::info("$distribution agent installed and running");
 }
 
+# Same keys on rke2 and k3s agents; node-label as in
+# Rex::Rancher::Server::_build_server_config.
+sub _build_agent_config {
+  my (%opts) = @_;
+
+  my %config = (
+    server => $opts{server},
+    token  => $opts{token},
+  );
+  $config{'node-name'} = $opts{node_name} if $opts{node_name};
+
+  if (my $node_labels = $opts{node_labels}) {
+    my @labels = ref $node_labels eq 'ARRAY' ? @{$node_labels} : ($node_labels);
+    $config{'node-label'} = \@labels;
+  }
+
+  return \%config;
+}
+
 sub _write_config {
   my ($paths, $distribution, %opts) = @_;
-
-  my $server    = $opts{server};
-  my $token     = $opts{token};
-  my $node_name = $opts{node_name};
 
   Rex::Logger::info("Writing $distribution agent config");
 
   run "mkdir -p $paths->{config_dir}", auto_die => 1;
 
-  my @lines;
-  push @lines, "server: $server";
-  push @lines, "token: $token";
-  push @lines, "node-name: $node_name" if $node_name;
-
   Rex::Rancher::Server::_write_secret_file($paths->{config_file},
-    join("\n", @lines) . "\n");
+    YAML::PP->new->dump_string(_build_agent_config(%opts)));
 }
 
 sub _write_registries {
@@ -266,6 +285,7 @@ node for either RKE2 or K3s. It handles:
 =over
 
 =item * Writing C<config.yaml> with the server URL, token, and optional node name
+and node labels
 
 =item * Writing C<registries.yaml> for private registry mirrors (optional)
 

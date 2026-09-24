@@ -33,6 +33,9 @@ for my $dist (qw( rke2 k3s )) {
     $dist.': connection checked before the host is touched');
 }
 
+Rex::Rancher::rancher_deploy_agent(%join, node_labels => ['role=gpu']);
+is_deeply($agent_opts{node_labels}, ['role=gpu'], 'node_labels passed to install_agent');
+
 for my $missing (qw( server token )) {
   @ran = ();
   my %opts = %join;

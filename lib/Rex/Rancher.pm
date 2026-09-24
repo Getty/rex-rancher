@@ -364,7 +364,7 @@ L<Rex::Rancher::Server/get_token>. Required.
 
 Override the node name registered in Kubernetes (optional).
 
-=item C<distribution>, C<version>, C<install_method>, C<registries>, C<nvidia_runtime_path>
+=item C<distribution>, C<version>, C<install_method>, C<node_labels>, C<registries>, C<nvidia_runtime_path>
 
 As for L</rancher_deploy_server>; passed to
 L<Rex::Rancher::Agent/install_agent>.
@@ -385,7 +385,7 @@ server, an SFTP-less host needs the C<LibSSH> connection backend; without it
 the deploy dies before the first step with a hint to C<Rex::LibSSH>.
 
 The server-only options have no effect on an agent and are ignored:
-C<node_labels>, C<tls_san>, C<disable>, C<kubeconfig_file>,
+C<tls_san>, C<disable>, C<kubeconfig_file>,
 C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
 C<cilium_helm_values>, C<gateway_api>, C<gateway_api_version>,
 C<gateway_api_channel> and C<gpu_device_plugin>. Whether a K3s agent runs

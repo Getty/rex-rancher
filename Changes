@@ -39,6 +39,8 @@ Revision history for Rex-Rancher
   - rancher_deploy_agent dies on a missing server or token before touching
     the host, and dies with the LibSSH hint on an SFTP-less host like
     rancher_deploy_server.
+  - New install_agent/rancher_deploy_agent option node_labels (node-label in
+    the agent's config.yaml, as on the server).
   - Requires Kubernetes::REST and IO::K8s 1.108; declare
     YAML::PP and JSON::MaybeXS. Rex::LibSSH is now only recommended: needed
     for SFTP-less hosts, not for hosts with SFTP (Rex's OpenSSH backend).
