@@ -39,7 +39,8 @@ my %PATHS = (
 
 sub _paths {
   my ($distribution) = @_;
-  return $PATHS{$distribution} || die "Unknown distribution: $distribution";
+  return $PATHS{$distribution}
+    || die "Unknown distribution: $distribution (expected 'rke2' or 'k3s')\n";
 }
 
 =method install_agent
@@ -74,7 +75,7 @@ Optional options:
 
 =item C<distribution>
 
-C<rke2> (default) or C<k3s>.
+C<rke2> (default) or C<k3s>; anything else dies before the host is touched.
 
 =item C<version>
 

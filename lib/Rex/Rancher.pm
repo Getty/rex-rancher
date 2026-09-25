@@ -82,7 +82,8 @@ Options:
 
 =item C<distribution>
 
-Kubernetes distribution to install. C<rke2> (default) or C<k3s>.
+Kubernetes distribution to install. C<rke2> (default) or C<k3s>. Anything
+else dies before the host is touched.
 
 =item C<gpu>
 
@@ -314,10 +315,21 @@ sub _check_connection {
     . "Rex::LibSSH to deploy to SFTP-less hosts.\n";
 }
 
+# Before prepare_node and gpu_setup: an unknown distribution would otherwise
+# pass node prep and Rex::GPU's driver install (containerd_config =>
+# $distribution) and only die in install_server/install_agent.
+sub _check_distribution {
+  my ( $distribution ) = @_;
+  return if $distribution eq 'rke2' || $distribution eq 'k3s';
+  die "Unknown distribution: $distribution (expected 'rke2' or 'k3s'); "
+    . "nothing was done on the host\n";
+}
+
 sub rancher_deploy_server {
   my (%opts) = @_;
   my $distribution    = $opts{distribution}    // 'rke2';
   my $kubeconfig_file = $opts{kubeconfig_file};
+  _check_distribution($distribution);
 
   my %cilium_opts = (
     distribution => $distribution,
@@ -439,7 +451,8 @@ As for L</rancher_deploy_server> (step 2).
 
 =back
 
-A missing C<server> or C<token> dies before the host is touched. As on the
+A missing C<server> or C<token>, or a C<distribution> other than C<rke2> or
+C<k3s>, dies before the host is touched. As on the
 server, an SFTP-less host needs the C<LibSSH> connection backend; without it
 the deploy dies before the first step with a hint to C<Rex::LibSSH>.
 
@@ -456,6 +469,7 @@ server's C<config.yaml>.
 sub rancher_deploy_agent {
   my (%opts) = @_;
   my $distribution = $opts{distribution} // 'rke2';
+  _check_distribution($distribution);
 
   # install_agent needs both; refuse before prepare_node and gpu_setup
   # (driver install, possibly a reboot) have touched the host.

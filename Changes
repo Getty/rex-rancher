@@ -33,6 +33,10 @@ Revision history for Rex-Rancher
     describes it: Fabric Manager on HGX A100/H100/H200, Fabric Manager plus
     nvlsm and ib_umad on HGX B200/B300 (not only a warning), and the dies
     for a host without a Fabric Manager or nvlsm source.
+  - rancher_deploy_server and rancher_deploy_agent die on a distribution
+    other than rke2 or k3s before touching the host; before, a typo got
+    through node preparation and Rex::GPU's driver install. install_agent's
+    error for it names the valid values, as install_server's does.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
