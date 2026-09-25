@@ -1,0 +1,22 @@
+---
+claimed_at: 2026-09-25T22:36:10Z
+claimed_by: worker-backlog
+class: standard
+created: 2026-09-25T17:36:33Z
+id: 57
+priority: low
+started: 2026-09-25T22:18:32Z
+status: review
+title: 'Refactor-Nachlauf #48: rke2/k3s-Weichen ausserhalb Distribution, God Class'
+updated: 2026-09-25T22:36:10Z
+---
+
+Aus Code-Review 2026-09-25 (rex-rancher-core: rke2/k3s-Branching gehoert aufs Distribution-Objekt):
+- eq 'k3s'/'rke2' in Cilium.pm (_require_k8s_service_host, _adopt_running, _helm_values, _resolve_opts:505), Rancher.pm:640 new_for('rke2') fuer gateway_api, Server.pm:231 k3s-Warnung -> Methoden (needs_k8s_service_host, cilium_helm_defaults, ...).
+- Distribution.pm ~990 Zeilen: Optionspruefungen (resolve_install_method, check_cluster_cidr) und sha256-Utilities sind nicht distributionsspezifisch -> auslagern.
+- require der Subklassen am Dateiende (getty-perl-core) -> bewusst entscheiden, z.B. use_module in new_for.
+- 'Unknown distribution'-Meldung doppelt (new_for + Rancher::_check_distribution), Namensliste hart statt aus distribution_classes; 'subclass may override' ungenutzt.
+- $o traegt distribution UND dist in Cilium; server_service ohne, agent_service mit .service-Suffix.
+- Changes-'Internal'-Bullet behauptet 'error messages unchanged', install_agent-Meldung hat sich geaendert.
+
+Commit 9984e21 (+ skill e663d38). All eq rke2/k3s onto Distribution methods; use_module in new_for; Options.pm + Checksum.pm split out; unknown_distribution shared. Trace over 149 scenarios byte-identical. server_service/agent_service suffix asymmetry kept (would change remote commands), documented.
