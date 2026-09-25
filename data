@@ -1,0 +1,15 @@
+---
+class: standard
+completed: 2026-09-25T19:29:56Z
+created: 2026-09-25T17:36:38Z
+id: 58
+priority: low
+started: 2026-09-25T19:29:56Z
+status: done
+title: 'RKE2-Agent-Skriptinstall: auto_die 1 vs Server auto_die 0 + command -v'
+updated: 2026-09-25T19:29:56Z
+---
+
+Aus Code-Review 2026-09-25 (vorbestehend, nicht aus Diff): Server-Skriptinstall schluckt GPG-Rauschen auf Rocky 10 (auto_die 0 + command -v rke2 verify), Agent-Skriptinstall laeuft mit auto_die 1 und wuerde dort abbrechen. Refactor hat die Asymmetrie als run_server_install_script festgeschrieben. Pruefen, ob der Agent-Pfad denselben Swallow braucht (nur mit Beleg, dass Rocky 10 ihn trifft; nur live pruefbar).
+
+Maintainer 2026-09-25: verworfen. Rocky-10-Praemisse stammt aus bee17e6 (2026-03-28), nie in dieser Form belegt.
