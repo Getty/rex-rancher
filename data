@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-09-25T03:35:07Z
+claimed_by: worker-cilium
+class: standard
+created: 2026-09-24T21:49:24Z
+id: 43
+priority: high
+started: 2026-09-25T03:21:00Z
+status: review
+tags:
+- ocp
+- cilium
+- escalated-from:kubernetes-ocp#155
+title: 'Cilium: IPAM-Modus beim Upgrade ohne explizites ipam.mode, CRD-only-Funktion,
+  Ready-Wait'
+updated: 2026-09-25T03:35:07Z
+---
+
+Aus der OCP-Umstellung (kubernetes-ocp k155) auf Rex::Rancher::Cilium 0.002:
+
+1. GEFAEHRLICH: Auf rke2 setzen die Default-Helm-Values ipam.mode=kubernetes. _refuse_ipam_change vergleicht nur ein ipam.mode, das der Release EXPLIZIT gesetzt hat. Ein Cilium, das per `cilium install` ohne ipam.mode installiert wurde (Chart-Default cluster-pool; so sind alle bestehenden OCP-Cluster), wuerde von install_cilium/upgrade_cilium still auf ipam.mode=kubernetes umgestellt -> Pods verlieren ihre Adressen. Vorschlag: den laufenden Modus aus der ConfigMap kube-system/cilium-config (data.ipam) lesen statt nur aus den Release-Values; ebenso den laufenden Pool (cluster-pool-ipv4-cidr). OCP liest beides heute selbst (kubectl auf dem Node) und reicht Modus + Pool per helm_values durch; ohne lesbare cilium-config bricht OCP das Upgrade ab.
+2. Kein oeffentlicher Weg, nur die Gateway-API-CRDs anzuwenden (+ cilium-operator-Restart). OCP braucht das fuer seinen Drift-Remedy update_gateway_api (k164: Bundle-Pin bewegt, Cilium unveraendert). _ensure_gateway_api_crds ist privat; OCP behaelt dafuer seine eigene kubectl-Server-Side-Apply-Implementierung. Wunsch: ensure_gateway_api_crds(kubeconfig, version, channel) exportieren.
+3. install_cilium/upgrade_cilium warten nicht, bis Cilium bereit ist (nur DaemonSet-Existenz nach Neuinstallation). OCP wartet danach selbst mit `cilium status --wait --wait-duration=10m` (5m beim Upgrade) und stirbt mit der Status-Ausgabe (k178). Wunsch: optionales wait/wait_duration.
+4. upgrade setzt k8sServiceHost auf k3s neu (Pflicht-Option) und erzwingt operator.replicas=1: ein Upgrade sollte laufende Werte (k8sServiceHost, Pool, Operator-Replicas) behalten koennen, ohne dass der Aufrufer sie selbst nachliest. OCP liest k8sServiceHost heute aus dem cilium-DaemonSet (KUBERNETES_SERVICE_HOST).
+
+Commit 1a36373. Reads ipam + cluster-pool-ipv4-cidr from cm kube-system/cilium-config, k8sServiceHost from DS env KUBERNETES_SERVICE_HOST, operator.replicas from release; explicit mismatch via helm_values dies before host touched. ensure_gateway_api_crds exported (returns 1 if applied, operator restart only then). wait/wait_duration (default 600s). OPEN (maintainer): upgrade_cilium WITHOUT kubeconfig only warns (dying would break existing rke2 callers). Live-only: CM key names on Cilium 1.17/1.20, env var in real DS, ready criteria vs cilium status --wait.
