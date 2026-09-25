@@ -1,13 +1,14 @@
 ---
 name: rex-rancher-core
-description: Load before editing Rex::Rancher — the six-module deploy pipeline (node-prep → install → kubeconfig patch → wait_for_api → Cilium → GPU device plugin), the rke2/k3s split, why there is no kubectl and no SFTP, and the idempotency and fresh-boot traps.
+description: Load before editing Rex::Rancher — the deploy pipeline (node-prep → install → kubeconfig patch → wait_for_api → Cilium → GPU device plugin), the rke2/k3s split, why there is no kubectl and no SFTP, and the idempotency and fresh-boot traps.
 ---
 
 # Rex::Rancher — core
 
 Zero-touch Kubernetes deployment for Rancher distributions (RKE2 and K3s) as a set of
 Rex tasks. It takes a raw Linux host to a running cluster with CNI and optional GPU
-support. Six modules, all exporting **plain functions** through `Rex::Exporter` (no OO):
+support. The public API is **plain functions** exported through `Rex::Exporter`; what rke2
+and k3s differ in is one Moo object, `Rex::Rancher::Distribution`:
 
 | Module | Exports | Owns |
 |---|---|---|
@@ -15,8 +16,9 @@ support. Six modules, all exporting **plain functions** through `Rex::Exporter` 
 | `Rex::Rancher::Node` | `prepare_node` | hostname, tz, locale, NTP, swap off, kernel modules, sysctl |
 | `Rex::Rancher::Server` | `install_server`, `get_kubeconfig`, `get_token`, `update_registries` | control-plane install, `config.yaml`, `registries.yaml` |
 | `Rex::Rancher::Agent` | `install_agent` | worker join |
-| `Rex::Rancher::Cilium` | `install_cilium`, `upgrade_cilium` | Cilium CLI + Helm values |
+| `Rex::Rancher::Cilium` | `install_cilium`, `upgrade_cilium`, `ensure_gateway_api_crds` | Cilium CLI + Helm values |
 | `Rex::Rancher::K8s` | `wait_for_api`, `deploy_nvidia_device_plugin`, `untaint_node` | local K8s API ops |
+| `Rex::Rancher::Distribution` (+ `::RKE2`, `::K3s`) | — (Moo, `new_for($name, role => 'server'\|'agent')`) | per-distribution paths, service, installer lines, start verb, the host steps server and agent share |
 
 The distribution just wires these steps; the domain knowledge behind each step lives in
 dedicated skills — RKE2/K3s config and joining: `kubernetes-rke2`; Cilium/eBPF/kube-proxy
@@ -125,11 +127,13 @@ disabling the bundled CNI without installing Cilium leaves the cluster with no n
 
 ## Conventions in this distribution
 
-Plain functions exported via `Rex::Exporter` (`require Rex::Exporter; use base
-qw(Rex::Exporter); use vars qw(@EXPORT);`), **not** standard `Exporter` and no Moo/Moose.
+Public API: plain functions exported via `Rex::Exporter` (`require Rex::Exporter; use base
+qw(Rex::Exporter); use vars qw(@EXPORT);`), **not** standard `Exporter`. Anything that
+branches on rke2 vs k3s belongs on the `Rex::Rancher::Distribution` object (Moo), not in a
+`%PATHS` hash or a call into another module's `_private` sub.
 `# ABSTRACT:` first line, `our $VERSION` right after `package`, `use v5.14.4`, POD with
 `=method` at the end of each file. `Rex::Logger::info(…, 'warn')` for soft failures,
-`die "…\n"` for hard ones. `$VERSION` is repeated in **all six** files under `lib/`; a
+`die "…\n"` for hard ones. `$VERSION` is repeated in **every** file under `lib/`; a
 partial bump ships modules that disagree about their version — `grep -rn 'our $VERSION'
 lib/` and change them together. Everything else Perl: skill `getty-perl-core`. Rex idioms,
 connection types, `run`/`pkg`/`auto_die`: skill `rex`.

@@ -1,6 +1,6 @@
 ---
 name: rex-rancher-release-checker
-description: "Audit Rex::Rancher before release — Changes/{{$NEXT}} current, cpanfile complete with Kubernetes::REST/IO::K8s/Rex declared and any Getty-authored dep pinned to its latest released CPAN version, $VERSION consistent across all six modules under lib/, dist.ini [@Author::GETTY] sane, dzil build clean. Knows there is no integration test, so a release cannot lean on a green suite. Reports; does not fix and never releases."
+description: "Audit Rex::Rancher before release — Changes/{{$NEXT}} current, cpanfile complete with Kubernetes::REST/IO::K8s/Rex declared and any Getty-authored dep pinned to its latest released CPAN version, $VERSION consistent across every module under lib/, dist.ini [@Author::GETTY] sane, dzil build clean. Knows there is no integration test, so a release cannot lean on a green suite. Reports; does not fix and never releases."
 model: sonnet
 allowed-tools: Read, Bash, Glob, Grep
 briefing:
@@ -23,8 +23,8 @@ releases. **Never** run `dzil release` or upload to CPAN.
    what CPAN already shows.
 
 2. **`$VERSION` consistency — specific to this distribution.** There is no single version
-   module; `our $VERSION` is repeated in all six files under `lib/` (`Rex/Rancher.pm` and
-   the five `Rex/Rancher/*.pm`). Check them against each other, not just against `Changes`:
+   module; `our $VERSION` is repeated in every file under `lib/` (`Rex/Rancher.pm`, the
+   `Rex/Rancher/*.pm` and `Rex/Rancher/Distribution/*.pm`). Check them against each other, not just against `Changes`:
 
    ```bash
    grep -rn 'our $VERSION' lib/

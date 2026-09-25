@@ -1,6 +1,6 @@
 ---
 name: rex-rancher-worker
-description: "Default Rex::Rancher worker — implement, refactor and debug the six-module RKE2/K3s deploy pipeline (node prep, control-plane and agent install, Cilium CNI, GPU device plugin) and its local Kubernetes::REST API calls. Every task here provisions a real Kubernetes node over SSH as root, and the pipeline steps are order-dependent. Pre-loaded with the pipeline invariants, the RKE2/Cilium/GPU domain skills and Getty's Perl conventions."
+description: "Default Rex::Rancher worker — implement, refactor and debug the RKE2/K3s deploy pipeline (node prep, control-plane and agent install, Cilium CNI, GPU device plugin) and its local Kubernetes::REST API calls. Every task here provisions a real Kubernetes node over SSH as root, and the pipeline steps are order-dependent. Pre-loaded with the pipeline invariants, the RKE2/Cilium/GPU domain skills and Getty's Perl conventions."
 model: inherit
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
@@ -51,16 +51,16 @@ new ticket rather than widening the change you are on.
 ## Proof
 
 ```bash
-prove -lr t/        # today only t/00-load.t — a compile check, nothing more
+prove -lr t/        # compile check + offline unit tests with run faked
 ```
 
-State plainly that the suite proves the six modules **compile** and nothing about a
-deploy. There is no integration test; a change to install ordering, the `127.0.0.1`
+State plainly that the suite proves the modules **compile** and the pure logic, and
+nothing about a deploy. There is no integration test; a change to install ordering, the `127.0.0.1`
 kubeconfig patch, the Cilium/`config.yaml` agreement, or a `K8s.pm` API object can only
 be trusted after a live run against a real node (`eg/hetzner-gpu.Rexfile`). Never report
 green as evidence for a pipeline change.
 
 A change that alters what a Rexfile author sees — a new option, a changed default, a
 different error, a reordered step — wants a `Changes` entry naming the user-visible effect
-and its POD (`=method`) updated in the same edit. `our $VERSION` is repeated in all six
-files under `lib/`; if you touch it, touch all of them.
+and its POD (`=method`) updated in the same edit. `our $VERSION` is repeated in every
+file under `lib/`; if you touch it, touch all of them.
