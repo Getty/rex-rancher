@@ -37,6 +37,7 @@ my %PATHS = (
     release_url  => 'https://github.com/rancher/rke2/releases/download',
     artifact_dir => '/tmp/rke2-artifacts',
     env_file     => '/etc/default/rke2-server',
+    containerd_dir => '/var/lib/rancher/rke2/agent/etc/containerd',
   },
   k3s => {
     config_dir   => '/etc/rancher/k3s/',
@@ -53,6 +54,7 @@ my %PATHS = (
     binary       => 'k3s',
     release_url  => 'https://github.com/k3s-io/k3s/releases/download',
     artifact_dir => '/tmp/k3s-artifacts',
+    containerd_dir => '/var/lib/rancher/k3s/agent/etc/containerd',
     # No env_file: k3s needs no PATH for the NVIDIA runtime lookup
     # (see _nvidia_runtime_path).
   },
@@ -600,8 +602,11 @@ sub _install_rke2 {
   # Enable and start the service
   run "systemctl enable " . $paths->{service}, auto_die => 1;
   # --no-block: return immediately; RKE2 first start pulls many images and
-  # exceeds systemctl's default 90s activation timeout.
-  run "systemctl start --no-block " . $paths->{service}, auto_die => 1;
+  # exceeds systemctl's default 90s activation timeout. start, not restart:
+  # a re-run leaves a running control plane alone, unless its containerd
+  # config is stale (_start_verb).
+  run "systemctl " . _start_verb($paths, 'rke2') . " --no-block " . $paths->{service},
+    auto_die => 1;
 
   _wait_for_service($paths->{service});
 
@@ -643,7 +648,8 @@ sub _install_k3s {
   # cannot reach its first server. Restart (a re-run still picks up a new
   # binary and config.yaml) with --no-block, then the bounded wait.
   run "systemctl enable " . $paths->{service}, auto_die => 1;
-  run "systemctl restart --no-block " . $paths->{service}, auto_die => 1;
+  run "systemctl " . _start_verb($paths, 'k3s') . " --no-block " . $paths->{service},
+    auto_die => 1;
   _wait_for_service($paths->{service});
   _wait_for_kubeconfig($paths);
 }
@@ -706,6 +712,67 @@ sub _nvidia_runtime_path {
   run "systemctl is-active --quiet $service", auto_die => 0;
   Rex::Logger::info("$service is running: restart it to pick up the new PATH", 'warn')
     if $? == 0;
+}
+
+#
+# Start or restart: k3s is always restarted (a re-run picks up a new binary
+# and config.yaml, as its install script did); rke2 is started, which leaves
+# a running service alone -- except when its containerd config is stale.
+# Shared with Rex::Rancher::Agent.
+#
+
+# Rex::GPU 0.001 wrote /var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl
+# as a bare `imports = [...]` + `version = 2`. rke2 renders a template instead
+# of its own config, so config.toml became exactly that: no SystemdCgroup,
+# sandbox image or registry mirrors. Rex::GPU 0.002's gpu_setup removes the
+# template but deliberately restarts nothing, and config.toml is rewritten
+# only when the service starts. So: config.toml still in that shape and the
+# template gone -> restart a running service once; the regenerated config no
+# longer matches, so the next re-run starts (a no-op) again. Template still
+# there -> a restart would render the same file: warn with what to do.
+sub _start_verb {
+  my ($paths, $distribution) = @_;
+  my $service = $paths->{service};
+  my $default = $distribution eq 'k3s' ? 'restart' : 'start';
+
+  my $dir    = $paths->{containerd_dir};
+  my $config = run "cat $dir/config.toml 2>/dev/null", auto_die => 0;
+  return $default unless _is_bare_template_output($config);
+
+  run "test -e $dir/config.toml.tmpl", auto_die => 0;
+  if ($? == 0) {
+    Rex::Logger::info("$dir/config.toml.tmpl holds only imports and version = 2 (as "
+      . "Rex::GPU 0.001 wrote it) and replaces ${distribution}'s own containerd config: "
+      . "no SystemdCgroup, sandbox image or registry mirrors. Remove it (Rex::GPU "
+      . "0.002's gpu_setup does) and run: systemctl restart $service", 'warn');
+    return $default;
+  }
+
+  run "systemctl is-active --quiet $service", auto_die => 0;
+  # Not running: the start renders a fresh config.toml anyway.
+  return $default unless $? == 0;
+  Rex::Logger::info("$dir/config.toml was rendered from a config.toml.tmpl that is "
+    . "gone (Rex::GPU 0.001's); restarting $service so it regenerates its "
+    . "containerd config", 'warn');
+  return 'restart';
+}
+
+# Pure: is this config.toml the verbatim output of Rex::GPU 0.001's template --
+# ignoring blank lines and comments, exactly an `imports =` and a
+# `version = 2` line and nothing else? Same narrow match as Rex::GPU 0.002's
+# _is_rke2_clobber_tmpl; rke2's own config always has [plugins...] sections.
+sub _is_bare_template_output {
+  my ($content) = @_;
+  return 0 unless defined $content && length $content;
+  my @lines = grep { /\S/ && !/^\s*#/ } split /\n/, $content;
+  return 0 unless @lines;
+  my ($imports, $version2) = (0, 0);
+  for my $l (@lines) {
+    if    ($l =~ /^\s*imports\s*=/)         { $imports  = 1 }
+    elsif ($l =~ /^\s*version\s*=\s*2\s*$/) { $version2 = 1 }
+    else                                    { return 0 }
+  }
+  return ($imports && $version2) ? 1 : 0;
 }
 
 # Pure: the env file with exactly one PATH line (ours, last), every other line
@@ -1061,6 +1128,15 @@ L</install_server>). The service is started with C<--no-block> to avoid
 systemd's 90-second activation timeout (RKE2's first start pulls many
 container images), then polled with C<systemctl is-active> for up to 10
 minutes; a C<failed> or never-active service dies with its journal tail.
+A running C<rke2-server> is left running on a re-run (C<systemctl start>),
+with one exception: if C<agent/etc/containerd/config.toml> is still the
+output of the C<config.toml.tmpl> that L<Rex::GPU> 0.001 wrote (only
+C<imports> and C<version = 2>, no C<SystemdCgroup>, sandbox image or registry
+mirrors) and that template is gone (L<Rex::GPU> 0.002's C<gpu_setup> removes
+it), the service is restarted once, with a warning, so rke2 regenerates its
+containerd config. If the template is still there, nothing is restarted and a
+warning names what to remove and the restart command. K3s is restarted on
+every run anyway (below), so it regenerates its config either way.
 After that the function waits until the kubeconfig file appears at
 C</etc/rancher/rke2/rke2.yaml>; API readiness is confirmed separately by the
 caller using L<Rex::Rancher::K8s/wait_for_api>.

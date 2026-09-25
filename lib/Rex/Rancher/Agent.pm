@@ -27,12 +27,14 @@ my %PATHS = (
     registries_file => '/etc/rancher/rke2/registries.yaml',
     service => 'rke2-agent.service',
     env_file => '/etc/default/rke2-agent',
+    containerd_dir => '/var/lib/rancher/rke2/agent/etc/containerd',
   },
   k3s => {
     config_dir => '/etc/rancher/k3s',
     config_file => '/etc/rancher/k3s/config.yaml',
     registries_file => '/etc/rancher/k3s/registries.yaml',
     service => 'k3s-agent.service',
+    containerd_dir => '/var/lib/rancher/k3s/agent/etc/containerd',
     # No env_file: see Rex::Rancher::Server::_nvidia_runtime_path.
   },
 );
@@ -246,8 +248,9 @@ sub _enable_service {
   my $service = $paths->{service};
   # k3s: restart, as the install script did before INSTALL_K3S_SKIP_START,
   # so a re-run still picks up a new binary and config.yaml. rke2's
-  # installer never started the agent.
-  my $verb = ($distribution // '') eq 'k3s' ? 'restart' : 'start';
+  # installer never started the agent: start, or restart for a stale
+  # containerd config (see Rex::Rancher::Server::_start_verb).
+  my $verb = Rex::Rancher::Server::_start_verb($paths, $distribution);
   Rex::Logger::info("Enabling and starting $service");
   run "systemctl enable $service", auto_die => 1;
   # --no-block, same as the server: a start that fails or outlasts systemd's
@@ -318,7 +321,10 @@ is used with the C<K3S_URL> environment variable and
 C<INSTALL_K3S_SKIP_START>: instead of the script's own blocking restart, the
 agent is restarted with C<--no-block> and waited on for at most 10 minutes,
 so an agent that cannot reach its server dies with its journal instead of
-hanging the deploy. For both distributions the
+hanging the deploy. A running C<rke2-agent> is only started, which leaves it
+alone, except when its containerd config is still the output of
+L<Rex::GPU> 0.001's template: then it is restarted once, as described under
+"RKE2 installation" in L<Rex::Rancher::Server>. For both distributions the
 token is read from C<config.yaml> and never passed on the installer command
 line, where C<ps> would show it. C<config.yaml> and C<registries.yaml> are
 written C<0600 root:root>.
