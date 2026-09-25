@@ -88,6 +88,9 @@ sub helm_secret {
   }
   sub get {
     my ( $self, $kind, $name ) = @_;
+    my $obj = $self->{objects}{"$kind/$name"};
+    return $obj->() if ref $obj eq 'CODE';
+    return $obj if $obj;
     return $self->{daemonset} ? bless( {}, 'FakeObj' ) : die "404 not found\n"
       if $kind eq 'DaemonSet';
     die "404 not found\n";
@@ -383,6 +386,246 @@ subtest 'without kubeconfig: the re-run swallow is kept' => sub {
   eval { install_cilium( distribution => 'rke2' ) };
   like( $@, qr/cilium install failed: Error: boom/, 'any other failure dies' );
   $run_hook = undef;
+};
+
+# -----------------------------------------------------------------------------
+# 4. A running Cilium keeps what it runs (k43): IPAM mode and pool from its
+#    ConfigMap, k8sServiceHost from its DaemonSet, operator.replicas from the
+#    release -- unless the caller asked for them, where a change the running
+#    cluster cannot take dies before the host is touched.
+# -----------------------------------------------------------------------------
+
+sub configmap {
+  my ( %data ) = @_;
+  $k8s->struct_to_object( { apiVersion => 'v1', kind => 'ConfigMap',
+    metadata => { name => 'cilium-config', namespace => 'kube-system' }, data => \%data } );
+}
+
+sub daemonset {
+  my ( %a ) = @_;
+  $k8s->struct_to_object( { apiVersion => 'apps/v1', kind => 'DaemonSet',
+    metadata => { name => 'cilium', namespace => 'kube-system', generation => $a{generation} // 1 },
+    spec => { selector => {}, template => { spec => { containers => [
+      { name => 'cilium-agent', image => 'cilium',
+        env => [ map { { name => $_, value => $a{env}{$_} } } sort keys %{ $a{env} // {} } ] },
+    ] } } },
+    status => { currentNumberScheduled => $a{desired} // 1, desiredNumberScheduled => $a{desired} // 1,
+      numberMisscheduled => 0, numberReady => $a{ready} // 1,
+      updatedNumberScheduled => $a{updated} // $a{desired} // 1,
+      observedGeneration => $a{observed} // $a{generation} // 1 },
+  } );
+}
+
+sub operator_deployment {
+  my ( %a ) = @_;
+  $k8s->struct_to_object( { apiVersion => 'apps/v1', kind => 'Deployment',
+    metadata => { name => 'cilium-operator', namespace => 'kube-system', generation => 1 },
+    spec => { replicas => $a{replicas} // 1, selector => {}, template => {} },
+    status => { readyReplicas => $a{ready} // 1, updatedReplicas => $a{ready} // 1, observedGeneration => 1 },
+  } );
+}
+
+sub adopt {
+  my ( $running, %opts ) = @_;
+  my $o = $C->can('_resolve_opts')->( kubeconfig => '/kc', %opts );
+  return $C->can('_adopt_running')->( $o, $running )->{values};
+}
+
+subtest 'which values the caller set' => sub {
+  my $e = $C->can('_explicit_values');
+  is_deeply( $e->( {} ), { ipam_mode => 0, pool => 0, k8s_service_host => 0, operator_replicas => 0 },
+    'nothing given: all defaults' );
+  is_deeply( $e->( { ipam => { mode => 'kubernetes' } } ),
+    { ipam_mode => 1, pool => 0, k8s_service_host => 0, operator_replicas => 0 }, 'mode only' );
+  is( $e->( { ipam => { operator => { clusterPoolIPv4PodCIDRList => ['10.1.0.0/16'] } } } )->{pool}, 1, 'pool' );
+  is( $e->( { ipam => { operator => { clusterPoolIPv4MaskSize => 24 } } } )->{pool}, 0,
+    'another operator key is not the pool' );
+  is_deeply( [ @{ $e->( { ipam => 'cluster-pool' } ) }{qw( ipam_mode pool )} ], [ 1, 1 ],
+    'a non-hash ipam sets both' );
+  is( $e->( {}, 'cp' )->{k8s_service_host}, 1, 'k8s_service_host option' );
+  is( $e->( { k8sServiceHost => 'cp' } )->{k8s_service_host}, 1, 'k8sServiceHost value' );
+  is( $e->( { operator => { replicas => 2 } } )->{operator_replicas}, 1, 'operator.replicas' );
+};
+
+subtest 'adopt: IPAM mode and pool follow the running Cilium' => sub {
+  my $pool = { ipam_mode => 'cluster-pool', pool => ['10.0.0.0/8'] };
+  is_deeply( adopt( $pool, distribution => 'rke2' )->{ipam},
+    { mode => 'cluster-pool', operator => { clusterPoolIPv4PodCIDRList => ['10.0.0.0/8'] } },
+    'rke2 on a cluster-pool cluster: never switched to kubernetes (the k43 danger)' );
+  is_deeply( adopt( { ipam_mode => 'kubernetes' }, distribution => 'rke2' )->{ipam},
+    { mode => 'kubernetes' }, 'rke2 on kubernetes: unchanged' );
+  is_deeply( adopt( { ipam_mode => 'kubernetes' }, distribution => 'k3s', k8s_service_host => 'cp' )->{ipam},
+    { mode => 'kubernetes' }, 'k3s on kubernetes: mode kept, default pool dropped' );
+  is_deeply( adopt( { ipam_mode => 'cluster-pool', pool => ['10.100.0.0/16'] },
+      distribution => 'k3s', k8s_service_host => 'cp' )->{ipam},
+    { mode => 'cluster-pool', operator => { clusterPoolIPv4PodCIDRList => ['10.100.0.0/16'] } },
+    'k3s: the running pool replaces the default one' );
+  is_deeply( adopt( { ipam_mode => 'cluster-pool' }, distribution => 'k3s', k8s_service_host => 'cp' )->{ipam},
+    { mode => 'cluster-pool' }, 'no readable pool: the default gives way to the chart\'s' );
+  is_deeply( adopt( {}, distribution => 'rke2' )->{ipam}, { mode => 'kubernetes' },
+    'no ConfigMap: defaults stand' );
+  my $keep = adopt( $pool, distribution => 'rke2',
+    helm_values => { ipam => { operator => { clusterPoolIPv4MaskSize => 26 } } } );
+  is( $keep->{ipam}{operator}{clusterPoolIPv4MaskSize}, 26, 'caller\'s other ipam keys kept' );
+  is_deeply( $keep->{ipam}{operator}{clusterPoolIPv4PodCIDRList}, ['10.0.0.0/8'], 'next to the running pool' );
+
+  eval { adopt( $pool, distribution => 'rke2', helm_values => { ipam => { mode => 'kubernetes' } } ) };
+  like( $@, qr{runs ipam\.mode cluster-pool \(ConfigMap kube-system/cilium-config\), the requested values ipam\.mode kubernetes},
+    'explicit other mode: dies naming both' );
+  is( adopt( $pool, distribution => 'rke2', helm_values => { ipam => { mode => 'cluster-pool' } } )
+    ->{ipam}{operator}{clusterPoolIPv4PodCIDRList}[0], '10.0.0.0/8', 'explicit same mode: pool still adopted' );
+
+  my $two = { ipam_mode => 'cluster-pool', pool => [ '10.0.0.0/16', '10.1.0.0/16' ] };
+  eval { adopt( $two, distribution => 'rke2',
+    helm_values => { ipam => { operator => { clusterPoolIPv4PodCIDRList => ['10.9.0.0/16'] } } } ) };
+  like( $@, qr{cluster-pool is 10\.0\.0\.0/16 10\.1\.0\.0/16 .*requested clusterPoolIPv4PodCIDRList 10\.9\.0\.0/16}s,
+    'explicit other pool: dies naming both' );
+  ok( eval { adopt( $two, distribution => 'rke2',
+    helm_values => { ipam => { operator => { clusterPoolIPv4PodCIDRList => [ '10.1.0.0/16', '10.0.0.0/16' ] } } } ); 1 },
+    'explicit same pool in another order: fine' ) or diag $@;
+  ok( eval { adopt( { ipam_mode => 'kubernetes' }, distribution => 'rke2',
+    helm_values => { ipam => { operator => { clusterPoolIPv4PodCIDRList => ['10.9.0.0/16'] } } } ); 1 },
+    'a pool on a kubernetes-mode cluster is not compared' );
+};
+
+subtest 'adopt: k8sServiceHost (k3s) and operator.replicas' => sub {
+  my $v = adopt( { k8s_service_host => '10.0.0.1', operator_replicas => 2 }, distribution => 'k3s' );
+  is( $v->{k8sServiceHost}, '10.0.0.1', 'k3s: running host used when none given' );
+  is( $v->{operator}{replicas}, 2, 'operator.replicas from the release, not forced to 1' );
+  is( adopt( { k8s_service_host => '10.0.0.1' }, distribution => 'k3s', k8s_service_host => 'cp' )
+    ->{k8sServiceHost}, 'cp', 'given host wins' );
+  is( adopt( { k8s_service_host => '10.0.0.1' }, distribution => 'rke2' )->{k8sServiceHost},
+    '127.0.0.1', 'rke2 keeps 127.0.0.1' );
+  is( adopt( { operator_replicas => 2 }, distribution => 'rke2',
+    helm_values => { operator => { replicas => 3 } } )->{operator}{replicas}, 3, 'given replicas win' );
+  is( adopt( {}, distribution => 'rke2' )->{operator}{replicas}, 1, 'nothing running: default 1' );
+};
+
+subtest 'read the running Cilium' => sub {
+  $api = FakeAPI->new( objects => {
+    'ConfigMap/cilium-config' => configmap( ipam => 'cluster-pool', 'cluster-pool-ipv4-cidr' => '10.0.0.0/16 10.1.0.0/16' ),
+    'DaemonSet/cilium'        => daemonset( env => { KUBERNETES_SERVICE_HOST => '203.0.113.7' } ),
+  } );
+  is_deeply( $C->can('_read_running')->( $api, { config => { operator => { replicas => 2 } } } ), {
+    ipam_mode => 'cluster-pool', pool => [ '10.0.0.0/16', '10.1.0.0/16' ],
+    k8s_service_host => '203.0.113.7', operator_replicas => 2,
+  }, 'mode, pool list, host, replicas' );
+
+  $api = FakeAPI->new( objects => { 'ConfigMap/cilium-config' => configmap() } );
+  is( $C->can('_read_running')->( $api, undef )->{ipam_mode}, 'cluster-pool',
+    'ConfigMap without ipam: the agent default cluster-pool' );
+
+  $api = FakeAPI->new( objects => { 'ConfigMap/cilium-config' => sub { die "Kubernetes API error: 403 forbidden\n" } } );
+  eval { $C->can('_read_running')->( $api, undef ) };
+  like( $@, qr{Cannot read ConfigMap kube-system/cilium-config: .*403}, 'an API error dies, never guesses' );
+};
+
+subtest 'install_cilium: a running cluster-pool rke2 cluster is upgraded on cluster-pool' => sub {
+  @cmds = ();
+  $api = FakeAPI->new(
+    secrets => [ helm_secret( revision => 1, status => 'deployed', chart_version => '1.16.5',
+      config => { cluster => { name => 'default' } } ) ],
+    objects => { 'ConfigMap/cilium-config' => configmap( ipam => 'cluster-pool', 'cluster-pool-ipv4-cidr' => '10.0.0.0/8' ) },
+  );
+  install_cilium( distribution => 'rke2', kubeconfig => '/kc' );
+  is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'upgraded' );
+  like( $files{'/tmp/cilium-values-rke2.yaml'}, qr/^  mode: cluster-pool$/m, 'values keep cluster-pool' );
+  like( $files{'/tmp/cilium-values-rke2.yaml'}, qr{^    - 10\.0\.0\.0/8$}m, 'and the running pool' );
+
+  @cmds = ();
+  eval { install_cilium( distribution => 'rke2', kubeconfig => '/kc', helm_values => { ipam => { mode => 'kubernetes' } } ) };
+  like( $@, qr/runs ipam\.mode cluster-pool/, 'explicit kubernetes: dies' );
+  is_deeply( \@cmds, [], 'before anything ran on the host' );
+};
+
+subtest 'install_cilium: a stale release is reinstalled without adopting' => sub {
+  @cmds = ();
+  $api = FakeAPI->new( daemonset => 1,
+    secrets => [ helm_secret( revision => 1, status => 'failed', chart_version => '1.17.0' ) ],
+    objects => { 'ConfigMap/cilium-config' => configmap( ipam => 'cluster-pool' ) } );
+  install_cilium( distribution => 'rke2', kubeconfig => '/kc' );
+  like( $files{'/tmp/cilium-values-rke2.yaml'}, qr/^  mode: kubernetes$/m, 'no working Cilium: defaults' );
+};
+
+subtest 'upgrade_cilium: k3s keeps the running k8sServiceHost' => sub {
+  @cmds = ();
+  $api = FakeAPI->new( objects => {
+    'ConfigMap/cilium-config' => configmap( ipam => 'cluster-pool', 'cluster-pool-ipv4-cidr' => '10.42.0.0/16' ),
+    'DaemonSet/cilium'        => daemonset( env => { KUBERNETES_SERVICE_HOST => '203.0.113.7' } ),
+  } );
+  upgrade_cilium( distribution => 'k3s', kubeconfig => '/kc' );
+  like( $files{'/tmp/cilium-values-k3s.yaml'}, qr/^k8sServiceHost: 203\.0\.113\.7$/m, 'host from the DaemonSet' );
+  is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'upgraded' );
+
+  @cmds = ();
+  $api = FakeAPI->new;
+  eval { upgrade_cilium( distribution => 'k3s', kubeconfig => '/kc' ) };
+  like( $@, qr/k3s needs k8s_service_host/, 'no running Cilium and no host: dies' );
+  is_deeply( \@cmds, [], 'before anything ran on the host' );
+};
+
+subtest 'wait for readiness' => sub {
+  my $r = $C->can('_readiness');
+  ok( $r->( daemonset(), operator_deployment() )->{ready}, 'all ready' );
+  my $st = $r->( daemonset( desired => 3, ready => 2 ), operator_deployment() );
+  ok( !$st->{ready}, 'a node not ready' );
+  like( $st->{detail}, qr{cilium 2/3 ready, 3/3 updated; cilium-operator 1/1 ready}, 'detail says so' );
+  ok( !$r->( daemonset( desired => 2, updated => 1 ), operator_deployment() )->{ready}, 'rollout incomplete' );
+  like( $r->( daemonset( generation => 3, observed => 2 ), operator_deployment() )->{detail},
+    qr/rollout not observed yet/, 'new generation not observed' );
+  ok( !$r->( daemonset(), operator_deployment( ready => 0 ) )->{ready}, 'operator not ready' );
+  like( $r->( undef, undef )->{detail}, qr{DaemonSet kube-system/cilium not found; Deployment kube-system/cilium-operator not found},
+    'nothing there' );
+
+  my $resolve = $C->can('_resolve_opts');
+  eval { $resolve->( wait => 1 ) };
+  like( $@, qr/wait needs kubeconfig/, 'wait needs kubeconfig' );
+  eval { $resolve->( wait => 1, kubeconfig => '/kc', wait_duration => '10m' ) };
+  like( $@, qr/wait_duration must be a whole number of seconds/, 'duration in seconds' );
+  is( $resolve->( wait => 1, kubeconfig => '/kc' )->{wait_duration}, 600, 'default 600s' );
+
+  my $slept = 0;
+  no warnings 'redefine';
+  local *Rex::Rancher::Cilium::_sleep = sub { $slept++ };
+  use warnings 'redefine';
+
+  $api = FakeAPI->new( secrets => [], objects => {
+    'DaemonSet/cilium' => daemonset(), 'Deployment/cilium-operator' => operator_deployment() } );
+  ok( eval { install_cilium( distribution => 'rke2', kubeconfig => '/kc', wait => 1 ); 1 }, 'ready: returns' ) or diag $@;
+  is( $slept, 0, 'without sleeping' );
+
+  $api = FakeAPI->new( secrets => [ helm_secret( revision => 1, status => 'deployed', chart_version => '1.16.5',
+    config => $deployed_cfg ) ], objects => {
+    'DaemonSet/cilium' => daemonset( desired => 2, ready => 1 ), 'Deployment/cilium-operator' => operator_deployment() } );
+  eval { upgrade_cilium( distribution => 'rke2', kubeconfig => '/kc', wait => 1, wait_duration => 12 ) };
+  like( $@, qr{Cilium was not ready within 12s: cilium 1/2 ready}, 'timeout dies with the state' );
+  is( $slept, 2, 'three polls, 5s apart' );
+};
+
+subtest 'ensure_gateway_api_crds' => sub {
+  @cmds = ();
+  eval { ensure_gateway_api_crds( version => 'v1.2.0' ) };
+  like( $@, qr/needs kubeconfig/, 'kubeconfig required' );
+  eval { ensure_gateway_api_crds( kubeconfig => '/kc' ) };
+  like( $@, qr/needs version/, 'version required' );
+  eval { ensure_gateway_api_crds( kubeconfig => '/kc', version => 'v1.2.0', channel => 'beta' ) };
+  like( $@, qr/gateway_api_channel must be/, 'channel checked' );
+
+  my @called;
+  no warnings 'redefine';
+  local *Rex::Rancher::Cilium::_ensure_gateway_api_crds = sub { push @called, [ @_[ 1, 2 ] ]; $main::applied };
+  use warnings 'redefine';
+
+  our $applied = 0;
+  $api = FakeAPI->new( objects => { 'Deployment/cilium-operator' => operator_deployment() } );
+  is( ensure_gateway_api_crds( kubeconfig => '/kc', version => 'v1.2.0' ), 0, 'current: 0' );
+  is_deeply( $called[-1], [ 'v1.2.0', 'experimental' ], 'default channel experimental' );
+  is_deeply( $api->{patched}, [], 'operator left alone' );
+
+  $applied = 1;
+  is( ensure_gateway_api_crds( kubeconfig => '/kc', version => 'v1.6.1', channel => 'standard' ), 1, 'applied: 1' );
+  is_deeply( $api->{patched}, ['Deployment/cilium-operator'], 'operator restarted' );
+  is_deeply( \@cmds, [], 'nothing on the remote host' );
 };
 
 done_testing;

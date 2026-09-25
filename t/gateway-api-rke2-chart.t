@@ -100,12 +100,12 @@ sub secret {
     labels => { owner => 'helm', name => $name, status => $status, version => 1 } };
 }
 
-my %o = ( gateway_api_version => 'v1.2.0', gateway_api_channel => 'experimental' );
+my @o = ( 'v1.2.0', 'experimental' );
 my $ensure = Rex::Rancher::Cilium->can('_ensure_gateway_api_crds');
 
 subtest 'RKE2 release owns the CRDs: die before anything' => sub {
   my $api = FakeAPI->new( secrets => [ secret( $CHART, 'deployed' ) ] );
-  ok( !eval { $ensure->( $api, \%o ); 1 }, 'dies' );
+  ok( !eval { $ensure->( $api, @o ); 1 }, 'dies' );
   like( $@, qr/\Q$CHART\E \(deployed/, 'names the release and its state' );
   like( $@, qr/disable and restart rke2-server/, 'names the way out' );
   is( $api->{gets}, 0, 'before probing or applying any CRD' );
@@ -117,7 +117,7 @@ subtest 'no RKE2 release: the apply path runs' => sub {
   my @fetched;
   no warnings 'redefine';
   local *HTTP::Tiny::get = sub { push @fetched, $_[1]; die "stop before the network\n" };
-  eval { $ensure->( $api, \%o ) };
+  eval { $ensure->( $api, @o ) };
   is( $@, "stop before the network\n", 'past the guard' );
   is( $api->{gets}, 1, 'CRD probe ran' );
   like( $fetched[0], qr{/v1\.2\.0/experimental-install\.yaml$}, 'bundle fetch reached' );

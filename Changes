@@ -1,6 +1,18 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - install_cilium and upgrade_cilium with kubeconfig keep what a running
+    Cilium uses: IPAM mode and pool from ConfigMap kube-system/cilium-config
+    (an rke2 upgrade no longer switches a cluster-pool cluster to kubernetes
+    IPAM), k8sServiceHost on k3s from the cilium DaemonSet (k8s_service_host
+    is then optional), operator.replicas from the release. A different mode
+    or pool asked for in helm_values dies before the host is touched.
+    upgrade_cilium without kubeconfig warns that it cannot check the mode.
+  - New wait and wait_duration (seconds, default 600) options for
+    install_cilium/upgrade_cilium: wait until the cilium DaemonSet and
+    cilium-operator are ready, or die naming their state.
+  - New ensure_gateway_api_crds(kubeconfig, version, channel): apply only
+    the Gateway API CRDs and restart cilium-operator when they changed.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

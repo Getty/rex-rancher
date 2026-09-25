@@ -25,6 +25,7 @@ use vars qw(@EXPORT);
 @EXPORT = qw(
   install_cilium
   upgrade_cilium
+  ensure_gateway_api_crds
 );
 
 use constant CILIUM_VERSION     => '1.17.0';
@@ -42,6 +43,16 @@ use constant GATEWAY_API_PROBE_CRD => 'gateways.gateway.networking.k8s.io';
 # RKE2 v1.37+ ships the Gateway API CRDs as its own Helm chart; the release
 # lives in RELEASE_NAMESPACE like Cilium's.
 use constant RKE2_GATEWAY_API_RELEASE => 'rke2-gateway-api-crd';
+
+# Cilium's running configuration: the agent reads it from this ConfigMap
+# (the chart renders ipam.mode as "ipam" and the pool list, space-separated,
+# as "cluster-pool-ipv4-cidr"), whatever the Helm release values say.
+use constant CILIUM_CONFIGMAP => 'cilium-config';
+
+# Default for wait: how long install_cilium/upgrade_cilium wait for the
+# cilium DaemonSet and the cilium-operator to be ready, and the poll step.
+use constant WAIT_DURATION => 600;
+use constant WAIT_INTERVAL => 5;
 
 # Addresses that name the node itself. k3s agents serve the API on
 # 127.0.0.1:6444, not 6443, so on k3s k8sServiceHost must not be one of these.
@@ -88,6 +99,8 @@ running is taken down.
 explicitly and the requested values differ): dies before C<cilium upgrade>,
 naming both modes. Cilium cannot switch IPAM mode under running pods;
 redeploy the cluster, or pass the deployed mode in C<helm_values>.
+(With the running configuration below, this only fires when release and
+ConfigMap disagree.)
 
 =item * C<pending-upgrade> or C<pending-rollback>: dies. An earlier run was
 interrupted or another is still running, and the deployed revision still
@@ -96,8 +109,42 @@ other deploy is running.
 
 =back
 
+When the release has a C<deployed> revision (a running Cilium), what that
+Cilium runs is read first and kept wherever the caller did not ask for
+something else, before anything touches the host:
+
+=over
+
+=item * C<ipam.mode> and the pool (C<ipam.operator.clusterPoolIPv4PodCIDRList>)
+come from the ConfigMap C<kube-system/cilium-config> (C<ipam>,
+C<cluster-pool-ipv4-cidr>), not from the release values: a Cilium installed
+without an explicit mode runs the chart default C<cluster-pool>, and the
+C<kubernetes> default of the RKE2 values must not switch it (its pods would
+lose their addresses). A ConfigMap without C<ipam> counts as
+C<cluster-pool>, the agent's default. The default pool gives way to the
+running one; in any other mode it is dropped.
+
+=item * a mode or pool the caller set in C<helm_values> (or C<cluster_cidr>)
+that differs from the running one dies, naming both: Cilium cannot change
+either under running pods. The pool is compared only in C<cluster-pool>
+mode, as a set.
+
+=item * on K3s without C<k8s_service_host> (or C<helm_values-E<gt>{k8sServiceHost}>),
+C<k8sServiceHost> is the C<KUBERNETES_SERVICE_HOST> of the running
+C<cilium> DaemonSet.
+
+=item * C<operator.replicas> keeps the release's value instead of the
+default C<1>, unless C<helm_values> sets it.
+
+=back
+
+Any API error other than "not found" while reading these dies rather than
+fall back to the defaults. A stale release (the reinstall cases above) has
+no running Cilium, so nothing is read.
+
 After a fresh install the C<cilium> DaemonSet must exist, or it dies: the
-CLI has been seen to exit 0 without creating anything.
+CLI has been seen to exit 0 without creating anything. With C<wait>, the
+function returns only once Cilium is ready (see there).
 
 Without C<kubeconfig> the release state cannot be read, and the previous
 behaviour applies: C<cilium install> runs, and its "cannot re-use a name"
@@ -144,7 +191,9 @@ K3s only, and required there: the control plane address Cilium reaches the
 API server at on port 6443 from every node (C<k8sServiceHost>), e.g. the
 server's IP or a name in its certificate. A loopback address dies, because
 K3s agents serve the API on C<127.0.0.1:6444>, not 6443.
-C<helm_values-E<gt>{k8sServiceHost}> may take its place.
+C<helm_values-E<gt>{k8sServiceHost}> may take its place, and with
+C<kubeconfig> a running Cilium's own address does (see above); without any of
+them it dies before the host is touched.
 L<Rex::Rancher/rancher_deploy_server> passes the first C<tls_san>. Passing
 it on RKE2 dies: RKE2 uses C<127.0.0.1>, which works on every node there.
 
@@ -157,7 +206,23 @@ the CLI uses the kubeconfig's server address if omitted.
 
 Local path to the cluster kubeconfig (as saved by
 L<Rex::Rancher/rancher_deploy_server>). Enables the release-state handling
-above and is required for C<gateway_api>. Optional.
+and the running-configuration reads above and is required for
+C<gateway_api> and C<wait>. Optional.
+
+=item C<wait>
+
+If true, wait after install, upgrade or no-op until Cilium is ready: the
+C<cilium> DaemonSet has rolled out its current generation to every node it
+schedules on and all those pods are ready, and every C<cilium-operator>
+replica is updated and ready. Requires C<kubeconfig>; read from the local
+machine. Dies after C<wait_duration> naming the last state (pods ready and
+updated of each). Default: off, which only checks that the DaemonSet exists
+after a fresh install.
+
+=item C<wait_duration>
+
+Seconds C<wait> waits, a whole number above 0. Default: C<600>. Only used
+with C<wait>.
 
 =item C<helm_values>
 
@@ -216,10 +281,21 @@ sub install_cilium {
 
   Rex::Logger::info("Installing Cilium $o->{version} on $o->{distribution} cluster");
 
+  my $api     = $o->{kubeconfig} ? _api($o->{kubeconfig}) : undef;
+  my $release = $api ? _read_release($api) : undef;
+
+  # A running Cilium keeps its IPAM mode, pool, k8sServiceHost and operator
+  # replicas unless the caller asked for them. Read and settled before the
+  # host is touched, so a refusal leaves it as it was.
+  _adopt_running($o, _read_running($api, $release))
+    if $release && $release->{has_deployed};
+  _require_k8s_service_host($o);
+
   _install_cilium_cli($o->{cli_version});
 
-  my $api = $o->{kubeconfig} ? _api($o->{kubeconfig}) : undef;
-  my $crds_applied = $o->{gateway_api} ? _ensure_gateway_api_crds($api, $o) : 0;
+  my $crds_applied = $o->{gateway_api}
+    ? _ensure_gateway_api_crds($api, $o->{gateway_api_version}, $o->{gateway_api_channel})
+    : 0;
 
   my $values_file = _write_helm_values($o);
 
@@ -228,8 +304,7 @@ sub install_cilium {
     return;
   }
 
-  my $release = _read_release($api);
-  my $action  = _release_action($release, $o->{version}, $o->{values});
+  my $action = _release_action($release, $o->{version}, $o->{values});
 
   if ($action eq 'noop') {
     Rex::Logger::info("  Cilium $o->{version} already deployed with the requested values, nothing to do");
@@ -248,6 +323,8 @@ sub install_cilium {
   _restart_operator($api)
     if $crds_applied && ($action eq 'noop' || $action eq 'upgrade');
 
+  _wait_ready($api, $o->{wait_duration}) if $o->{wait};
+
   Rex::Logger::info("Cilium $o->{version} ready on $o->{distribution} cluster");
 }
 
@@ -259,7 +336,18 @@ needed. The same Helm values generation logic as L</install_cilium> is used,
 and C<gateway_api> applies the CRDs the same way (restarting a running
 C<cilium-operator> when they were applied).
 
-Options are the same as L</install_cilium>.
+With C<kubeconfig>, the running configuration is read and kept exactly as in
+L</install_cilium> (IPAM mode and pool from C<kube-system/cilium-config>,
+K3s C<k8sServiceHost> from the DaemonSet, C<operator.replicas> from the
+release), so an upgrade needs no values the caller has to look up first, and
+a requested change of IPAM mode or pool dies before the host is touched.
+Without C<kubeconfig> nothing can be read: the values are applied as
+generated, and unless C<helm_values> sets C<ipam.mode> a warning says so --
+on RKE2 the default C<ipam.mode: kubernetes> would switch a C<cluster-pool>
+cluster. K3s then needs C<k8s_service_host>.
+
+Options are the same as L</install_cilium>, C<wait> and C<wait_duration>
+included.
 
   upgrade_cilium(
     distribution => 'rke2',
@@ -274,17 +362,90 @@ sub upgrade_cilium {
 
   Rex::Logger::info("Upgrading Cilium to $o->{version} on $o->{distribution} cluster");
 
+  my $api = $o->{kubeconfig} ? _api($o->{kubeconfig}) : undef;
+  if ($api) {
+    _adopt_running($o, _read_running($api, _read_release($api)));
+  }
+  elsif (!$o->{explicit}{ipam_mode}) {
+    Rex::Logger::info("upgrade_cilium without kubeconfig cannot read the running "
+      . "IPAM mode: ipam.mode " . (_ipam_mode($o->{values}) // 'unset') . " is "
+      . "applied as it stands, and a cluster running another mode loses its pod "
+      . "addresses. Pass kubeconfig, or the running mode in helm_values", 'warn');
+  }
+  _require_k8s_service_host($o);
+
   _install_cilium_cli($o->{cli_version});
 
-  my $api = $o->{kubeconfig} ? _api($o->{kubeconfig}) : undef;
-  my $crds_applied = $o->{gateway_api} ? _ensure_gateway_api_crds($api, $o) : 0;
+  my $crds_applied = $o->{gateway_api}
+    ? _ensure_gateway_api_crds($api, $o->{gateway_api_version}, $o->{gateway_api_channel})
+    : 0;
 
   my $values_file = _write_helm_values($o);
   _run_cilium(_cilium_command('upgrade', $o, $values_file), 'upgrade');
 
   _restart_operator($api) if $crds_applied;
 
+  _wait_ready($api, $o->{wait_duration}) if $o->{wait};
+
   Rex::Logger::info("Cilium upgraded to $o->{version} on $o->{distribution} cluster");
+}
+
+=method ensure_gateway_api_crds(%opts)
+
+Apply the Gateway API CRDs of one bundle version and channel, the same way
+C<gateway_api> does in L</install_cilium>, without touching Cilium's Helm
+release: for a Gateway API pin that moved while Cilium did not. Everything
+runs from the local machine through L<Kubernetes::REST>; the remote host is
+not used.
+
+The CRDs are skipped when the cluster already carries that bundle version
+and channel. When they are applied and a C<cilium-operator> Deployment
+exists, it is restarted so it picks up the new CRDs. While RKE2's
+C<rke2-gateway-api-crd> Helm release exists this dies before applying
+anything, as C<gateway_api> does. Returns C<1> when the CRDs were applied,
+C<0> when they were already current.
+
+Options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig. Required.
+
+=item C<version>
+
+Gateway API release, e.g. C<v1.2.0>. Required; it must match what the
+running Cilium supports.
+
+=item C<channel>
+
+C<experimental> (default) or C<standard>; see C<gateway_api_channel> in
+L</install_cilium>.
+
+=back
+
+  ensure_gateway_api_crds(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    version    => 'v1.2.0',
+    channel    => 'standard',
+  );
+
+=cut
+
+sub ensure_gateway_api_crds {
+  my (%opts) = @_;
+
+  die "ensure_gateway_api_crds needs kubeconfig (a local kubeconfig the API "
+    . "answers through)\n" unless $opts{kubeconfig};
+  die "ensure_gateway_api_crds needs version (e.g. v1.2.0), matching what "
+    . "Cilium supports\n" unless $opts{version};
+  my $channel = _gateway_api_channel($opts{channel});
+
+  my $api = _api($opts{kubeconfig});
+  my $applied = _ensure_gateway_api_crds($api, $opts{version}, $channel);
+  _restart_operator($api) if $applied;
+  return $applied;
 }
 
 #
@@ -298,37 +459,34 @@ sub _resolve_opts {
   my $paths        = _paths_for($distribution);
   my $helm_values  = $opts{helm_values} // {};
   my $gateway_api  = $opts{gateway_api} ? 1 : 0;
-  my $channel      = $opts{gateway_api_channel} // 'experimental';
+  my $wait         = $opts{wait} ? 1 : 0;
+  my $duration     = $opts{wait_duration} // WAIT_DURATION;
 
   die "helm_values must be a hashref\n" unless ref $helm_values eq 'HASH';
 
   die "k8s_service_host is k3s-only: rke2 serves the API on 127.0.0.1:6443 "
     . "on every node\n" if $distribution eq 'rke2' && defined $opts{k8s_service_host};
 
+  my $channel = $opts{gateway_api_channel} // 'experimental';
   if ($gateway_api) {
     die "gateway_api needs kubeconfig (a local kubeconfig the API answers "
       . "through): the CRDs are applied via Kubernetes::REST\n" unless $opts{kubeconfig};
     die "gateway_api needs gateway_api_version (e.g. v1.2.0), matching what "
       . "Cilium supports\n" unless $opts{gateway_api_version};
-    die "gateway_api_channel must be 'standard' or 'experimental'\n"
-      unless $channel eq 'standard' || $channel eq 'experimental';
+    $channel = _gateway_api_channel($channel);
+  }
+
+  if ($wait) {
+    die "wait needs kubeconfig (a local kubeconfig the API answers through): "
+      . "readiness is read via Kubernetes::REST\n" unless $opts{kubeconfig};
+    die "wait_duration must be a whole number of seconds above 0\n"
+      unless $duration =~ /\A[1-9][0-9]*\z/;
   }
 
   my $values = _helm_values($distribution, $paths, $gateway_api, $helm_values,
     $opts{k8s_service_host});
 
-  # kube-proxy replacement on k3s: Cilium must reach the API server before
-  # any Service works, on agents too, where 127.0.0.1:6443 does not exist.
-  if ($distribution eq 'k3s') {
-    my $host = $values->{k8sServiceHost} // '';
-    die "install_cilium on k3s needs k8s_service_host, the control plane "
-      . "address every node reaches the API at on port 6443 (k3s agents serve "
-      . "it on 127.0.0.1:6444, so localhost does not work)"
-      . ( length $host ? ", got '$host'" : '' ) . "\n"
-      if !length $host || $LOOPBACK{lc $host};
-  }
-
-  return {
+  my $o = {
     distribution        => $distribution,
     paths               => $paths,
     version             => $opts{version}     // CILIUM_VERSION,
@@ -338,7 +496,59 @@ sub _resolve_opts {
     gateway_api         => $gateway_api,
     gateway_api_version => $opts{gateway_api_version},
     gateway_api_channel => $channel,
+    wait                => $wait,
+    wait_duration       => $duration,
     values              => $values,
+    explicit            => _explicit_values($helm_values, $opts{k8s_service_host}),
+  };
+
+  # With a kubeconfig a running Cilium's k8sServiceHost is read later, so
+  # the check waits for that; without one it can only come from the caller.
+  _require_k8s_service_host($o) unless $opts{kubeconfig};
+
+  return $o;
+}
+
+sub _gateway_api_channel {
+  my ($channel) = @_;
+  $channel //= 'experimental';
+  die "gateway_api_channel must be 'standard' or 'experimental'\n"
+    unless $channel eq 'standard' || $channel eq 'experimental';
+  return $channel;
+}
+
+# kube-proxy replacement on k3s: Cilium must reach the API server before
+# any Service works, on agents too, where 127.0.0.1:6443 does not exist.
+sub _require_k8s_service_host {
+  my ($o) = @_;
+  return unless $o->{distribution} eq 'k3s';
+
+  my $host = $o->{values}{k8sServiceHost} // '';
+  die "install_cilium on k3s needs k8s_service_host, the control plane "
+    . "address every node reaches the API at on port 6443 (k3s agents serve "
+    . "it on 127.0.0.1:6444, so localhost does not work)"
+    . ( length $host ? ", got '$host'" : '' ) . "\n"
+    if !length $host || $LOOPBACK{lc $host};
+}
+
+# Which values the caller set, as opposed to our defaults: only defaults
+# give way to what a running Cilium already uses. A non-hash where a hash
+# belongs counts as setting everything below it.
+sub _explicit_values {
+  my ($hv, $k8s_service_host) = @_;
+
+  my $ipam = $hv->{ipam};
+  my $ipam_all = exists $hv->{ipam} && ref $ipam ne 'HASH';
+  my $op = ref $ipam eq 'HASH' ? $ipam->{operator} : undef;
+  my $operator = $hv->{operator};
+
+  return {
+    ipam_mode => ( $ipam_all || ( ref $ipam eq 'HASH' && exists $ipam->{mode} ) ) ? 1 : 0,
+    pool      => ( $ipam_all || ( ref $ipam eq 'HASH' && exists $ipam->{operator}
+                   && ( ref $op ne 'HASH' || exists $op->{clusterPoolIPv4PodCIDRList} ) ) ) ? 1 : 0,
+    k8s_service_host  => ( defined $k8s_service_host || exists $hv->{k8sServiceHost} ) ? 1 : 0,
+    operator_replicas => ( exists $hv->{operator}
+                   && ( ref $operator ne 'HASH' || exists $operator->{replicas} ) ) ? 1 : 0,
   };
 }
 
@@ -555,6 +765,191 @@ sub _refuse_ipam_change {
     . "helm_values => { ipam => { mode => '$have' } } to keep it.\n";
 }
 
+#
+# The running Cilium (read locally via Kubernetes::REST)
+#
+
+# undef when the object does not exist; any other API error dies, because
+# guessing here is how a cluster-pool cluster gets switched to another mode.
+sub _get_optional {
+  my ($api, $kind, $name) = @_;
+  my $obj = eval { $api->get($kind, $name, namespace => RELEASE_NAMESPACE) };
+  return $obj if $obj;
+  return if !$@ || $@ =~ /\b404\b|not ?found/i;
+  die "Cannot read $kind " . RELEASE_NAMESPACE . "/$name: $@";
+}
+
+# What a running Cilium uses, each undef when unknown: the IPAM mode and
+# pool from its ConfigMap (not the release values -- a `cilium install`
+# without ipam.mode runs the chart default cluster-pool and records no mode),
+# k8sServiceHost from the agent's KUBERNETES_SERVICE_HOST, operator.replicas
+# from the release values.
+sub _read_running {
+  my ($api, $release) = @_;
+
+  my %running = (
+    operator_replicas => eval { $release->{config}{operator}{replicas} },
+  );
+
+  if (my $cm = _get_optional($api, 'ConfigMap', CILIUM_CONFIGMAP)) {
+    my $data = $cm->data // {};
+    # No ipam key: the agent's own default, cluster-pool.
+    $running{ipam_mode} = $data->{ipam} // 'cluster-pool';
+    my @pool = grep { length } split /[\s,]+/, $data->{'cluster-pool-ipv4-cidr'} // '';
+    $running{pool} = \@pool if @pool;
+  }
+
+  if (my $ds = _get_optional($api, 'DaemonSet', RELEASE_NAME)) {
+    $running{k8s_service_host} = _daemonset_env($ds, 'KUBERNETES_SERVICE_HOST');
+  }
+
+  return \%running;
+}
+
+sub _daemonset_env {
+  my ($ds, $name) = @_;
+  my $containers = eval { $ds->spec->template->spec->containers } // [];
+  for my $c (sort { ($b->name eq 'cilium-agent') <=> ($a->name eq 'cilium-agent') } @$containers) {
+    for my $env (@{ $c->env // [] }) {
+      return $env->value if $env->name eq $name && defined $env->value && length $env->value;
+    }
+  }
+  return;
+}
+
+# Pure: fold the running configuration into $o->{values} wherever the
+# caller left a default, and die where the caller asked for something a
+# running Cilium cannot switch to. Only ever called with a running Cilium.
+sub _adopt_running {
+  my ($o, $running) = @_;
+  my %values   = %{ $o->{values} };
+  my $explicit = $o->{explicit};
+
+  if (defined( my $mode = $running->{ipam_mode} )) {
+    my %ipam = ref $values{ipam} eq 'HASH' ? %{ $values{ipam} } : ();
+    my $want = $ipam{mode};
+
+    if ($explicit->{ipam_mode}) {
+      die "Cilium runs ipam.mode $mode (ConfigMap " . RELEASE_NAMESPACE . "/"
+        . CILIUM_CONFIGMAP . "), the requested values ipam.mode "
+        . ( $want // 'unset' ) . ": Cilium cannot change the IPAM mode of a "
+        . "running cluster (pods lose their addresses). Redeploy the cluster, "
+        . "or leave ipam.mode out of helm_values to keep it.\n"
+        if ref $values{ipam} eq 'HASH' && ( $want // '' ) ne $mode;
+    }
+    else {
+      $ipam{mode} = $mode if ref $values{ipam} eq 'HASH' || !exists $values{ipam};
+    }
+
+    if (ref $values{ipam} eq 'HASH' || !exists $values{ipam}) {
+      my %op = ref $ipam{operator} eq 'HASH' ? %{ $ipam{operator} } : ();
+      if ($explicit->{pool}) {
+        my $pool = $op{clusterPoolIPv4PodCIDRList};
+        my @want = ref $pool eq 'ARRAY' ? @$pool : defined $pool ? ($pool) : ();
+        die "Cilium's cluster-pool is @{ $running->{pool} } (ConfigMap "
+          . RELEASE_NAMESPACE . "/" . CILIUM_CONFIGMAP . "), the requested "
+          . "clusterPoolIPv4PodCIDRList @want: Cilium cannot move the pool of a "
+          . "running cluster. Redeploy the cluster, or leave the pool (and "
+          . "cluster_cidr) out to keep it.\n"
+          if $mode eq 'cluster-pool' && $running->{pool}
+          && join(' ', sort @want) ne join(' ', sort @{ $running->{pool} });
+      }
+      else {
+        # Our default pool gives way: the running one in cluster-pool mode,
+        # none otherwise (without a readable one the chart's default runs,
+        # and stays).
+        delete $op{clusterPoolIPv4PodCIDRList};
+        $op{clusterPoolIPv4PodCIDRList} = [ @{ $running->{pool} } ]
+          if $mode eq 'cluster-pool' && $running->{pool};
+      }
+      if (%op) { $ipam{operator} = \%op } else { delete $ipam{operator} }
+      $values{ipam} = \%ipam;
+    }
+  }
+
+  $values{k8sServiceHost} = $running->{k8s_service_host}
+    if $o->{distribution} eq 'k3s' && !$explicit->{k8s_service_host}
+    && defined $running->{k8s_service_host};
+
+  if (!$explicit->{operator_replicas} && defined $running->{operator_replicas}) {
+    my %operator = ref $values{operator} eq 'HASH' ? %{ $values{operator} } : ();
+    $operator{replicas} = $running->{operator_replicas};
+    $values{operator} = \%operator;
+  }
+
+  $o->{values} = \%values;
+  return $o;
+}
+
+sub _ipam_mode {
+  my ($values) = @_;
+  return ref $values->{ipam} eq 'HASH' ? $values->{ipam}{mode} : undef;
+}
+
+#
+# Readiness: the cilium DaemonSet and the cilium-operator Deployment
+#
+
+sub _sleep { sleep $_[0] }
+
+sub _wait_ready {
+  my ($api, $duration) = @_;
+
+  my $attempts = int(($duration + WAIT_INTERVAL - 1) / WAIT_INTERVAL) || 1;
+  Rex::Logger::info("Waiting up to ${duration}s for Cilium to be ready");
+
+  my $state;
+  for my $i (1 .. $attempts) {
+    $state = _readiness(
+      scalar eval { $api->get('DaemonSet', RELEASE_NAME, namespace => RELEASE_NAMESPACE) },
+      scalar eval { $api->get('Deployment', 'cilium-operator', namespace => RELEASE_NAMESPACE) },
+    );
+    if ($state->{ready}) {
+      Rex::Logger::info("  Cilium ready: $state->{detail}");
+      return 1;
+    }
+    Rex::Logger::info("  $state->{detail} ($i/$attempts)");
+    _sleep(WAIT_INTERVAL) if $i < $attempts;
+  }
+
+  die "Cilium was not ready within ${duration}s: $state->{detail}. Check the "
+    . "cilium and cilium-operator pods in " . RELEASE_NAMESPACE . " (events, "
+    . "logs), or `cilium status` on the server\n";
+}
+
+# Pure: ready when the DaemonSet has rolled out its current generation to
+# every node it wants and all of those pods are ready, and the operator has
+# all its replicas updated and ready.
+sub _readiness {
+  my ($ds, $op) = @_;
+  my ($ds_ok, $ds_txt) = (0, "DaemonSet " . RELEASE_NAMESPACE . "/cilium not found");
+  my ($op_ok, $op_txt) = (0, "Deployment " . RELEASE_NAMESPACE . "/cilium-operator not found");
+
+  if ($ds) {
+    my $st      = $ds->status;
+    my $desired = $st ? $st->desiredNumberScheduled // 0 : 0;
+    my $ready   = $st ? $st->numberReady // 0 : 0;
+    my $updated = $st ? $st->updatedNumberScheduled // 0 : 0;
+    my $current = ( $st ? $st->observedGeneration // 0 : 0 ) >= ( $ds->metadata->generation // 0 );
+    $ds_ok  = $current && $desired > 0 && $ready == $desired && $updated == $desired;
+    $ds_txt = "cilium $ready/$desired ready, $updated/$desired updated"
+      . ( $current ? '' : ', rollout not observed yet' );
+  }
+
+  if ($op) {
+    my $st      = $op->status;
+    my $want    = ( $op->spec ? $op->spec->replicas : undef ) // 1;
+    my $ready   = $st ? $st->readyReplicas // 0 : 0;
+    my $updated = $st ? $st->updatedReplicas // 0 : 0;
+    my $current = ( $st ? $st->observedGeneration // 0 : 0 ) >= ( $op->metadata->generation // 0 );
+    $op_ok  = $current && $ready >= $want && $updated >= $want;
+    $op_txt = "cilium-operator $ready/$want ready, $updated/$want updated"
+      . ( $current ? '' : ', rollout not observed yet' );
+  }
+
+  return { ready => ( $ds_ok && $op_ok ) ? 1 : 0, detail => "$ds_txt; $op_txt" };
+}
+
 sub _norm_version {
   my ($v) = @_;
   $v =~ s/^v//;
@@ -658,8 +1053,7 @@ sub _gateway_api_needs_apply {
 
 # Returns 1 when CRDs were applied, 0 when they were already current.
 sub _ensure_gateway_api_crds {
-  my ($api, $o) = @_;
-  my ($version, $channel) = @{$o}{qw( gateway_api_version gateway_api_channel )};
+  my ($api, $version, $channel) = @_;
 
   _refuse_rke2_gateway_api_chart($api);
 
@@ -855,10 +1249,19 @@ sub _write_helm_values {
     cli_version      => 'v0.16.23',
   );
 
-  # Upgrade an existing Cilium installation
+  # Upgrade an existing Cilium installation, keeping what it runs,
+  # and wait until it is ready again
   upgrade_cilium(
     distribution => 'rke2',
+    kubeconfig   => "$ENV{HOME}/.kube/mycluster.yaml",
     version      => '1.17.0',
+    wait         => 1,
+  );
+
+  # Only move the Gateway API CRDs (restarts cilium-operator if applied)
+  ensure_gateway_api_crds(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    version    => 'v1.2.0',
   );
 
 =head1 DESCRIPTION
@@ -905,7 +1308,10 @@ C<cluster-cidr>).
 Both distributions share the same CNI binary/config paths (C</opt/cni/bin>,
 C</etc/cni/net.d>). C<gateway_api> adds C<gatewayAPI.enabled: true>, and
 C<helm_values> is merged over all of it. C<--set kubeProxyReplacement=true>
-is also passed on the command line and wins over any value file.
+is also passed on the command line and wins over any value file. With
+C<kubeconfig> and a running Cilium, its IPAM mode, pool, K3s
+C<k8sServiceHost> and C<operator.replicas> replace these defaults (see
+L</install_cilium>).
 
 =head2 Default versions
 

@@ -327,7 +327,10 @@ sub rancher_deploy_server {
   # Refuse bad or contradictory Cilium options before the node is touched,
   # not at step 7.
   if ($cilium) {
-    Rex::Rancher::Cilium::_resolve_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
+    my $o = Rex::Rancher::Cilium::_resolve_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
+    # install_cilium could read k8sServiceHost from a running Cilium, but a
+    # first deploy has none: the address must come from the options here.
+    Rex::Rancher::Cilium::_require_k8s_service_host($o);
   }
   else {
     my @set = (
