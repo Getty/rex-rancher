@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-09-25T03:25:38Z
+claimed_by: worker-gpu-review
+class: standard
+completed: 2026-09-25T03:25:38Z
+created: 2026-09-24T21:27:00Z
+id: 40
+priority: medium
+started: 2026-09-25T03:21:19Z
+status: done
+tags:
+- gpu
+- upstream
+title: Review Rex::GPU 0.002 changes reaching gpu => 1
+updated: 2026-09-25T03:25:38Z
+---
+
+Rex::GPU 0.002 (unreleased; release waits on hardware verification) changes what gpu_setup does for every gpu => 1 deploy, with no version gate:
+
+1. Compute classification by PCI device-ID generation instead of marketing name. Hosts formerly compute => 0 may now get a driver install.
+2. install_driver takes gpus => [...] and dies before any install when the compute GPUs cannot share one driver (e.g. V100 next to B200).
+3. New nvswitch key; Fabric Manager / NVLink-fabric packages are installed automatically on HGX and B200/B300 hosts.
+4. vgpu/vgpu_type detection; a vGPU guest without a working driver dies before any driver package is installed.
+5. containerd_config is validated before detection.
+6. Reboot wait requires "echo ok" over the new connection, not just a reconnect.
+7. install_driver is a no-op (no reinstall/reboot/blacklist) when a working driver is present.
+
+To decide: does gpu => 1 need a minimum Rex::GPU version or pin? Plan verification on a real Rancher-managed GPU node (multi-GPU, NVSwitch, vGPU especially) before the Rancher release that picks up Rex::GPU 0.002.
+
+Review done (read-only). Rex::GPU 0.002 IS released on CPAN (ticket text outdated). Rancher calls gpu_setup(containerd_config=>dist, reboot=>...) (Rancher.pm:622-641) — signature unchanged in 0.002, no incompat. Point 6 (echo ok reboot) fixes a real Rancher bug (0.001 reboot check always passed); 0.001 template also clobbered RKE2 containerd config -> want recommends 'Rex::GPU','0.002' (recommends, not requires: gpu=>0 needs no Rex::GPU). Point 3 makes Rancher POD (Rancher.pm:873-878) + README:67 stale (B200/HGX now get FM/nvlsm, new die paths). Extra finding: rke2 node set up with 0.001 not healed by re-run (Server.pm:573 start --no-block, no restart). Follow-up tickets created. Live plan: single/multi-GPU, HGX/NVSwitch (time reboot vs 5m20s timeout), vGPU guest, re-run idempotency, rke2 0.001->0.002 heal check, on rke2+k3s.
