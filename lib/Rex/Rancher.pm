@@ -228,6 +228,16 @@ C<traefik> and C<servicelb> on k3s; a given list replaces the default. With
 C<gateway_api> the rke2 default also holds C<rke2-gateway-api-crd> (see
 C<gateway_api> below). See L<Rex::Rancher::Server/install_server>.
 
+=item C<cluster_cidr>
+
+The pod network, one IPv4 CIDR, passed to
+L<Rex::Rancher::Server/install_server> (C<cluster-cidr> in C<config.yaml>,
+RKE2 and K3s) and to L<Rex::Rancher::Cilium/install_cilium>, which uses it as
+Cilium's cluster-pool. An invalid value dies before the node is touched.
+Default: as without it (K3s with Cilium C<10.42.0.0/16>, RKE2 its own
+default). An additional server joining with C<server> needs the same value.
+On an existing cluster it must match what runs: Cilium dies on another pool.
+
 =item C<node_labels>
 
 Node labels to apply, as an arrayref of C<key=value> strings.
@@ -312,7 +322,8 @@ sub rancher_deploy_server {
     ( map { exists $opts{"cilium_$_"} ? ( $_ => $opts{"cilium_$_"} ) : () }
         qw( version cli_version helm_values ) ),
     ( map { exists $opts{$_} ? ( $_ => $opts{$_} ) : () }
-        qw( gateway_api gateway_api_version gateway_api_channel k8s_service_host ) ),
+        qw( gateway_api gateway_api_version gateway_api_channel k8s_service_host
+            cluster_cidr ) ),
   );
   # k3s: Cilium reaches the API at the control plane's address, which is the
   # first tls_san, the name the certificate is made for. No fallback to the
@@ -325,7 +336,8 @@ sub rancher_deploy_server {
   my $cilium = exists $opts{cilium} ? $opts{cilium} : 1;
 
   # Refuse bad or contradictory Cilium options before the node is touched,
-  # not at step 7.
+  # not at step 7. cluster_cidr is install_server's too, cilium or not.
+  Rex::Rancher::Server::_cluster_cidr($opts{cluster_cidr});
   if ($cilium) {
     my $o = Rex::Rancher::Cilium::_resolve_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
     # install_cilium could read k8sServiceHost from a running Cilium, but a
@@ -430,7 +442,7 @@ server, an SFTP-less host needs the C<LibSSH> connection backend; without it
 the deploy dies before the first step with a hint to C<Rex::LibSSH>.
 
 The server-only options have no effect on an agent and are ignored:
-C<tls_san>, C<disable>, C<kubeconfig_file>,
+C<tls_san>, C<disable>, C<cluster_cidr>, C<kubeconfig_file>,
 C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
 C<cilium_helm_values>, C<gateway_api>, C<gateway_api_version>,
 C<gateway_api_channel>, C<k8s_service_host> and C<gpu_device_plugin>. Whether

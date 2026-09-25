@@ -176,6 +176,18 @@ than extending it; C<[]> disables nothing. Independent of C<cilium>.
   disable => [qw( rke2-ingress-nginx rke2-traefik rke2-traefik-crd
                   rke2-metrics-server )],
 
+=item C<cluster_cidr>
+
+The pod network, one IPv4 CIDR such as C<10.42.0.0/16>, written as
+C<cluster-cidr> to C<config.yaml> on RKE2 and K3s alike, with or without
+C<cilium>. Anything else (including a dual-stack list) dies before the host
+is touched. Every server of a cluster needs the same value (RKE2 refuses a
+joining server that differs), and it cannot be changed on a running cluster.
+L<Rex::Rancher::Cilium/install_cilium> takes the same value as Cilium's
+cluster-pool. Default: nothing written on RKE2 (RKE2's own default,
+C<10.42.0.0/16>, applies); on K3s with C<cilium> C<10.42.0.0/16> is written,
+without it nothing.
+
 =item C<node_labels>
 
 Node labels applied at join time, as an arrayref of C<key=value> strings.
@@ -207,7 +219,8 @@ On B<rke2>, C<cni: none> and C<disable-kube-proxy: true> are written,
 preparing the node for Cilium with full kube-proxy replacement.
 
 On B<k3s>, C<flannel-backend: none>, C<disable-network-policy: true>,
-C<disable-kube-proxy: true> and C<cluster-cidr: 10.42.0.0/16> are written:
+C<disable-kube-proxy: true> and C<cluster-cidr: 10.42.0.0/16> (or
+C<cluster_cidr>) are written:
 Flannel, k3s's embedded network policy controller and kube-proxy are
 switched off, and Cilium takes over all three with kube-proxy replacement.
 C<cluster-cidr> is k3s's own default, written out because Cilium's
@@ -263,6 +276,7 @@ sub install_server {
   my $paths        = _paths($distribution);
   # Validated before anything touches the host (the token lookup reads it).
   my $method       = _install_method($opts{install_method}, $opts{version});
+  my $cluster_cidr = _cluster_cidr($opts{cluster_cidr});
   my $token        = _resolve_token($paths, $opts{token});
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
@@ -280,7 +294,7 @@ sub install_server {
 
   # Write config.yaml
   _write_config($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable);
+    $node_name, $disable, $cluster_cidr);
 
   # Write registries.yaml if configured
   if ($registries) {
@@ -468,7 +482,7 @@ sub _generate_token {
 
 sub _build_server_config {
   my ($distribution, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable) = @_;
+    $node_name, $disable, $cluster_cidr) = @_;
 
   $distribution //= 'rke2';
 
@@ -494,6 +508,11 @@ sub _build_server_config {
       $config{'cluster-cidr'}           = _paths($distribution)->{cluster_cidr};
     }
   }
+
+  # A given cluster_cidr is written on both distributions, with or without
+  # cilium; every server of a cluster must carry the same one (RKE2 refuses
+  # a join that differs). Without it rke2 keeps its own default, unwritten.
+  $config{'cluster-cidr'} = $cluster_cidr if defined $cluster_cidr;
 
   # Packaged components to switch off. Undef means the per-distribution
   # default from %PATHS (rke2: ingress-nginx + traefik charts, unknown chart
@@ -524,17 +543,29 @@ sub _build_server_config {
 
 sub _write_config {
   my ($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable) = @_;
+    $node_name, $disable, $cluster_cidr) = @_;
 
   my $config =
     _build_server_config($distribution, $token, $server, $tls_san, $node_labels, $cilium,
-      $node_name, $disable);
+      $node_name, $disable, $cluster_cidr);
 
   my $config_file = $paths->{config_dir} . "config.yaml";
   Rex::Logger::info("Writing config to $config_file");
 
   _write_secret_file($config_file,
     YAML::PP->new(boolean => 'JSON::PP')->dump_string($config));
+}
+
+# One IPv4 CIDR, or undef. Shared with Rex::Rancher::Cilium, which hands
+# the same value to Cilium's cluster-pool (IPv4 only there, so no dual-stack).
+sub _cluster_cidr {
+  my ($cidr) = @_;
+  return unless defined $cidr;
+  my @part = $cidr =~ m{\A(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})\z};
+  die "cluster_cidr must be one IPv4 CIDR such as 10.42.0.0/16, got '$cidr' "
+    . "(dual-stack is not supported: Cilium's pool is IPv4 here)\n"
+    unless @part && !grep({ $_ > 255 } @part[0 .. 3]) && $part[4] <= 32;
+  return $cidr;
 }
 
 #

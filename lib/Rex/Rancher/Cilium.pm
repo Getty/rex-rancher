@@ -15,6 +15,7 @@ use Rex::Commands::File;
 use Rex::Commands::Gather;
 use Rex::Commands::Run;
 use Rex::Logger;
+use Rex::Rancher::Server ();
 use YAML::PP;
 
 require Rex::Exporter;
@@ -196,6 +197,18 @@ C<kubeconfig> a running Cilium's own address does (see above); without any of
 them it dies before the host is touched.
 L<Rex::Rancher/rancher_deploy_server> passes the first C<tls_san>. Passing
 it on RKE2 dies: RKE2 uses C<127.0.0.1>, which works on every node there.
+
+=item C<cluster_cidr>
+
+The cluster's pod network, the server's C<cluster_cidr> (see
+L<Rex::Rancher::Server/install_server>): one IPv4 CIDR, anything else dies
+before the host is touched. Used as Cilium's pool,
+C<ipam.operator.clusterPoolIPv4PodCIDRList>, unless C<helm_values> sets
+one: on K3s in place of C<10.42.0.0/16>, on RKE2 for a C<cluster-pool> mode
+set in C<helm_values> (the default C<kubernetes> mode takes the node
+C<podCIDR>s the cluster cuts from it). It counts as a requested pool: on a
+running C<cluster-pool> Cilium with another pool it dies (see above).
+L<Rex::Rancher/rancher_deploy_server> passes its own C<cluster_cidr>.
 
 =item C<api_server>
 
@@ -461,6 +474,7 @@ sub _resolve_opts {
   my $gateway_api  = $opts{gateway_api} ? 1 : 0;
   my $wait         = $opts{wait} ? 1 : 0;
   my $duration     = $opts{wait_duration} // WAIT_DURATION;
+  my $cluster_cidr = Rex::Rancher::Server::_cluster_cidr($opts{cluster_cidr});
 
   die "helm_values must be a hashref\n" unless ref $helm_values eq 'HASH';
 
@@ -484,7 +498,7 @@ sub _resolve_opts {
   }
 
   my $values = _helm_values($distribution, $paths, $gateway_api, $helm_values,
-    $opts{k8s_service_host});
+    $opts{k8s_service_host}, $cluster_cidr);
 
   my $o = {
     distribution        => $distribution,
@@ -499,7 +513,7 @@ sub _resolve_opts {
     wait                => $wait,
     wait_duration       => $duration,
     values              => $values,
-    explicit            => _explicit_values($helm_values, $opts{k8s_service_host}),
+    explicit            => _explicit_values($helm_values, $opts{k8s_service_host}, $cluster_cidr),
   };
 
   # With a kubeconfig a running Cilium's k8sServiceHost is read later, so
@@ -533,9 +547,9 @@ sub _require_k8s_service_host {
 
 # Which values the caller set, as opposed to our defaults: only defaults
 # give way to what a running Cilium already uses. A non-hash where a hash
-# belongs counts as setting everything below it.
+# belongs counts as setting everything below it; cluster_cidr sets the pool.
 sub _explicit_values {
-  my ($hv, $k8s_service_host) = @_;
+  my ($hv, $k8s_service_host, $cluster_cidr) = @_;
 
   my $ipam = $hv->{ipam};
   my $ipam_all = exists $hv->{ipam} && ref $ipam ne 'HASH';
@@ -544,7 +558,7 @@ sub _explicit_values {
 
   return {
     ipam_mode => ( $ipam_all || ( ref $ipam eq 'HASH' && exists $ipam->{mode} ) ) ? 1 : 0,
-    pool      => ( $ipam_all || ( ref $ipam eq 'HASH' && exists $ipam->{operator}
+    pool      => ( $ipam_all || defined $cluster_cidr || ( ref $ipam eq 'HASH' && exists $ipam->{operator}
                    && ( ref $op ne 'HASH' || exists $op->{clusterPoolIPv4PodCIDRList} ) ) ) ? 1 : 0,
     k8s_service_host  => ( defined $k8s_service_host || exists $hv->{k8sServiceHost} ) ? 1 : 0,
     operator_replicas => ( exists $hv->{operator}
@@ -1156,7 +1170,7 @@ sub _paths_for {
 
 # Defaults per distribution, then gatewayAPI, then the caller's values on top.
 sub _helm_values {
-  my ($distribution, $paths, $gateway_api, $extra, $k8s_service_host) = @_;
+  my ($distribution, $paths, $gateway_api, $extra, $k8s_service_host, $cluster_cidr) = @_;
 
   my %values = (
     cni => {
@@ -1173,6 +1187,10 @@ sub _helm_values {
 
   if ($distribution eq 'rke2') {
     $values{k8sServiceHost} = '127.0.0.1';
+    # The server's cluster-cidr as the pool, for a cluster-pool mode set in
+    # helm_values; the kubernetes mode takes the node podCIDRs cut from it.
+    $values{ipam}{operator} = { clusterPoolIPv4PodCIDRList => [ $cluster_cidr ] }
+      if defined $cluster_cidr;
   }
   else {
     # k3s: the control plane address (validated in _resolve_opts), and
@@ -1180,7 +1198,7 @@ sub _helm_values {
     $values{k8sServiceHost} = $k8s_service_host if defined $k8s_service_host;
     $values{ipam} = {
       mode     => 'cluster-pool',
-      operator => { clusterPoolIPv4PodCIDRList => [ $paths->{cluster_cidr} ] },
+      operator => { clusterPoolIPv4PodCIDRList => [ $cluster_cidr // $paths->{cluster_cidr} ] },
     };
   }
 
@@ -1293,7 +1311,8 @@ C</tmp/cilium-values-E<lt>distE<gt>.yaml>:
 
 C<kubeProxyReplacement: true>, C<k8sServiceHost: 127.0.0.1>,
 C<k8sServicePort: "6443">, C<cni.exclusive: false>, C<operator.replicas: 1>,
-C<ipam.mode: kubernetes>.
+C<ipam.mode: kubernetes>; with C<cluster_cidr> also
+C<ipam.operator.clusterPoolIPv4PodCIDRList: [cluster_cidr]>.
 
 =item K3s
 
@@ -1301,7 +1320,7 @@ C<kubeProxyReplacement: true>, C<k8sServiceHost:> C<k8s_service_host>,
 C<k8sServicePort: "6443">, C<cni.exclusive: true>, C<operator.replicas: 1>,
 C<ipam.mode: cluster-pool> with
 C<ipam.operator.clusterPoolIPv4PodCIDRList: [10.42.0.0/16]> (K3s's
-C<cluster-cidr>).
+C<cluster-cidr>; C<cluster_cidr> replaces it).
 
 =back
 

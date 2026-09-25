@@ -628,4 +628,33 @@ subtest 'ensure_gateway_api_crds' => sub {
   is_deeply( \@cmds, [], 'nothing on the remote host' );
 };
 
+subtest 'cluster_cidr (k41): the server\'s pod network is Cilium\'s pool' => sub {
+  is_deeply( values_for( distribution => 'k3s', k8s_service_host => 'cp', cluster_cidr => '10.244.0.0/16' )->{ipam},
+    { mode => 'cluster-pool', operator => { clusterPoolIPv4PodCIDRList => ['10.244.0.0/16'] } },
+    'k3s: replaces 10.42.0.0/16' );
+  is_deeply( values_for( distribution => 'rke2', cluster_cidr => '10.244.0.0/16' )->{ipam},
+    { mode => 'kubernetes', operator => { clusterPoolIPv4PodCIDRList => ['10.244.0.0/16'] } },
+    'rke2: pool set, mode stays kubernetes' );
+  is_deeply( values_for( distribution => 'rke2', cluster_cidr => '10.244.0.0/16',
+      helm_values => { ipam => { mode => 'cluster-pool' } } )->{ipam},
+    { mode => 'cluster-pool', operator => { clusterPoolIPv4PodCIDRList => ['10.244.0.0/16'] } },
+    'rke2 with cluster-pool from helm_values: the OCP shape' );
+  is_deeply( values_for( distribution => 'k3s', k8s_service_host => 'cp', cluster_cidr => '10.244.0.0/16',
+      helm_values => { ipam => { operator => { clusterPoolIPv4PodCIDRList => ['10.9.0.0/16'] } } } )
+    ->{ipam}{operator}{clusterPoolIPv4PodCIDRList}, ['10.9.0.0/16'], 'helm_values wins' );
+  is( $C->can('_resolve_opts')->( distribution => 'rke2', cluster_cidr => '10.244.0.0/16' )->{explicit}{pool},
+    1, 'counts as a requested pool' );
+  eval { values_for( distribution => 'rke2', cluster_cidr => '10.244.0.0' ) };
+  like( $@, qr/cluster_cidr must be one IPv4 CIDR/, 'invalid: dies' );
+
+  my $running = { ipam_mode => 'cluster-pool', pool => ['10.42.0.0/16'] };
+  eval { adopt( $running, distribution => 'k3s', k8s_service_host => 'cp', cluster_cidr => '10.244.0.0/16' ) };
+  like( $@, qr{cluster-pool is 10\.42\.0\.0/16 .*requested clusterPoolIPv4PodCIDRList 10\.244\.0\.0/16}s,
+    'another pool than the running one: dies' );
+  is_deeply( adopt( $running, distribution => 'k3s', k8s_service_host => 'cp', cluster_cidr => '10.42.0.0/16' )
+    ->{ipam}{operator}{clusterPoolIPv4PodCIDRList}, ['10.42.0.0/16'], 'the running pool: fine' );
+  is_deeply( adopt( $running, distribution => 'k3s', k8s_service_host => 'cp' )
+    ->{ipam}{operator}{clusterPoolIPv4PodCIDRList}, ['10.42.0.0/16'], 'not given: the running pool wins' );
+};
+
 done_testing;

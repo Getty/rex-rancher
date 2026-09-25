@@ -143,4 +143,32 @@ for my $dist (qw( rke2 k3s )) {
 Rex::Rancher::rancher_deploy_server(%server);
 is($cilium_opts{kubeconfig}, $server{kubeconfig_file}, 'API up: install_cilium gets the kubeconfig');
 
+# cluster_cidr (k41): install_server and install_cilium get the same value,
+# on both distributions; an invalid one dies before the node is touched,
+# with cilium => 0 too.
+{
+  my %server_opts;
+  no warnings 'redefine';
+  local *Rex::Rancher::install_server = sub { push @ran, 'install_server'; %server_opts = @_ };
+  use warnings 'redefine';
+  for my $dist (qw( rke2 k3s )) {
+    %cilium_opts = ();
+    Rex::Rancher::rancher_deploy_server(%server, distribution => $dist, tls_san => 'cp',
+      cluster_cidr => '10.244.0.0/16');
+    is($server_opts{cluster_cidr}, '10.244.0.0/16', $dist.': install_server gets cluster_cidr');
+    is($cilium_opts{cluster_cidr}, '10.244.0.0/16', $dist.': install_cilium gets the same');
+  }
+  %cilium_opts = ();
+  Rex::Rancher::rancher_deploy_server(%server);
+  ok(!exists $cilium_opts{cluster_cidr}, 'not given: not passed');
+
+  for my $cilium (1, 0) {
+    @ran = ();
+    ok(!eval { Rex::Rancher::rancher_deploy_server(%server, cilium => $cilium,
+      cluster_cidr => '10.244.0.0'); 1 }, "cilium $cilium, invalid cluster_cidr: dies");
+    like($@, qr/cluster_cidr must be one IPv4 CIDR/, "cilium $cilium: names the option");
+    is_deeply(\@ran, [], "cilium $cilium: before any remote step");
+  }
+}
+
 done_testing;

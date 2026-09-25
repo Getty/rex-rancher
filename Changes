@@ -13,6 +13,12 @@ Revision history for Rex-Rancher
     cilium-operator are ready, or die naming their state.
   - New ensure_gateway_api_crds(kubeconfig, version, channel): apply only
     the Gateway API CRDs and restart cilium-operator when they changed.
+  - New cluster_cidr option (one IPv4 CIDR) for install_server and
+    rancher_deploy_server: written as cluster-cidr on rke2 and k3s, and
+    used by install_cilium (new option, passed through by
+    rancher_deploy_server) as Cilium's cluster-pool unless helm_values sets
+    one. Without it nothing changes: k3s keeps 10.42.0.0/16, rke2 writes
+    none.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
