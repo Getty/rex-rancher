@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-09-25T19:37:29Z
+id: 62
+priority: low
+started: 2026-09-25T22:18:39Z
+status: backlog
+title: Upgrades vieler Nodes ueber Rancher system-upgrade-controller
+updated: 2026-09-25T22:21:02Z
+---
+
+Aus #56 (2026-09-25): Re-Run-basierte Upgrades skalieren nicht; fuer groessere Cluster Upgrade-Plans via system-upgrade-controller (rolling, Server vor Agents, concurrency 1) statt Restart-Logik in Rex::Rancher. Evaluieren.
+
+Evaluation 2026-09-26: Empfehlung SPAETER, optional, Re-Run-Pfad bleibt. Machbar ohne kubectl: Manifest via HTTP::Tiny+YAML::PP+ensure (wie _ensure_gateway_api_crds), Plan als IO::K8s::Unstructured (K::REST 1.108 Discovery-Fallback). API-Vorschlag: Rex::Rancher::Upgrade install_upgrade_controller(kubeconfig, version) + upgrade_cluster(kubeconfig, distribution, version (Pflicht, kein channel), concurrency 1, drain 0, wait); Skew-Vorpruefung ueber alle Nodes mit version_skew; Distribution->upgrade_image. Server-Plan + Agent-Plan mit prepare. ~300 Zeilen, 1-2 Tage. Risiken: SUC sieht config.yaml/registries nicht, privilegierter Pod hostPath / (SELinux, Airgap), Discovery-Cache nach CRD-Install, KPR 127.0.0.1 Single-Server. Braucht Multi-Node-Rig zum Validieren. OCP nutzt SUC nicht (Upgrades Handarbeit, OCP/Cmd/Update.pm:225-263) -> natuerlicher Abnehmer.
