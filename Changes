@@ -18,6 +18,13 @@ Revision history for Rex-Rancher
     other than a 404 (no access, no connection) dies at once.
   - New ensure_gateway_api_crds(kubeconfig, version, channel): apply only
     the Gateway API CRDs and restart cilium-operator when they changed.
+  - install_cilium counts only a 404 as missing everywhere it reads or
+    deletes through the API: a 403 or another error on the Gateway API
+    probe CRD, a CRD waited on to be Established, the cilium-operator to
+    restart, the DaemonSet checked after install or a stale release Secret
+    being purged dies naming it, instead of applying the CRDs anyway,
+    waiting out 30s, skipping the operator restart silently or reading
+    "not found" in an error body as already gone.
   - New cluster_cidr option (one IPv4 CIDR) for install_server and
     rancher_deploy_server: written as cluster-cidr on rke2 and k3s, and
     handed to install_cilium (new option, passed through by

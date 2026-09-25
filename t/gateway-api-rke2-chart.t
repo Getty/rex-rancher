@@ -86,7 +86,8 @@ subtest 'rancher_deploy_server hands it to install_server' => sub {
     } grep { $_->{labels}{name} eq $name } @{ $self->{secrets} };
     return bless { items => \@items }, 'FakeList';
   }
-  sub get { $_[0]{gets}++; die "404 not found\n" }
+  # What Kubernetes::REST croaks with on a 404 response.
+  sub get { $_[0]{gets}++; die "Kubernetes API error (get $_[1]): 404 {\"reason\":\"NotFound\"}\n" }
   package FakeList;
   sub items { $_[0]{items} }
   package FakeSecret;

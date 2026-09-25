@@ -97,7 +97,13 @@ sub helm_secret {
       if $kind eq 'DaemonSet';
     die not_found($kind);
   }
-  sub delete { my ( $self, $kind, $name ) = @_; push @{ $self->{deleted} }, "$kind/$name"; 1 }
+  sub delete {
+    my ( $self, $kind, $name ) = @_;
+    my $err = $self->{delete_errors}{"$kind/$name"};
+    die $err if $err;
+    push @{ $self->{deleted} }, "$kind/$name";
+    1;
+  }
   sub patch  { my ( $self, $kind, $name ) = @_; push @{ $self->{patched} }, "$kind/$name"; 1 }
   package FakeList;
   sub items { $_[0]{items} }
@@ -800,6 +806,85 @@ subtest 'cluster_cidr (k41): the server\'s pod network is Cilium\'s pool' => sub
     helm_values => { ipam => { mode => 'cluster-pool' } } );
   is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'the OCP shape on an old 10.0.0.0/8 cluster: upgraded' );
   like( $files{'/tmp/cilium-values-rke2.yaml'}, qr{^    - 10\.0\.0\.0/8$}m, 'on the running pool' );
+};
+
+# -----------------------------------------------------------------------------
+# k59: every API read or delete outside _read_running tells a 404 status from
+# any other error the same way -- missing is its own case, a 403 or a proxy
+# body that mentions "not found" dies instead of reading as missing.
+# -----------------------------------------------------------------------------
+
+subtest 'API errors are not read as missing (k59)' => sub {
+  my $forbidden = sub { my ( $what ) = @_; sub { die "Kubernetes API error (get $what): 403 {\"reason\":\"Forbidden\"}\n" } };
+  my $crd_name  = 'gateways.gateway.networking.k8s.io';
+  my $secret    = 'sh.helm.release.v1.cilium.v1';
+  my $stale     = [ helm_secret( revision => 1, status => 'failed', chart_version => '1.17.0' ) ];
+
+  # _purge_release: a 404 on delete is "already gone"; a body saying
+  # "not found" under another status is not.
+  @cmds = ();
+  $api = FakeAPI->new( daemonset => 1, secrets => $stale,
+    delete_errors => { "Secret/$secret" => FakeAPI::not_found('Secret') } );
+  eval { install_cilium( distribution => 'rke2', kubeconfig => '/kc' ) };
+  is( $@, '', 'purge: a real 404 on delete is already gone' );
+  is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], [ 'uninstall', 'install' ], 'and the install runs' );
+
+  @cmds = ();
+  $api = FakeAPI->new( daemonset => 1, secrets => $stale,
+    delete_errors => { "Secret/$secret" => "Kubernetes API error (delete Secret): 500 webhook: namespace not found\n" } );
+  eval { install_cilium( distribution => 'rke2', kubeconfig => '/kc' ) };
+  like( $@, qr{^Cannot delete Secret kube-system/\Q$secret\E: .*500}, 'purge: another error mentioning "not found" dies' );
+  is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['uninstall'], 'before the install' );
+
+  # _verify_daemonset: an unreadable DaemonSet is named as such.
+  $api = FakeAPI->new( secrets => [], objects => { 'DaemonSet/cilium' => $forbidden->('DaemonSet') } );
+  eval { $C->can('_verify_daemonset')->( $api ) };
+  like( $@, qr{^Cannot read DaemonSet kube-system/cilium: .*403}, 'verify: a 403 is not "does not exist"' );
+
+  # _restart_operator: no operator is nothing to restart, a 403 dies.
+  $api = FakeAPI->new;
+  is( $C->can('_restart_operator')->( $api ), undef, 'restart: no operator, nothing to do' );
+  is_deeply( $api->{patched}, [], 'nothing patched' );
+  $api = FakeAPI->new( objects => { 'Deployment/cilium-operator' => $forbidden->('Deployment') } );
+  eval { $C->can('_restart_operator')->( $api ) };
+  like( $@, qr{^Cannot read Deployment kube-system/cilium-operator: .*403}, 'restart: a 403 dies instead of skipping' );
+
+  # The Gateway API probe: missing means apply, a 403 dies before any fetch.
+  my @fetched;
+  no warnings 'redefine';
+  local *HTTP::Tiny::get = sub { push @fetched, $_[1]; +{ success => 0, status => 599, reason => 'offline test' } };
+  local *Rex::Rancher::Cilium::_sleep = sub { };
+  use warnings 'redefine';
+
+  $api = FakeAPI->new( secrets => [] );
+  eval { $C->can('_ensure_gateway_api_crds')->( $api, 'v1.2.0', 'standard' ) };
+  like( $@, qr/Cannot fetch Gateway API bundle/, 'probe 404: goes on to apply' );
+  is( scalar @fetched, 1, 'and fetched the bundle' );
+
+  @fetched = ();
+  $api = FakeAPI->new( secrets => [], objects => { "CustomResourceDefinition/$crd_name" => $forbidden->('CustomResourceDefinition') } );
+  eval { $C->can('_ensure_gateway_api_crds')->( $api, 'v1.2.0', 'standard' ) };
+  like( $@, qr{^Cannot read CustomResourceDefinition \Q$crd_name\E: .*403}, 'probe 403: dies, cluster-scoped name' );
+  is( scalar @fetched, 0, 'nothing fetched or applied' );
+
+  # _wait_crd_established: not visible yet is waited out, a 403 dies at once.
+  my $calls = 0;
+  my $established = $k8s->struct_to_object( { apiVersion => 'apiextensions.k8s.io/v1',
+    kind => 'CustomResourceDefinition', metadata => { name => $crd_name },
+    spec => { group => 'gateway.networking.k8s.io', scope => 'Namespaced',
+      names => { plural => 'gateways', kind => 'Gateway' }, versions => [] },
+    status => { conditions => [ { type => 'Established', status => 'True' } ] } } );
+  $api = FakeAPI->new( objects => { "CustomResourceDefinition/$crd_name" =>
+    sub { $calls++ ? $established : die FakeAPI::not_found('CustomResourceDefinition') } } );
+  is( $C->can('_wait_crd_established')->( $api, $crd_name ), 1, 'wait: a 404 is waited out' );
+  is( $calls, 2, 'polled again' );
+
+  $calls = 0;
+  $api = FakeAPI->new( objects => { "CustomResourceDefinition/$crd_name" =>
+    sub { $calls++; $forbidden->('CustomResourceDefinition')->() } } );
+  eval { $C->can('_wait_crd_established')->( $api, $crd_name ) };
+  like( $@, qr{^Cannot read CustomResourceDefinition \Q$crd_name\E: .*403}, 'wait: a 403 dies' );
+  is( $calls, 1, 'at once, not after 30s' );
 };
 
 done_testing;

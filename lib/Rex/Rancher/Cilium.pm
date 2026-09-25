@@ -94,7 +94,8 @@ upgrade): C<cilium upgrade> again.
 C<pending-install>, C<uninstalling> or C<uninstalled>: the stale release is
 removed (C<cilium uninstall>, then its Helm release Secrets) and Cilium is
 installed fresh. No working Cilium exists in these states, so nothing
-running is taken down.
+running is taken down. A Secret already gone (404) is fine; any other API
+error deleting one dies before the install.
 
 =item * an upgrade that would change C<ipam.mode> (the release sets one
 explicitly and the requested values differ): dies before C<cilium upgrade>,
@@ -150,7 +151,8 @@ Any API error other than a 404 while reading these dies rather than fall
 back to the defaults.
 
 After a fresh install the C<cilium> DaemonSet must exist, or it dies: the
-CLI has been seen to exit 0 without creating anything. With C<wait>, the
+CLI has been seen to exit 0 without creating anything. An API error other
+than a 404 reading it dies naming that error. With C<wait>, the
 function returns only once Cilium is ready (see there).
 
 Without C<kubeconfig> the release state cannot be read, and the previous
@@ -263,7 +265,10 @@ kubernetes-sigs/gateway-api GitHub release on the machine running Rex and
 applied through L<Kubernetes::REST> (no C<kubectl>). They are skipped when
 the cluster already carries that bundle version and channel; when they are
 applied to a cluster with a running C<cilium-operator>, the operator is
-restarted so it picks up the new CRDs.
+restarted so it picks up the new CRDs. Only a 404 counts as missing: an API
+error reading the probe CRD (C<gateways.gateway.networking.k8s.io>), a CRD
+waited on to become Established, or the C<cilium-operator> Deployment dies
+at once instead of applying, waiting out 30s, or skipping the restart.
 
 RKE2 v1.37+ ships the same CRDs as its own chart, C<rke2-gateway-api-crd>,
 which would overwrite them. L<Rex::Rancher/rancher_deploy_server> disables it
@@ -430,7 +435,8 @@ not used.
 
 The CRDs are skipped when the cluster already carries that bundle version
 and channel. When they are applied and a C<cilium-operator> Deployment
-exists, it is restarted so it picks up the new CRDs. While RKE2's
+exists, it is restarted so it picks up the new CRDs; API errors other than
+a 404 die, as with C<gateway_api>. While RKE2's
 C<rke2-gateway-api-crd> Helm release exists this dies before applying
 anything, as C<gateway_api> does. Returns C<1> when the CRDs were applied,
 C<0> when they were already current.
@@ -832,12 +838,15 @@ sub _is_not_found {
 
 # undef when the object does not exist; any other API error dies, because
 # guessing here is how a cluster-pool cluster gets switched to another mode.
+# Namespaced objects live in RELEASE_NAMESPACE; a CustomResourceDefinition
+# is cluster-scoped.
 sub _get_optional {
   my ($api, $kind, $name) = @_;
-  my $obj = eval { $api->get($kind, $name, namespace => RELEASE_NAMESPACE) };
+  my @ns  = $kind eq 'CustomResourceDefinition' ? () : ( namespace => RELEASE_NAMESPACE );
+  my $obj = eval { $api->get($kind, $name, @ns) };
   return $obj if $obj;
   return if !$@ || _is_not_found($@);
-  die "Cannot read $kind " . RELEASE_NAMESPACE . "/$name: $@";
+  die "Cannot read $kind " . ( @ns ? RELEASE_NAMESPACE . "/" : '' ) . "$name: $@";
 }
 
 # What a running Cilium uses, each undef when unknown: the IPAM mode and
@@ -1084,27 +1093,31 @@ sub _purge_release {
   # removes was never created, and it reports that as an error.
   run "KUBECONFIG=" . $o->{dist}->kubeconfig . " cilium uninstall --wait=false 2>&1", auto_die => 0;
 
+  # Already gone is what we want; any other API error dies before the
+  # install, which Helm would refuse over a Secret left behind anyway.
   for my $name (@{ $release->{secrets} }) {
     eval { $api->delete('Secret', $name, namespace => RELEASE_NAMESPACE); 1 }
-      or do { die $@ unless $@ =~ /\b404\b|not ?found/i };
+      or _is_not_found($@)
+      or die "Cannot delete Secret " . RELEASE_NAMESPACE . "/$name: $@";
   }
 }
 
 sub _verify_daemonset {
   my ($api) = @_;
 
-  my $ds = eval { $api->get('DaemonSet', 'cilium', namespace => RELEASE_NAMESPACE) };
   die "cilium install reported success but DaemonSet "
-    . RELEASE_NAMESPACE . "/cilium does not exist: " . ($@ || 'not found') . "\n"
-    unless $ds;
+    . RELEASE_NAMESPACE . "/cilium does not exist\n"
+    unless _get_optional($api, 'DaemonSet', RELEASE_NAME);
 }
 
 sub _restart_operator {
   my ($api) = @_;
   return unless $api;
 
-  my $op = eval { $api->get('Deployment', 'cilium-operator', namespace => RELEASE_NAMESPACE) };
-  return unless $op;
+  # No operator (yet): nothing to restart. Any other API error dies -- a
+  # 403 here used to skip the restart silently, leaving the operator on the
+  # old CRDs.
+  _get_optional($api, 'Deployment', 'cilium-operator') or return;
 
   Rex::Logger::info("  Restarting cilium-operator so it picks up the Gateway API CRDs");
   $api->patch('Deployment', 'cilium-operator',
@@ -1140,7 +1153,9 @@ sub _ensure_gateway_api_crds {
 
   _refuse_rke2_gateway_api_chart($api);
 
-  my $probe = eval { $api->get('CustomResourceDefinition', GATEWAY_API_PROBE_CRD) };
+  # Missing means apply; an unreadable probe dies instead of reading as
+  # missing.
+  my $probe = _get_optional($api, 'CustomResourceDefinition', GATEWAY_API_PROBE_CRD);
   my $annotations = $probe ? $probe->metadata->annotations : undef;
 
   unless (_gateway_api_needs_apply($annotations, $version, $channel)) {
@@ -1192,13 +1207,15 @@ sub _refuse_rke2_gateway_api_chart {
 sub _wait_crd_established {
   my ($api, $name) = @_;
 
+  # Not visible yet is waited out; any other API error dies at once
+  # instead of reading as "not Established" for 30s.
   for (1 .. 30) {
-    my $crd = eval { $api->get('CustomResourceDefinition', $name) };
+    my $crd = _get_optional($api, 'CustomResourceDefinition', $name);
     my $conditions = $crd && $crd->status ? $crd->status->conditions // [] : [];
     return 1 if grep {
       ($_->type // '') eq 'Established' && ($_->status // '') eq 'True'
     } @$conditions;
-    sleep 1;
+    _sleep(1);
   }
   die "CustomResourceDefinition $name was not Established within 30s\n";
 }
