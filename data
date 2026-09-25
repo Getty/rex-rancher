@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-25T22:36:00Z
+claimed_by: worker-backlog
+class: standard
+completed: 2026-09-25T22:36:00Z
+created: 2026-09-25T17:52:43Z
+id: 61
+priority: low
+started: 2026-09-25T22:18:24Z
+status: done
+title: '_wait_for_gpu_resource: letzten API-Fehler in Warnung nennen'
+updated: 2026-09-25T22:36:00Z
+---
+
+Aus #59-Nachlauf: K8s.pm _wait_for_gpu_resource schluckt auch 403 zwei Minuten lang und warnt dann nur 'check device plugin' ohne den eigentlichen Fehler. Letzten Fehler in die Warnung aufnehmen (kein Verhaltenswechsel sonst).
+
+Commit f3b020f. Warning ends with '(last API error: ...)'; stale error dropped on later success.
