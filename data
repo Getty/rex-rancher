@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-09-25T15:38:01Z
+claimed_by: worker-node
+class: standard
+created: 2026-09-24T21:49:08Z
+id: 42
+priority: low
+started: 2026-09-25T03:21:14Z
+status: review
+tags:
+- ocp
+- node
+- escalated-from:kubernetes-ocp#155
+title: 'prepare_node: NTP nicht erzwingen, /etc/hosts ohne domain, locale-gen'
+updated: 2026-09-25T15:38:01Z
+---
+
+OCPs prepare_node (share/Rexfile, seit Jahren live) weicht an drei Stellen von Rex::Rancher::Node::prepare_node 0.002 ab; OCP ruft die Library daher mit ntp => 0 auf und erledigt diese Teile selbst (k155):
+
+1. NTP: meldet `timedatectl show --property=NTPSynchronized --value` bereits "yes", installiert OCP kein chrony (auf Debian verdraengt chrony systemd-timesyncd). Schlaegt die chrony-Installation fehl, ist das nicht fatal: OCP prueft/startet systemd-timesyncd als Fallback. Die Library installiert chrony immer, und `pkg` stirbt bei Fehler.
+2. /etc/hosts: OCP schreibt `127.0.1.1 <hostname>` auch ohne domain (OCP kennt keine domain, robocop-Joins auch nicht). Die Library schreibt den Eintrag nur mit hostname UND domain.
+3. Locale: OCP ruft nach dem Setzen `locale-gen <locale>` auf; die Library nicht (auf frischen Debian-Images ist en_US.UTF-8 oft nicht generiert).
+
+Klein, aber wenn die Library das kann, faellt der OCP-Rest weg.
+
+Commit c6d61dd on branch worktree-agent-adec76c5a4abd03bf (merge pending). NTP skip on NTPSynchronized=yes, timesyncd fallback; hosts w/o domain only if get_host finds no line (deliberate deviation from OCP: host_entry would delete provider/localhost lines); locale.gen enable + locale-gen BEFORE localectl (Debian locale-gen ignores args). t/node.t 13 subtests. Live-only: timedatectl on fresh Hetzner, locale-gen duration, get_host over LibSSH without SFTP.
+
+On main as 68b2b6f (+ edc3c84 Rancher.pm ntp POD). Worktree removed.
+
+Maintainer 2026-09-25: hosts-without-domain behaviour (only add when no line names the host) accepted.
