@@ -138,6 +138,11 @@ pods. The pool is compared only in C<cluster-pool> mode, as a set.
 on a running C<cluster-pool> Cilium with another pool the running pool is
 kept, with a warning naming both.
 
+=item * C<ipam_mode> is likewise the mode of a fresh install: on a running
+Cilium in another mode the running mode (and, in C<cluster-pool>, its pool)
+is kept, with a warning naming both. Only C<ipam.mode> in C<helm_values>
+counts as requested and dies on a difference.
+
 =item * on K3s without C<k8s_service_host> (or C<helm_values-E<gt>{k8sServiceHost}>),
 C<k8sServiceHost> is the C<KUBERNETES_SERVICE_HOST> of the running
 C<cilium> DaemonSet.
@@ -215,14 +220,27 @@ L<Rex::Rancher::Server/install_server>): one IPv4 CIDR, anything else dies
 before the host is touched. Written as Cilium's pool,
 C<ipam.operator.clusterPoolIPv4PodCIDRList>, unless C<helm_values> sets one.
 It takes effect only in C<cluster-pool> mode: on K3s, in place of
-C<10.42.0.0/16>, and on RKE2 when C<helm_values> sets that mode. RKE2's
-default stays C<ipam.mode: kubernetes>, where Cilium ignores the pool value
+C<10.42.0.0/16>, and on RKE2 with C<ipam_mode =E<gt> 'cluster-pool'> (or
+that mode in C<helm_values>). RKE2's default stays C<ipam.mode: kubernetes>, where Cilium ignores the pool value
 and pods get addresses from the node C<podCIDR>s the cluster cuts from its
 C<cluster-cidr> -- the same range, reached through the server's
 C<config.yaml>. It is the pool of a fresh install: a running
 C<cluster-pool> Cilium keeps its own pool, with a warning when it differs
 (see above). L<Rex::Rancher/rancher_deploy_server> passes its own
 C<cluster_cidr>.
+
+=item C<ipam_mode>
+
+Cilium's IPAM mode (C<ipam.mode>) on a fresh install: C<kubernetes> or
+C<cluster-pool>, anything else dies before the host is touched (other
+modes need more than a mode and stay with C<helm_values>). Default:
+L<Rex::Rancher::Distribution/default_ipam_mode>, C<kubernetes> on RKE2 and
+C<cluster-pool> on K3s. With C<cluster-pool>, C<cluster_cidr> is the pool on
+RKE2 too. A Cilium already running (C<kube-system/cilium-config> readable
+through C<kubeconfig>) keeps its own mode, with a warning when it differs
+(see above); without C<kubeconfig> nothing running is changed anyway. An
+C<ipam.mode> in C<helm_values> that differs from it dies as contradictory.
+L<Rex::Rancher/rancher_deploy_server> passes its own C<ipam_mode>.
 
 =item C<api_server>
 
@@ -489,7 +507,8 @@ sub ensure_gateway_api_crds {
 
 Check the options of L</install_cilium> without touching anything: dies
 with the same message C<install_cilium> would for an unknown distribution,
-bad C<helm_values>, C<cluster_cidr> or C<gateway_api> settings, and -- also
+bad C<helm_values>, C<cluster_cidr>, C<ipam_mode> or C<gateway_api>
+settings, and -- also
 with C<kubeconfig>, where C<install_cilium> could still read it from a
 running Cilium -- a K3s cluster without a usable C<k8s_service_host>.
 Returns C<1>. Not exported; L<Rex::Rancher/rancher_deploy_server> calls it
@@ -517,8 +536,17 @@ sub _resolve_opts {
   my $wait         = $opts{wait} ? 1 : 0;
   my $duration     = $opts{wait_duration} // WAIT_DURATION;
   my $cluster_cidr = Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr});
+  my $ipam_mode    = Rex::Rancher::Options->check_ipam_mode($opts{ipam_mode});
 
   die "helm_values must be a hashref\n" unless ref $helm_values eq 'HASH';
+
+  # Two answers to one question: helm_values would win the merge and make
+  # ipam_mode a silent no-op.
+  if (defined $ipam_mode && ref $helm_values->{ipam} eq 'HASH'
+      && defined $helm_values->{ipam}{mode} && $helm_values->{ipam}{mode} ne $ipam_mode) {
+    die "ipam_mode $ipam_mode and helm_values ipam.mode $helm_values->{ipam}{mode} "
+      . "contradict each other: give one of them\n";
+  }
 
   die "k8s_service_host is k3s-only: rke2 serves the API on 127.0.0.1:6443 "
     . "on every node\n" if !$dist->needs_k8s_service_host && defined $opts{k8s_service_host};
@@ -540,7 +568,7 @@ sub _resolve_opts {
   }
 
   my $values = _helm_values($dist, $gateway_api, $helm_values,
-    $opts{k8s_service_host}, $cluster_cidr);
+    $opts{k8s_service_host}, $cluster_cidr, $ipam_mode);
 
   my $o = {
     dist                => $dist,
@@ -555,6 +583,7 @@ sub _resolve_opts {
     wait_duration       => $duration,
     values              => $values,
     cluster_cidr        => $cluster_cidr,
+    ipam_mode           => $ipam_mode,
     explicit            => _explicit_values($helm_values, $opts{k8s_service_host}),
   };
 
@@ -590,8 +619,9 @@ sub _require_k8s_service_host {
 # Which values the caller set, as opposed to our defaults: only defaults
 # give way to what a running Cilium already uses. A non-hash where a hash
 # belongs counts as setting everything below it. cluster_cidr is not a
-# requested pool: it is the pool of a fresh install, and a running Cilium's
-# pool wins over it (with a warning, in _adopt_running).
+# requested pool, nor ipam_mode a requested mode: they are what a fresh
+# install gets, and a running Cilium's pool and mode win over them (with a
+# warning, in _adopt_running).
 sub _explicit_values {
   my ($hv, $k8s_service_host) = @_;
 
@@ -895,7 +925,7 @@ sub _daemonset_env {
 # Fold the running configuration into $o->{values} wherever the caller left
 # a default, and die where the caller asked for something a running Cilium
 # cannot switch to. Nothing running reads as an empty $running, which
-# changes nothing. Pure but for the cluster_cidr warning.
+# changes nothing. Pure but for the cluster_cidr and ipam_mode warnings.
 sub _adopt_running {
   my ($o, $running) = @_;
   my %values   = %{ $o->{values} };
@@ -914,6 +944,10 @@ sub _adopt_running {
         if ref $values{ipam} eq 'HASH' && ( $want // '' ) ne $mode;
     }
     else {
+      # ipam_mode, like the distribution's default, is the mode of a fresh
+      # install; only the caller's ipam_mode is worth a warning.
+      _warn_ipam_mode_kept($o->{ipam_mode}, $mode)
+        if defined $o->{ipam_mode} && $o->{ipam_mode} ne $mode;
       $ipam{mode} = $mode if ref $values{ipam} eq 'HASH' || !exists $values{ipam};
     }
 
@@ -973,6 +1007,17 @@ sub _warn_cluster_cidr_kept {
     . " (ConfigMap " . RELEASE_NAMESPACE . "/" . CILIUM_CONFIGMAP . "), and the "
     . "pool of a running cluster cannot move. Keeping the running pool; "
     . "redeploy the cluster to use $cidr", 'warn');
+}
+
+# ipam_mode on a running Cilium in another mode: the running mode stays,
+# loudly, for the same reason as the pool above -- the caller may not know
+# whether the cluster is fresh.
+sub _warn_ipam_mode_kept {
+  my ($want, $mode) = @_;
+  Rex::Logger::info("ipam_mode $want is not applied: Cilium already runs "
+    . "ipam.mode $mode (ConfigMap " . RELEASE_NAMESPACE . "/" . CILIUM_CONFIGMAP
+    . "), and the IPAM mode of a running cluster cannot change. Keeping $mode; "
+    . "redeploy the cluster to use $want", 'warn');
 }
 
 #
@@ -1224,23 +1269,23 @@ sub _wait_crd_established {
 #
 
 # The defaults both distributions share, the distribution's own
-# (cilium_helm_defaults: cni.exclusive, k8sServiceHost, the IPAM pool) over
-# them, then gatewayAPI, then the caller's values on top.
+# (cilium_helm_defaults: cni.exclusive, k8sServiceHost, the IPAM mode and
+# pool) over them, then gatewayAPI, then the caller's values on top.
 sub _helm_values {
-  my ($dist, $gateway_api, $extra, $k8s_service_host, $cluster_cidr) = @_;
+  my ($dist, $gateway_api, $extra, $k8s_service_host, $cluster_cidr, $ipam_mode) = @_;
 
   my $values = _merge_values({
     cni => {
       binPath  => $dist->cni_bin_dir,
       confPath => $dist->cni_conf_dir,
     },
-    ipam                 => { mode => 'kubernetes' },
     operator             => { replicas => 1 },
     kubeProxyReplacement => JSON()->true,
     k8sServicePort       => '6443',
   }, $dist->cilium_helm_defaults(
     cluster_cidr     => $cluster_cidr,
     k8s_service_host => $k8s_service_host,
+    ipam_mode        => $ipam_mode,
   ));
 
   $values->{gatewayAPI} = { enabled => JSON()->true } if $gateway_api;
@@ -1352,16 +1397,16 @@ C</tmp/cilium-values-E<lt>distE<gt>.yaml>:
 
 C<kubeProxyReplacement: true>, C<k8sServiceHost: 127.0.0.1>,
 C<k8sServicePort: "6443">, C<cni.exclusive: false>, C<operator.replicas: 1>,
-C<ipam.mode: kubernetes>; with C<cluster_cidr> also
+C<ipam.mode: kubernetes> (or C<ipam_mode>); with C<cluster_cidr> also
 C<ipam.operator.clusterPoolIPv4PodCIDRList: [cluster_cidr]>, which Cilium
-uses only if C<helm_values> switches the mode to C<cluster-pool> (under
+uses only in C<cluster-pool> mode (C<ipam_mode> or C<helm_values>; under
 C<kubernetes> the pods follow the node C<podCIDR>s).
 
 =item K3s
 
 C<kubeProxyReplacement: true>, C<k8sServiceHost:> C<k8s_service_host>,
 C<k8sServicePort: "6443">, C<cni.exclusive: true>, C<operator.replicas: 1>,
-C<ipam.mode: cluster-pool> with
+C<ipam.mode: cluster-pool> (or C<ipam_mode>) with
 C<ipam.operator.clusterPoolIPv4PodCIDRList: [10.42.0.0/16]> (K3s's
 C<cluster-cidr>; C<cluster_cidr> replaces it).
 

@@ -244,12 +244,21 @@ The pod network, one IPv4 CIDR, passed to
 L<Rex::Rancher::Server/install_server> (C<cluster-cidr> in C<config.yaml>,
 RKE2 and K3s) and to L<Rex::Rancher::Cilium/install_cilium>, which writes it
 as Cilium's pool; that pool is used in C<cluster-pool> mode (K3s, or RKE2
-with that mode in C<cilium_helm_values>), while RKE2's default C<kubernetes>
-mode takes the node C<podCIDR>s cut from C<cluster-cidr>. An invalid value
+with C<ipam_mode =E<gt> 'cluster-pool'>), while RKE2's default
+C<kubernetes> mode takes the node C<podCIDR>s cut from C<cluster-cidr>. An invalid value
 dies before the node is touched. Default: as without it (K3s with Cilium
 C<10.42.0.0/16>, RKE2 its own default). An additional server joining with
 C<server> needs the same value. On a cluster whose Cilium already runs
 C<cluster-pool> with another pool, that pool is kept, with a warning.
+
+=item C<ipam_mode>
+
+Cilium's IPAM mode on a fresh install, C<kubernetes> or C<cluster-pool>,
+passed to L<Rex::Rancher::Cilium/install_cilium>; anything else dies before
+the node is touched. Default: C<kubernetes> on RKE2, C<cluster-pool> on
+K3s. With C<cluster-pool> and C<cluster_cidr>, Cilium's pool is
+C<cluster_cidr> on RKE2 too. A Cilium already running in another mode keeps
+it, with a warning naming both.
 
 =item C<node_labels>
 
@@ -274,7 +283,7 @@ C<0> and Rex::Rancher does nothing CNI-related: the distribution's built-in
 CNI comes up (Canal for RKE2, Flannel for K3s) and the pipeline skips
 L<Rex::Rancher::Cilium/install_cilium> entirely. Passing
 C<gateway_api>, C<cilium_version>, C<cilium_cli_version>,
-C<cilium_helm_values> or C<k8s_service_host> together with
+C<cilium_helm_values>, C<k8s_service_host> or C<ipam_mode> together with
 C<cilium =E<gt> 0> dies before the node is touched.
 
 =item C<cilium_version>, C<cilium_cli_version>, C<cilium_helm_values>
@@ -348,7 +357,7 @@ sub rancher_deploy_server {
         qw( version cli_version helm_values ) ),
     ( map { exists $opts{$_} ? ( $_ => $opts{$_} ) : () }
         qw( gateway_api gateway_api_version gateway_api_channel k8s_service_host
-            cluster_cidr ) ),
+            cluster_cidr ipam_mode ) ),
   );
   # k3s: Cilium reaches the API at the control plane's address, which is the
   # first tls_san, the name the certificate is made for. No fallback to the
@@ -373,7 +382,8 @@ sub rancher_deploy_server {
     my @set = (
       ( $opts{gateway_api} ? 'gateway_api' : () ),
       ( grep { defined $opts{$_} }
-          qw( cilium_version cilium_cli_version cilium_helm_values k8s_service_host ) ),
+          qw( cilium_version cilium_cli_version cilium_helm_values k8s_service_host
+              ipam_mode ) ),
     );
     die "cilium => 0 keeps the distribution's built-in CNI, but @set "
       . "configure Cilium: drop them or leave cilium on\n" if @set;
@@ -477,7 +487,7 @@ the deploy dies before the first step with a hint to C<Rex::LibSSH>.
 The server-only options have no effect on an agent and are ignored:
 C<tls_san>, C<disable>, C<cluster_cidr>, C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
 C<cilium_helm_values>, C<gateway_api>, C<gateway_api_version>,
-C<gateway_api_channel>, C<k8s_service_host> and C<gpu_device_plugin>. Whether
+C<gateway_api_channel>, C<k8s_service_host>, C<ipam_mode> and C<gpu_device_plugin>. Whether
 a K3s agent runs Flannel and kube-proxy or leaves both to Cilium follows the
 server's C<config.yaml>.
 

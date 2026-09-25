@@ -809,6 +809,96 @@ subtest 'cluster_cidr (k41): the server\'s pod network is Cilium\'s pool' => sub
 };
 
 # -----------------------------------------------------------------------------
+# k64: ipam_mode is the mode of a fresh install, fed through the
+# distribution's cilium_helm_defaults; a running Cilium's mode wins over it,
+# loudly. helm_values ipam.mode keeps its own rule (a different one dies).
+# -----------------------------------------------------------------------------
+
+subtest 'ipam_mode (k64): the mode of a fresh install' => sub {
+  is_deeply( values_for( distribution => 'rke2', ipam_mode => 'cluster-pool', cluster_cidr => '10.244.0.0/16' )->{ipam},
+    { mode => 'cluster-pool', operator => { clusterPoolIPv4PodCIDRList => ['10.244.0.0/16'] } },
+    'rke2 + cluster-pool + cluster_cidr: the pool is in use' );
+  is_deeply( values_for( distribution => 'rke2', ipam_mode => 'cluster-pool' )->{ipam},
+    { mode => 'cluster-pool' }, 'rke2 + cluster-pool alone: the chart default pool' );
+  is( values_for( distribution => 'k3s', k8s_service_host => 'cp', ipam_mode => 'kubernetes' )->{ipam}{mode},
+    'kubernetes', 'k3s + kubernetes' );
+  is( values_for( distribution => 'rke2', ipam_mode => 'kubernetes' )->{ipam}{mode}, 'kubernetes',
+    'rke2 + its own default' );
+  is( $C->can('_resolve_opts')->( distribution => 'rke2', ipam_mode => 'cluster-pool' )->{explicit}{ipam_mode},
+    0, 'not a requested mode' );
+  is( values_for( distribution => 'rke2', ipam_mode => 'cluster-pool',
+      helm_values => { ipam => { mode => 'cluster-pool' } } )->{ipam}{mode}, 'cluster-pool',
+    'the same mode in helm_values: fine' );
+
+  for my $bad ( 'multi-pool', 'eni', 'Kubernetes', '' ) {
+    @cmds = (); %files = ();
+    eval { install_cilium( distribution => 'rke2', ipam_mode => $bad ) };
+    like( $@, qr/ipam_mode must be 'kubernetes' or 'cluster-pool', got '\Q$bad\E'/, "'$bad': dies" );
+    is_deeply( \@cmds, [], "'$bad': before anything ran on the host" );
+  }
+  eval { values_for( distribution => 'rke2', ipam_mode => 'cluster-pool',
+    helm_values => { ipam => { mode => 'kubernetes' } } ) };
+  like( $@, qr/ipam_mode cluster-pool and helm_values ipam\.mode kubernetes contradict/, 'contradiction dies' );
+
+  my @warn;
+  no warnings 'redefine';
+  local *Rex::Logger::info = sub { push @warn, $_[0] if ( $_[1] // '' ) eq 'warn' };
+  use warnings 'redefine';
+
+  @warn = ();
+  my $v = eval { adopt( { ipam_mode => 'kubernetes' }, distribution => 'rke2', ipam_mode => 'cluster-pool',
+    cluster_cidr => '10.244.0.0/16' ) };
+  ok( $v, 'running kubernetes, ipam_mode cluster-pool: does not die' ) or diag $@;
+  is_deeply( $v->{ipam}, { mode => 'kubernetes' }, 'the running mode stays, the unused pool goes' );
+  is( scalar @warn, 1, 'one warning' );
+  like( $warn[0] // '', qr{^ipam_mode cluster-pool is not applied: Cilium already runs ipam\.mode kubernetes \(ConfigMap kube-system/cilium-config\).*Keeping kubernetes}s,
+    'naming both modes' );
+
+  @warn = ();
+  is( adopt( { ipam_mode => 'cluster-pool', pool => ['10.0.0.0/8'] }, distribution => 'k3s',
+      k8s_service_host => 'cp', ipam_mode => 'kubernetes' )->{ipam}{mode}, 'cluster-pool', 'k3s: the same' );
+  like( $warn[0] // '', qr/ipam_mode kubernetes is not applied: Cilium already runs ipam\.mode cluster-pool/,
+    'k3s: warned' );
+
+  @warn = ();
+  is_deeply( adopt( { ipam_mode => 'cluster-pool', pool => ['10.0.0.0/8'] }, distribution => 'rke2',
+      ipam_mode => 'cluster-pool' )->{ipam}, { mode => 'cluster-pool', operator => { clusterPoolIPv4PodCIDRList => ['10.0.0.0/8'] } },
+    'the running mode asked for: kept with its pool' );
+  is_deeply( adopt( {}, distribution => 'rke2', ipam_mode => 'cluster-pool' )->{ipam}, { mode => 'cluster-pool' },
+    'nothing running: ipam_mode applies' );
+  is_deeply( \@warn, [], 'no warning for these' );
+
+  eval { adopt( { ipam_mode => 'kubernetes' }, distribution => 'rke2',
+    helm_values => { ipam => { mode => 'cluster-pool' } } ) };
+  like( $@, qr/runs ipam\.mode kubernetes .*requested values ipam\.mode cluster-pool/s,
+    'helm_values ipam.mode on another running mode still dies' );
+
+  # End to end: the OCP shape with ipam_mode on a hand-changed kubernetes
+  # cluster upgrades on kubernetes, where helm_values would have died.
+  for my $fn ( \&install_cilium, \&upgrade_cilium ) {
+    @cmds = (); %files = (); @warn = ();
+    $api = FakeAPI->new(
+      secrets => [ helm_secret( revision => 1, status => 'deployed', chart_version => '1.16.5' ) ],
+      objects => { 'ConfigMap/cilium-config' => configmap( ipam => 'kubernetes' ) },
+    );
+    ok( eval { $fn->( distribution => 'rke2', kubeconfig => '/kc', ipam_mode => 'cluster-pool',
+      cluster_cidr => '10.42.0.0/16' ); 1 }, 'running kubernetes: no die' ) or diag $@;
+    is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'upgraded' );
+    like( $files{'/tmp/cilium-values-rke2.yaml'}, qr/^  mode: kubernetes$/m, 'on the running mode' );
+    unlike( $files{'/tmp/cilium-values-rke2.yaml'}, qr/clusterPoolIPv4PodCIDRList/, 'without the unused pool' );
+    ok( grep( { /ipam_mode cluster-pool is not applied/ } @warn ), 'with the warning' );
+  }
+
+  @cmds = (); %files = ();
+  $api = FakeAPI->new( secrets => [], daemonset => 1 );
+  install_cilium( distribution => 'rke2', kubeconfig => '/kc', ipam_mode => 'cluster-pool',
+    cluster_cidr => '10.42.0.0/16' );
+  is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['install'], 'fresh rke2: installed' );
+  like( $files{'/tmp/cilium-values-rke2.yaml'}, qr/^  mode: cluster-pool$/m, 'on cluster-pool' );
+  like( $files{'/tmp/cilium-values-rke2.yaml'}, qr{^    - 10\.42\.0\.0/16$}m, 'with cluster_cidr as its pool' );
+};
+
+# -----------------------------------------------------------------------------
 # k59: every API read or delete outside _read_running tells a 404 status from
 # any other error the same way -- missing is its own case, a 403 or a proxy
 # body that mentions "not found" dies instead of reading as missing.

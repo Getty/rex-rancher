@@ -28,7 +28,7 @@ my @PER_DISTRIBUTION = qw(
   containerd_dir server_service agent_service env_file default_start_verb
   asset_name cilium_config script_install_cmd artifact_install_cmds
   run_server_install_script cilium_helm_defaults needs_k8s_service_host
-  gateway_api_crd_chart live_verified
+  gateway_api_crd_chart live_verified default_ipam_mode
 );
 
 is_deeply( [ sort keys %{ $D->distribution_classes } ], [qw( k3s rke2 )], 'rke2 and k3s' );
@@ -145,12 +145,16 @@ subtest 'cilium_helm_defaults' => sub {
   my $F = JSON::MaybeXS::JSON()->false;
   my $T = JSON::MaybeXS::JSON()->true;
   my $r = $D->new_for('rke2');
-  is_deeply( $r->cilium_helm_defaults, { cni => { exclusive => $F }, k8sServiceHost => '127.0.0.1' },
-    'rke2: not exclusive, 127.0.0.1, no pool' );
+  is_deeply( $r->cilium_helm_defaults,
+    { cni => { exclusive => $F }, k8sServiceHost => '127.0.0.1', ipam => { mode => 'kubernetes' } },
+    'rke2: not exclusive, 127.0.0.1, kubernetes IPAM, no pool' );
   is_deeply( $r->cilium_helm_defaults( cluster_cidr => '10.9.0.0/16', k8s_service_host => 'cp' ),
     { cni => { exclusive => $F }, k8sServiceHost => '127.0.0.1',
-      ipam => { operator => { clusterPoolIPv4PodCIDRList => ['10.9.0.0/16'] } } },
+      ipam => { mode => 'kubernetes', operator => { clusterPoolIPv4PodCIDRList => ['10.9.0.0/16'] } } },
     'rke2: cluster_cidr as the pool, k8s_service_host ignored' );
+  is_deeply( $r->cilium_helm_defaults( cluster_cidr => '10.9.0.0/16', ipam_mode => 'cluster-pool' )->{ipam},
+    { mode => 'cluster-pool', operator => { clusterPoolIPv4PodCIDRList => ['10.9.0.0/16'] } },
+    'rke2 (k64): ipam_mode cluster-pool puts the pool to use' );
   ok( JSON::MaybeXS::is_bool( $r->cilium_helm_defaults->{cni}{exclusive} ), 'rke2: a real boolean' );
 
   my $k = $D->new_for('k3s');
@@ -160,6 +164,10 @@ subtest 'cilium_helm_defaults' => sub {
   is_deeply( $k->cilium_helm_defaults( cluster_cidr => '10.9.0.0/16', k8s_service_host => 'cp' ),
     { cni => { exclusive => $T }, k8sServiceHost => 'cp', ipam => $pool->('10.9.0.0/16') },
     'k3s: the given host and pool' );
+  is( $k->cilium_helm_defaults( ipam_mode => 'kubernetes' )->{ipam}{mode}, 'kubernetes',
+    'k3s (k64): ipam_mode replaces the default mode' );
+  is( $r->default_ipam_mode, 'kubernetes',   'rke2: default_ipam_mode' );
+  is( $k->default_ipam_mode, 'cluster-pool', 'k3s: default_ipam_mode' );
 };
 
 subtest 'asset_name' => sub {

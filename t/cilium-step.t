@@ -50,7 +50,8 @@ my %contradiction = (
   gateway_api        => [ gateway_api => 1, gateway_api_version => 'v1.2.0' ],
   cilium_version     => [ cilium_version     => '1.16.5' ],
   cilium_cli_version => [ cilium_cli_version => 'v0.16.22' ],
-  cilium_helm_values => [ cilium_helm_values => {} ]
+  cilium_helm_values => [ cilium_helm_values => {} ],
+  ipam_mode          => [ ipam_mode => 'cluster-pool' ]
 );
 for my $opt (sort keys %contradiction) {
   @ran = ();
@@ -170,5 +171,22 @@ is($cilium_opts{kubeconfig}, $server{kubeconfig_file}, 'API up: install_cilium g
     is_deeply(\@ran, [], "cilium $cilium: before any remote step");
   }
 }
+
+# ipam_mode (k64): reaches install_cilium on both distributions; an invalid
+# one dies before the node is touched.
+for my $dist (qw( rke2 k3s )) {
+  %cilium_opts = ();
+  Rex::Rancher::rancher_deploy_server(%server, distribution => $dist, tls_san => 'cp',
+    ipam_mode => 'cluster-pool');
+  is($cilium_opts{ipam_mode}, 'cluster-pool', $dist.': install_cilium gets ipam_mode');
+}
+%cilium_opts = ();
+Rex::Rancher::rancher_deploy_server(%server);
+ok(!exists $cilium_opts{ipam_mode}, 'ipam_mode not given: not passed');
+@ran = ();
+ok(!eval { Rex::Rancher::rancher_deploy_server(%server, ipam_mode => 'multi-pool'); 1 },
+  'invalid ipam_mode: dies');
+like($@, qr/ipam_mode must be 'kubernetes' or 'cluster-pool'/, 'invalid ipam_mode: names it');
+is_deeply(\@ran, [], 'invalid ipam_mode: before any remote step');
 
 done_testing;

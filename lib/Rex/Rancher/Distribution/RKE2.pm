@@ -65,17 +65,24 @@ sub cilium_config {
   };
 }
 
-# Not exclusive: RKE2 keeps its own CNI config next to Cilium's. The
-# server's cluster-cidr as the pool, for a cluster-pool mode set in
-# helm_values; the kubernetes mode takes the node podCIDRs cut from it.
+# Pods take the node podCIDRs the cluster cuts from its cluster-cidr.
+sub default_ipam_mode { 'kubernetes' }
+
+# Not exclusive: RKE2 keeps its own CNI config next to Cilium's. The mode is
+# ipam_mode's where one is given; the server's cluster-cidr is the pool,
+# which only a cluster-pool mode uses -- the kubernetes mode takes the node
+# podCIDRs cut from it.
 sub cilium_helm_defaults {
   my ( $self, %args ) = @_;
   return {
     cni            => { exclusive => JSON()->false },
     k8sServiceHost => '127.0.0.1',
-    ( defined $args{cluster_cidr}
-        ? ( ipam => { operator => { clusterPoolIPv4PodCIDRList => [ $args{cluster_cidr} ] } } )
-        : () ),
+    ipam           => {
+      mode => $args{ipam_mode} // $self->default_ipam_mode,
+      ( defined $args{cluster_cidr}
+          ? ( operator => { clusterPoolIPv4PodCIDRList => [ $args{cluster_cidr} ] } )
+          : () ),
+    },
   };
 }
 

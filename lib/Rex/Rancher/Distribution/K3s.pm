@@ -71,15 +71,19 @@ sub cilium_config {
   };
 }
 
+# Cilium cuts the node ranges from its own pool, as kubernetes-ocp k178.
+sub default_ipam_mode { 'cluster-pool' }
+
 # The control plane address (validated in Rex::Rancher::Cilium), and
-# Cilium's own pool on k3s' cluster-cidr, as kubernetes-ocp k178.
+# Cilium's own pool on k3s' cluster-cidr, as kubernetes-ocp k178; the mode
+# is ipam_mode's where one is given.
 sub cilium_helm_defaults {
   my ( $self, %args ) = @_;
   return {
     cni  => { exclusive => JSON()->true },
     ( defined $args{k8s_service_host} ? ( k8sServiceHost => $args{k8s_service_host} ) : () ),
     ipam => {
-      mode     => 'cluster-pool',
+      mode     => $args{ipam_mode} // $self->default_ipam_mode,
       operator => { clusterPoolIPv4PodCIDRList => [ $args{cluster_cidr} // $self->default_cluster_cidr ] },
     },
   };

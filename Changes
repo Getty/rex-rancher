@@ -29,11 +29,18 @@ Revision history for Rex-Rancher
     rancher_deploy_server: written as cluster-cidr on rke2 and k3s, and
     handed to install_cilium (new option, passed through by
     rancher_deploy_server) as Cilium's pool unless helm_values sets one.
-    The pool counts in cluster-pool mode (k3s, or rke2 with that mode in
-    helm_values); rke2's default kubernetes mode ignores it and pods follow
+    The pool counts in cluster-pool mode (k3s, or rke2 with ipam_mode
+    cluster-pool); rke2's default kubernetes mode ignores it and pods follow
     the node podCIDRs cut from cluster-cidr. It is the pool of a fresh
     install: a running cluster-pool Cilium keeps its own, with a warning.
     Without it nothing changes: k3s keeps 10.42.0.0/16, rke2 writes none.
+  - New ipam_mode option (kubernetes or cluster-pool) for install_cilium,
+    upgrade_cilium and rancher_deploy_server: Cilium's IPAM mode on a fresh
+    install, in place of the distribution's default (rke2 kubernetes, k3s
+    cluster-pool). A Cilium already running in another mode keeps it, with
+    a warning naming both; ipam.mode in helm_values still dies there. Any
+    other value, or one helm_values contradicts, dies before the host is
+    touched.
   - install_agent's error for an agent that never gets active names the
     server it joins through ("It joins the cluster via ... -- check that
     this node can reach that address") above the journal tail.

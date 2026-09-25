@@ -212,17 +212,25 @@ The release artifact for a GOARCH.
 The C<config.yaml> keys that leave pod networking, network policy and
 kube-proxy to Cilium, as a new hashref with real booleans.
 
+=method default_ipam_mode
+
+Cilium's IPAM mode on a fresh install when C<ipam_mode> is not given:
+C<kubernetes> on RKE2 (pods take the node C<podCIDR>s cut from the
+cluster's C<cluster-cidr>), C<cluster-pool> on K3s (Cilium's own pool).
+
 =method cilium_helm_defaults
 
-  $dist->cilium_helm_defaults(cluster_cidr => $cidr, k8s_service_host => $host)
+  $dist->cilium_helm_defaults(cluster_cidr => $cidr, k8s_service_host => $host,
+                              ipam_mode => $mode)
 
 The distribution's part of Cilium's default Helm values, as a new hashref
 with real booleans, for L<Rex::Rancher::Cilium> to merge over the values
-both share: C<cni.exclusive>, C<k8sServiceHost> and the IPAM pool. RKE2:
-not exclusive (its CNI config stays), C<127.0.0.1>, the kubernetes IPAM
-mode with C<cluster_cidr> as the pool for a cluster-pool mode set in
-C<helm_values>. K3s: exclusive, C<k8s_service_host>, cluster-pool IPAM on
-C<cluster_cidr> or L</default_cluster_cidr>.
+both share: C<cni.exclusive>, C<k8sServiceHost> and the IPAM mode and
+pool. The mode is C<ipam_mode>, or L</default_ipam_mode> without one. RKE2:
+not exclusive (its CNI config stays), C<127.0.0.1>, C<cluster_cidr> as the
+pool (used only in C<cluster-pool> mode). K3s: exclusive,
+C<k8s_service_host>, the pool on C<cluster_cidr> or
+L</default_cluster_cidr>.
 
 =method needs_k8s_service_host
 
