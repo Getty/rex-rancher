@@ -851,7 +851,7 @@ For fine-grained control, use the individual modules directly:
 
 With C<gpu =E<gt> 1> (and C<gpu_setup> not switched off), driver choice and
 hardware checks are made by L<Rex::GPU>'s C<gpu_setup>; Rex::Rancher passes only the distribution and
-C<reboot>. Newer L<Rex::GPU> versions behave as follows:
+C<reboot>. L<Rex::GPU> 0.002 (the recommended version) behaves as follows:
 
 =over
 
@@ -887,12 +887,27 @@ guest driver, which L<Rex::GPU> does not install. If it already works
 the deploy goes on as usual; otherwise C<gpu_setup> dies naming the vGPU
 type, also when a non-vGPU GPU sits on the same host.
 
-=item * B<HGX B200/B300>: the driver is installed as for any Blackwell, then
-a warning notes that CUDA needs NVIDIA Fabric Manager, the NVLink Subnet
-Manager (C<nvlsm>), OFED/MOFED and kernel 5.17 or newer, none of which
-L<Rex::GPU> sets up (it only checks whether Fabric Manager is running).
-B<GB200/GB300> NVL72 trays get an info line that multi-node NVLink needs
-C<nvidia-imex>. Log output only; the deploy is unchanged.
+=item * B<HGX with NVSwitch> (HGX A100, H100, H200): NVIDIA Fabric Manager
+is installed with the driver at exactly the driver's version and
+C<nvidia-fabricmanager.service> enabled — without it CUDA does not
+initialise there. A driver source without Fabric Manager is not used (on
+Debian 12 and 13 the driver then comes from NVIDIA's CUDA repository);
+Debian 11 and openSUSE with an NVSwitch make C<gpu_setup> die. On a host
+whose driver already works, a missing Fabric Manager is added only from the
+host's own package sources at exactly the loaded driver's version, otherwise
+a warning; no source is added and the driver is left alone.
+
+=item * B<HGX B200/B300> (recognised by GPU device ID, they have no NVSwitch
+on the host PCI bus): Fabric Manager as above, plus the NVLink Subnet
+Manager C<nvlsm>, C<infiniband-diags> and C<libibumad> from NVIDIA's CUDA
+repository, and C<ib_umad> is loaded. A kernel older than 5.17 gives a
+warning (not on the RHEL family), and after the start every GPU is checked
+for C<Fabric State: Completed> — a loud warning if not, never a die. Where
+no C<nvlsm> source is known for the OS, C<gpu_setup> dies. With the driver
+already working, missing packages come from the host's own sources only
+(one not offered only warns). OFED/MOFED is not set up.
+B<GB200/GB300> NVL72 trays need no Fabric Manager; an info line notes that
+multi-node NVLink needs C<nvidia-imex>, which is not set up.
 
 =item * B<Several compute GPUs>: the driver must satisfy all of them (Ada +
 V100 gives 580, Ada + B200 gives the open driver). If no driver fits (V100 +
@@ -905,9 +920,10 @@ C<gpu_setup> dies.
 Such a die comes before any driver package is installed. At most
 C<pciutils> has been installed for detection (when C<lspci> was missing),
 unless the missing package source only shows once the package index is
-refreshed (e.g. Ubuntu, where no fitting driver package is found): then the
-package sources have already been prepared (C<apt-get update>, repositories
-added or enabled). The die is not caught: L</rancher_deploy_server> and
+refreshed (e.g. Ubuntu, where no fitting driver package is found, or a
+driver source whose repository carries no Fabric Manager of exactly the
+driver's version): then the package sources have already been prepared
+(C<apt-get update>, repositories added or enabled). The die is not caught: L</rancher_deploy_server> and
 L</rancher_deploy_agent> abort with it. It does, however, come after
 L<Rex::Rancher::Node/prepare_node> has already run, so base packages,
 hostname, timezone, locale, swap, kernel modules and sysctl are already

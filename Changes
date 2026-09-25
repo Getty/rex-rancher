@@ -29,6 +29,10 @@ Revision history for Rex-Rancher
     /etc/hosts, unless a line already names the host.
   - prepare_node on Debian/Ubuntu enables the locale in /etc/locale.gen and
     runs locale-gen before setting it.
+  - Recommend Rex::GPU 0.002 for gpu => 1. "GPU hardware support" now
+    describes it: Fabric Manager on HGX A100/H100/H200, Fabric Manager plus
+    nvlsm and ib_umad on HGX B200/B300 (not only a warning), and the dies
+    for a host without a Fabric Manager or nvlsm source.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
