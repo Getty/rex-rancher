@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-25T04:32:44Z
+claimed_by: main
+class: standard
+completed: 2026-09-25T04:32:44Z
+created: 2026-09-25T04:31:36Z
+id: 50
+priority: medium
+started: 2026-09-25T04:32:04Z
+status: done
+title: 'Doku/Agent-Config: neun statt sechs Module (CLAUDE.md, rex-rancher-core, release-checker)'
+updated: 2026-09-25T04:32:44Z
+---
+
+Nach #48 gibt es neun Module unter lib/ (neu: Distribution.pm, Distribution/RKE2.pm, Distribution/K3s.pm). CLAUDE.md, Skill rex-rancher-core und .claude/agents/rex-rancher-release-checker (+ worker description) sprechen von 'six modules' / '$VERSION in all six'. Anpassen, damit der release-checker alle neun prueft.
+
+Done in d65423d. Counts replaced by 'every file under lib/' so they don't drift again. CLAUDE.md had no module count.
