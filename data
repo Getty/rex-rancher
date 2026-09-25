@@ -1,0 +1,19 @@
+---
+claimed_at: 2026-09-25T04:07:33Z
+claimed_by: worker-followup
+class: standard
+completed: 2026-09-25T04:07:33Z
+created: 2026-09-25T03:25:18Z
+id: 45
+priority: medium
+started: 2026-09-25T03:55:33Z
+status: done
+title: 'GPU: Rex::GPU 0.002 in cpanfile (recommends) + POD/README HGX/NVSwitch aktualisieren'
+updated: 2026-09-25T15:38:05Z
+---
+
+Aus #40: cpanfile recommends 'Rex::GPU', '0.002' (letzte CPAN-Version; nicht requires). POD Rancher.pm:873-878 und README.md:67 behaupten B200/B300 bekommen nur eine Warnung — 0.002 installiert Fabric Manager auf HGX A100/H100/H200 und FM+nvlsm+ib_umad auf B200/B300, neue die-Pfade (keine nvlsm-Quelle Setup.pm:696-701; Debian 11/openSUSE mit NVSwitch GPU.pm:118-122). Changes-Eintrag. Offen fuer Maintainer: Laufzeit-Versionscheck Rex::GPU->VERSION('0.002') in _gpu_setup_if_requested (die vs warn)?
+
+Commit 7811bbb. Verified against rex-gpu tag 0.002. Runtime version check NOT added (maintainer decision).
+
+Maintainer 2026-09-25: no runtime Rex::GPU version check — recommends in cpanfile is enough.
