@@ -108,9 +108,8 @@ C<rke2-server> and C<rke2-agent.service>, installer from
 L<https://get.rke2.io> (agents with C<INSTALL_RKE2_TYPE=agent>), release
 tarballs C<rke2.linux-ARCH.tar.gz>. A running service is left running on a
 re-run unless it has to take something new: a changed C<config.yaml>,
-C<registries.yaml>, C</etc/default> file or containerd drop-in, a newly
-installed NVIDIA runtime or a new binary restart it (see
-L<Rex::Rancher::Distribution/restart_reasons>).
+C<registries.yaml>, C</etc/default> file or containerd drop-in, or a new
+binary restart it (see L<Rex::Rancher::Distribution/restart_reasons>).
 
 On a server the install script's exit status is ignored, because it prints
 GPG key import noise that ends non-zero on some hosts (Rocky 10);

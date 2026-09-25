@@ -618,10 +618,9 @@ when the host has changed under it since its main process started:
 C</etc/default/rke2-server> (C<-agent>) modified, or a containerd
 C<config.toml.tmpl>, C<config-v3.toml.tmpl> or C<config-v3.toml.d/> drop-in
 (as L<Rex::GPU> writes) — by modification time, and Rex rewrites a file only
-when its content differs, so the same options twice change nothing;
-
-=item * C<nvidia-container-runtime> installed or upgraded (by inode change
-time);
+when its content differs, so the same options twice change nothing. An
+upgraded C<nvidia-container-runtime> alone is no reason, containerd runs it
+anew per container;
 
 =item * an installed C<rke2> binary of another version than the running one.
 

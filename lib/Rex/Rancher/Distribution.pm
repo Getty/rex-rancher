@@ -656,11 +656,11 @@ changed. Reads the host:
 =item * a L</restart_watch> path modified (mtime) after the service's main
 process started. Rex's C<file> leaves a file with unchanged content
 untouched, so a re-run with the same options changes nothing; a change left
-behind by an interrupted earlier run, or made by hand, counts too.
-
-=item * an C<nvidia-container-runtime> on the C<PATH> whose inode changed
-(ctime: a package install or upgrade) after the process started, since the
-distribution looks for it only at start.
+behind by an interrupted earlier run, or made by hand, counts too. This
+covers the NVIDIA runtime's registration: the L</env_file> C<PATH> line and
+L<Rex::GPU>'s C<config-v3.toml.d> drop-in. An upgraded
+C<nvidia-container-runtime> binary alone is no reason: containerd runs it
+anew for every container it creates.
 
 =item * the running binary (C</proc/PID/exe --version>) reports another
 version than the installed L</binary>.
@@ -692,13 +692,6 @@ sub restart_reasons {
     my $changed = Rex::Commands::Run::run("find $paths -newermt \@$since 2>/dev/null", auto_die => 0);
     my @changed = grep { length } split /\n/, $changed // '';
     push @reasons, "changed since it started: " . join(', ', @changed) if @changed;
-
-    # ctime: dpkg and rpm keep the package's mtime.
-    my $runtime = Rex::Commands::Run::run('p=$(command -v nvidia-container-runtime) && '
-      . "find \"\$p\" -newerct \@$since 2>/dev/null", auto_die => 0);
-    $runtime = '' unless defined $runtime;
-    $runtime =~ s/\s+\z//;
-    push @reasons, "$runtime installed since it started" if length $runtime;
   }
   else {
     Rex::Logger::info("Could not tell when $service started (ps -o etimes= -p $pid): "

@@ -5,11 +5,11 @@ use Test::More;
 # -----------------------------------------------------------------------------
 # k49: a re-run against a running rke2 used to get `systemctl start`, a no-op,
 # so a changed config.yaml, registries.yaml, /etc/default PATH, containerd
-# drop-in, freshly installed NVIDIA runtime or new binary waited for the next
-# reboot. start_verb now restarts a running rke2 (server and agent) exactly
+# drop-in or new binary waited for the next reboot. start_verb now restarts a running rke2 (server and agent) exactly
 # when restart_reasons finds something newer than its main process, and logs
 # why; nothing changed keeps `start`. k3s is restarted on every run, as
-# before, and is not asked.
+# before, and is not asked. An upgraded nvidia-container-runtime binary is
+# no reason (k56): containerd runs it anew per container.
 #
 # run is faked: this proves the decision, the commands that ask the host and
 # the log line. That `find -newermt`, `ps -o etimes=` and `/proc/PID/exe
@@ -26,8 +26,8 @@ my @perl_warnings;
 $SIG{__WARN__} = sub { push @perl_warnings, @_ };
 
 # %host: pid (MainPID, 0 = not running), since (ps answer, undef = ps fails),
-# changed (find -newermt output), runtime (find -newerct output), running and
-# installed (--version output).
+# changed (find -newermt output), runtime (what a find -newerct on the NVIDIA
+# runtime would answer), running and installed (--version output).
 my ( @log, @info, @warn, %host );
 {
   no warnings 'redefine';
@@ -114,8 +114,7 @@ subtest 'running, nothing changed: start (a re-run leaves it alone)' => sub {
   ok( ( grep { $_ eq 'echo $(( $(date +%s) - $(ps -o etimes= -p 4242) ))' } @log ),
     'process start from the host clock and ps' );
   ok( ( grep { $_ eq '/proc/4242/exe --version 2>&1' } @log ), 'running binary asked through /proc' );
-  ok( ( grep { m{^p=\$\(command -v nvidia-container-runtime\) && find "\$p" -newerct \@1790000000} } @log ),
-    'runtime by ctime' );
+  ok( !( grep { /nvidia-container-runtime|-newerct/ } @log ), 'the NVIDIA runtime binary is not asked (k56)' );
 };
 
 subtest 'config.yaml changed: restart, and the log says why' => sub {
@@ -135,10 +134,18 @@ subtest 'several paths changed: all named' => sub {
     'one reason, every path' );
 };
 
-subtest 'nvidia-container-runtime installed after the start' => sub {
+subtest 'nvidia-container-runtime upgraded after the start: no restart (k56)' => sub {
   reset_host( %QUIET, runtime => "/usr/bin/nvidia-container-runtime\n" );
-  is_deeply( [ $rke2->restart_reasons ], [ '/usr/bin/nvidia-container-runtime installed since it started' ],
-    'reason' );
+  is_deeply( [ $rke2->restart_reasons ], [], 'a package upgrade of the runtime is no reason' );
+  is( $rke2->start_verb, 'start', 'the control plane keeps running' );
+  reset_host( %QUIET, runtime => "/usr/bin/nvidia-container-runtime\n",
+    changed => "/var/lib/rancher/rke2/agent/etc/containerd/config-v3.toml.d/99-nvidia.toml\n" );
+  is_deeply( [ $rke2->restart_reasons ], [ 'changed since it started: '
+    . '/var/lib/rancher/rke2/agent/etc/containerd/config-v3.toml.d/99-nvidia.toml' ],
+    'its registration (the drop-in) still is' );
+  reset_host( %QUIET, changed => "/etc/default/rke2-server\n" );
+  is_deeply( [ $rke2->restart_reasons ], [ 'changed since it started: /etc/default/rke2-server' ],
+    'and so is the PATH line in the env file' );
 };
 
 subtest 'new binary installed' => sub {

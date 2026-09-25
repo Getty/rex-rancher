@@ -57,8 +57,8 @@ Revision history for Rex-Rancher
     warning. A template still in place gets a warning with the command.
   - A re-run restarts a running rke2 server or agent, logging why, when its
     config.yaml(.d), registries.yaml, /etc/default file or containerd
-    drop-ins changed since it started, nvidia-container-runtime got
-    installed, or another rke2 version is installed; before, it was only
+    drop-ins changed since it started, or another rke2 version is
+    installed; before, it was only
     started and ran the old setup until its next restart. Unchanged: it is
     left running. k3s is still restarted on every run.
   - Internal: what RKE2 and K3s differ in (paths, units, installer, release
