@@ -85,8 +85,8 @@ C<INSTALL_K3S_VERSION>. If omitted, the latest stable release is installed.
 
 When given, the version the installed binary reports (C<rke2 --version> /
 C<k3s --version>) is compared with it after the installer ran, and a
-mismatch dies (on RKE2 before the service is started; the K3s install
-script has already restarted it). This catches a pinned
+mismatch dies before the service is started, on RKE2 and K3s alike (the
+K3s install script runs with C<INSTALL_K3S_SKIP_START>). This catches a pinned
 install or upgrade that failed while an older binary is still on the host.
 
 Against a running server the version skew policy applies, for RKE2 and K3s

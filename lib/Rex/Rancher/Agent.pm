@@ -60,8 +60,8 @@ C<rke2> (default) or C<k3s>; anything else dies before the host is touched.
 Pinned version string, e.g. C<v1.28.4+rke2r1> for RKE2 or C<v1.28.4+k3s1>
 for K3s. If omitted, the latest stable release is installed. When given, the
 installed binary's C<--version> is checked against it after the installer
-ran, and a mismatch dies (on RKE2 before the service is started; the K3s
-install script has already started it).
+ran, and a mismatch dies before the service is started (the K3s install script
+runs with C<INSTALL_K3S_SKIP_START>).
 
 The version skew rules of L<Rex::Rancher::Server/install_server>'s
 C<version> apply to a running agent the same way (a jump of more than one
