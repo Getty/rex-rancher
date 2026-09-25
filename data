@@ -1,0 +1,16 @@
+---
+claimed_at: 2026-09-25T04:56:10Z
+claimed_by: worker-cilium-die
+class: standard
+created: 2026-09-25T04:52:05Z
+id: 51
+priority: high
+started: 2026-09-25T04:52:26Z
+status: review
+title: upgrade_cilium ohne kubeconfig abbrechen statt warnen
+updated: 2026-09-25T04:56:10Z
+---
+
+Maintainer-Entscheidung (2026-09-25) zu offenem Punkt aus #43: upgrade_cilium ohne kubeconfig kann den laufenden IPAM-Modus/Pool nicht pruefen -> muss sterben, bevor der Host angefasst wird, statt nur zu warnen (sonst bleibt die Gefahr aus #43: rke2-Defaults stellen cluster-pool still auf kubernetes um). Pruefen, ob install_cilium auf einem Host mit bereits deployetem Release ohne kubeconfig dieselbe Luecke hat, und dort gleich behandeln. Changes/POD.
+
+Commit 1257136. upgrade_cilium dies first thing without kubeconfig (no command, no file). install_cilium has no gap: without kubeconfig it only runs cilium install, which Helm refuses over an existing release (swallow unchanged, auto_die 0). rancher_deploy_server never calls upgrade_cilium. t/cilium.t.
