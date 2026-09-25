@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-25T04:43:18Z
+claimed_by: worker-restart
+class: standard
+created: 2026-09-25T04:08:00Z
+id: 49
+priority: medium
+started: 2026-09-25T04:31:42Z
+status: review
+title: rke2-Re-Run uebernimmt geaenderte config.yaml / neue Version auf laufendem
+  Node nicht
+updated: 2026-09-25T04:43:18Z
+---
+
+Aus #46: rke2 bekommt beim Re-Run nur systemctl start (No-op bei laufender Unit), k3s restart. Geaenderte config.yaml (tls_san, disable, cluster_cidr), eine neu gepinnte version oder ein nachtraeglich per gpu => 1 hinzugefuegter nvidia-Drop-in greifen auf rke2 erst beim naechsten Neustart. _verify_installed_version prueft die Binary, nicht den laufenden Prozess. Entscheiden: Restart bei geaenderter config.yaml/Binary (Hash vorher/nachher vergleichen) statt bedingungslos. Beachte rolling HA-Server. Nur live verifizierbar.
+
+Commit f91bf86. Distribution::restart_reasons: rke2 (server+agent) restarts only when running and (watched files newer than MainPID start: config.yaml(.d), registries.yaml, /etc/default env, containerd tmpl + config-v3.toml.d drop-in; nvidia-container-runtime ctime; /proc/PID/exe --version != rke2 --version). Rex file() only replaces on md5 change -> identical re-run stays start. Undeterminable check -> warn, treat unchanged. k3s keeps unconditional restart (installer rewrites unit each run). t/restart-reasons.t. Live-only: find -newermt/ps etimes on Debian/Rocky, /proc exe after binary replace, 2nd run stays start.
