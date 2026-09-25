@@ -150,7 +150,9 @@ L<Rex::Rancher::Node/prepare_node>.
 
 =item C<ntp>
 
-Install and start C<chrony>. Default: C<1>; pass C<0> to leave time sync to
+Ensure NTP sync: an already synchronized clock is left alone, otherwise
+C<chrony> is installed and started (C<systemd-timesyncd> as fallback when
+that install fails). Default: C<1>; pass C<0> to leave time sync to
 the host (e.g. a VM with hypervisor time sync).
 
 =item C<server>
