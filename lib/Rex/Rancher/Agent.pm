@@ -9,6 +9,7 @@ use Rex::Commands::File;
 use Rex::Commands::Run;
 use Rex::Logger;
 use Rex::Rancher::Distribution;
+use Rex::Rancher::Options;
 use Rex::Rancher::K8s ();
 use YAML::PP;
 
@@ -140,7 +141,7 @@ sub install_agent {
   my $token        = $opts{token} or die "token is required for install_agent\n";
   my $version      = $opts{version};
   my $node_name    = $opts{node_name};
-  my $method       = Rex::Rancher::Distribution->resolve_install_method($opts{install_method}, $version);
+  my $method       = Rex::Rancher::Options->resolve_install_method($opts{install_method}, $version);
 
   my $dist = Rex::Rancher::Distribution->new_for($distribution, role => 'agent');
 

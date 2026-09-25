@@ -30,6 +30,14 @@ sub agent_service        { 'k3s-agent.service' }
 # (so their mtime alone would say "changed" each time), the unit's arguments
 # come from this run's installer line, and the k3s path is not live-verified.
 sub default_start_verb   { 'restart' }
+sub live_verified        { 0 }
+
+# k3s agents serve the API on 127.0.0.1:6444, not 6443: Cilium's kube-proxy
+# replacement needs the control plane's address.
+sub needs_k8s_service_host { 1 }
+
+# No packaged Gateway API CRDs to keep out of the way.
+sub gateway_api_crd_chart { undef }
 
 # Formerly --disable flags on the installer line; config.yaml carries the same
 # and keeps caller-supplied names out of the shell.
@@ -60,6 +68,20 @@ sub cilium_config {
     'disable-network-policy' => JSON()->true,
     'disable-kube-proxy'     => JSON()->true,
     'cluster-cidr'           => $self->default_cluster_cidr,
+  };
+}
+
+# The control plane address (validated in Rex::Rancher::Cilium), and
+# Cilium's own pool on k3s' cluster-cidr, as kubernetes-ocp k178.
+sub cilium_helm_defaults {
+  my ( $self, %args ) = @_;
+  return {
+    cni  => { exclusive => JSON()->true },
+    ( defined $args{k8s_service_host} ? ( k8sServiceHost => $args{k8s_service_host} ) : () ),
+    ipam => {
+      mode     => 'cluster-pool',
+      operator => { clusterPoolIPv4PodCIDRList => [ $args{cluster_cidr} // $self->default_cluster_cidr ] },
+    },
   };
 }
 

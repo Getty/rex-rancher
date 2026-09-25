@@ -90,12 +90,15 @@ Revision history for Rex-Rancher
     appears within two minutes names the API error of the last attempt (a
     403, no connection) instead of only "check device plugin".
   - Internal: what RKE2 and K3s differ in (paths, units, installer, release
-    artifacts) and the host steps server and agent share moved into the new
-    Rex::Rancher::Distribution with ::RKE2 and ::K3s (new dependencies Moo
-    and namespace::autoclean). The commands run on the host, their order and
-    the error messages are unchanged. New, not exported:
-    Rex::Rancher::Cilium::validate_cilium_opts checks install_cilium's
-    options without touching anything.
+    artifacts, Cilium's Helm defaults) and the host steps server and agent
+    share moved into the new Rex::Rancher::Distribution with ::RKE2 and
+    ::K3s, loaded by new_for; the option checks and the checksum parsing
+    into Rex::Rancher::Options and Rex::Rancher::Checksum (new dependencies
+    Moo, Module::Runtime and namespace::autoclean). The commands run on the
+    host and their order are unchanged; so are the error messages, apart
+    from install_agent's for an agent that never gets active (above). New,
+    not exported: Rex::Rancher::Cilium::validate_cilium_opts checks
+    install_cilium's options without touching anything.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

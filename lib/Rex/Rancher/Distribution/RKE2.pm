@@ -27,6 +27,14 @@ sub containerd_dir       { '/var/lib/rancher/rke2/agent/etc/containerd' }
 sub server_service       { 'rke2-server' }
 sub agent_service        { 'rke2-agent.service' }
 sub default_start_verb   { 'start' }
+sub live_verified        { 1 }
+
+# Every rke2 node serves the API on 127.0.0.1:6443.
+sub needs_k8s_service_host { 0 }
+
+# RKE2 v1.37+ ships the Gateway API CRDs as its own chart, which would
+# overwrite what gateway_api applies.
+sub gateway_api_crd_chart { 'rke2-gateway-api-crd' }
 
 # No bundled ingress controller: RKE2 ships the Traefik charts since v1.30.3
 # and deploys Traefik by default on new clusters since v1.36; a chart name
@@ -54,6 +62,20 @@ sub cilium_config {
   return {
     'cni'                => 'none',
     'disable-kube-proxy' => JSON()->true,
+  };
+}
+
+# Not exclusive: RKE2 keeps its own CNI config next to Cilium's. The
+# server's cluster-cidr as the pool, for a cluster-pool mode set in
+# helm_values; the kubernetes mode takes the node podCIDRs cut from it.
+sub cilium_helm_defaults {
+  my ( $self, %args ) = @_;
+  return {
+    cni            => { exclusive => JSON()->false },
+    k8sServiceHost => '127.0.0.1',
+    ( defined $args{cluster_cidr}
+        ? ( ipam => { operator => { clusterPoolIPv4PodCIDRList => [ $args{cluster_cidr} ] } } )
+        : () ),
   };
 }
 

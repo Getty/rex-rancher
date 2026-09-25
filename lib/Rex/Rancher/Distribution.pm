@@ -4,9 +4,12 @@ package Rex::Rancher::Distribution;
 our $VERSION = '0.003';
 use v5.14.4;
 use Moo;
+use Module::Runtime qw( use_module );
 use Rex::Commands::File ();
 use Rex::Commands::Run ();
 use Rex::Logger ();
+use Rex::Rancher::Checksum;
+use Rex::Rancher::Options;
 use YAML::PP;
 use namespace::autoclean;
 
@@ -45,7 +48,10 @@ sub is_agent { $_[0]->role eq 'agent' }
   # { rke2 => 'Rex::Rancher::Distribution::RKE2', k3s => '...::K3s' }
 
 The distribution names C<distribution> options accept, each with the class
-that implements it. A subclass may override it to add or replace one.
+that implements it. A subclass may override it to add or replace one: its
+own L</new_for> then loads and builds those classes, and
+L</unknown_distribution> lists their names. The functions L<Rex::Rancher>
+and its modules export ask this class, not a subclass.
 
 =cut
 
@@ -61,18 +67,51 @@ sub distribution_classes {
   my $dist  = Rex::Rancher::Distribution->new_for('k3s');
   my $agent = Rex::Rancher::Distribution->new_for('rke2', role => 'agent');
 
-The object for a C<distribution> option value; C<undef> means C<rke2>.
-Anything not in L</distribution_classes> dies with C<Unknown distribution:
-NAME (expected 'rke2' or 'k3s')>. Further arguments go to C<new>.
+The object for a C<distribution> option value; C<undef> means
+L</default_distribution>. Anything not in L</distribution_classes> dies with
+L</unknown_distribution> (C<Unknown distribution: NAME (expected 'rke2' or
+'k3s')>). Further arguments go to C<new>. The class is loaded here, when it
+is first asked for.
 
 =cut
 
+# use_module, not a `use` at the top: the classes extend this one, which has
+# to be complete (its attributes declared) before they load. Which one is
+# needed is known only from the caller's distribution option, and only a
+# name from distribution_classes is ever loaded.
 sub new_for {
   my ( $class, $name, %args ) = @_;
-  $name //= 'rke2';
+  $name //= $class->default_distribution;
   my $impl = $class->distribution_classes->{$name}
-    // die "Unknown distribution: $name (expected 'rke2' or 'k3s')\n";
-  return $impl->new(%args);
+    // die $class->unknown_distribution($name) . "\n";
+  return use_module($impl)->new(%args);
+}
+
+=method default_distribution
+
+C<rke2>: what an absent C<distribution> option means.
+
+=cut
+
+sub default_distribution { 'rke2' }
+
+=method unknown_distribution
+
+  die Rex::Rancher::Distribution->unknown_distribution($name) . "\n";
+
+The message for a C<distribution> option that is not in
+L</distribution_classes>, without a newline: C<Unknown distribution: NAME
+(expected 'rke2' or 'k3s')>, the L</default_distribution> named first.
+
+=cut
+
+sub unknown_distribution {
+  my ( $class, $name ) = @_;
+  my $default = $class->default_distribution;
+  my @names   = ( $default, sort grep { $_ ne $default } keys %{ $class->distribution_classes } );
+  my $last    = pop @names;
+  return "Unknown distribution: $name (expected "
+    . join( ', ', map { "'$_'" } @names ) . ( @names ? ' or ' : '' ) . "'$last')";
 }
 
 =method name
@@ -144,6 +183,9 @@ The server's systemd unit: C<rke2-server> / C<k3s>.
 =method agent_service
 
 The agent's systemd unit: C<rke2-agent.service> / C<k3s-agent.service>.
+Unlike L</server_service> with the C<.service> suffix: both are handed to
+C<systemctl> and C<journalctl> and named in log lines and errors exactly
+like this, so the asymmetry is kept.
 
 =method env_file
 
@@ -169,6 +211,36 @@ The release artifact for a GOARCH.
 
 The C<config.yaml> keys that leave pod networking, network policy and
 kube-proxy to Cilium, as a new hashref with real booleans.
+
+=method cilium_helm_defaults
+
+  $dist->cilium_helm_defaults(cluster_cidr => $cidr, k8s_service_host => $host)
+
+The distribution's part of Cilium's default Helm values, as a new hashref
+with real booleans, for L<Rex::Rancher::Cilium> to merge over the values
+both share: C<cni.exclusive>, C<k8sServiceHost> and the IPAM pool. RKE2:
+not exclusive (its CNI config stays), C<127.0.0.1>, the kubernetes IPAM
+mode with C<cluster_cidr> as the pool for a cluster-pool mode set in
+C<helm_values>. K3s: exclusive, C<k8s_service_host>, cluster-pool IPAM on
+C<cluster_cidr> or L</default_cluster_cidr>.
+
+=method needs_k8s_service_host
+
+True where Cilium's kube-proxy replacement needs the control plane's
+address from the caller (K3s: its agents serve the API on
+C<127.0.0.1:6444>, not C<6443>); false where every node serves it on
+C<127.0.0.1:6443> (RKE2), which then refuses a C<k8s_service_host>.
+
+=method gateway_api_crd_chart
+
+The packaged Helm chart that brings its own Gateway API CRDs and has to be
+disabled for C<gateway_api>: C<rke2-gateway-api-crd> on RKE2 (v1.37+),
+C<undef> on K3s.
+
+=method live_verified
+
+True for RKE2, which has been deployed live through Rex::Rancher; false for
+K3s, where L<Rex::Rancher::Server/install_server> warns.
 
 =method script_install_cmd
 
@@ -251,41 +323,18 @@ sub restart_services_cmd {
 
 =method resolve_install_method
 
-  my $method = Rex::Rancher::Distribution->resolve_install_method($method, $version);
-
-C<script> (default) or C<artifact>; anything else dies, and so does
-C<artifact> without a version.
-
-=cut
-
-sub resolve_install_method {
-  my ( $self, $method, $version ) = @_;
-  $method //= 'script';
-  die "Unknown install_method: $method (expected 'script' or 'artifact')\n"
-    unless $method eq 'script' || $method eq 'artifact';
-  die "install_method 'artifact' requires a version (e.g. v1.30.4+rke2r1)\n"
-    if $method eq 'artifact' && !$version;
-  return $method;
-}
+The same as L<Rex::Rancher::Options/resolve_install_method>, which is not
+distribution-specific; kept here for callers of this class.
 
 =method check_cluster_cidr
 
-  Rex::Rancher::Distribution->check_cluster_cidr($cidr);
-
-Returns C<$cidr> when it is one IPv4 CIDR, C<undef> for C<undef>, and dies
-otherwise (Cilium's pool is IPv4 only here, so no dual-stack).
+The same as L<Rex::Rancher::Options/check_cluster_cidr>; kept here for
+callers of this class.
 
 =cut
 
-sub check_cluster_cidr {
-  my ( $self, $cidr ) = @_;
-  return unless defined $cidr;
-  my @part = $cidr =~ m{\A(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})\z};
-  die "cluster_cidr must be one IPv4 CIDR such as 10.42.0.0/16, got '$cidr' "
-    . "(dual-stack is not supported: Cilium's pool is IPv4 here)\n"
-    unless @part && !grep({ $_ > 255 } @part[0 .. 3]) && $part[4] <= 32;
-  return $cidr;
-}
+sub resolve_install_method { shift; Rex::Rancher::Options->resolve_install_method(@_) }
+sub check_cluster_cidr     { shift; Rex::Rancher::Options->check_cluster_cidr(@_) }
 
 #
 # Release artifacts (install_method => 'artifact')
@@ -351,52 +400,25 @@ sub artifact_spec {
 
 =method expected_sha256
 
-  $dist->expected_sha256($sums_text, $asset)
-
-The checksum for exactly C<$asset> in an official C<sha256sum-ARCH.txt>, or
-nothing. Exact name match: C<k3s> does not pick up
-C<k3s-airgap-images-...>.
-
-=cut
-
-sub expected_sha256 {
-  my ( $self, $sums_text, $asset ) = @_;
-  for my $line (split /\n/, $sums_text // '') {
-    return lc $1 if $line =~ /\A\s*([0-9a-fA-F]{64})\s+\*?\Q$asset\E\s*\z/;
-  }
-  return;
-}
+The same as L<Rex::Rancher::Checksum/expected_sha256>, which is not
+distribution-specific; kept here for callers of this class, and as what
+L</fetch_artifacts> calls, so a subclass can override it.
 
 =method sha256_of
 
-The first field of C<sha256sum FILE> output, or nothing.
-
-=cut
-
-sub sha256_of {
-  my ( $self, $out ) = @_;
-  return lc $1 if ($out // '') =~ /\A\s*([0-9a-fA-F]{64})\b/;
-  return;
-}
+The same as L<Rex::Rancher::Checksum/sha256_of>, kept as
+L</expected_sha256> is.
 
 =method verify_sha256
 
-  $dist->verify_sha256($expected, $actual, $asset)
-
-Returns C<1> when both are there and equal, dies otherwise.
+The same as L<Rex::Rancher::Checksum/verify_sha256>, kept as
+L</expected_sha256> is.
 
 =cut
 
-sub verify_sha256 {
-  my ( $self, $expected, $actual, $asset ) = @_;
-  die "No checksum for $asset in the release's sha256sum file\n"
-    unless defined $expected;
-  die "Could not compute sha256 of downloaded $asset\n"
-    unless defined $actual;
-  die "Checksum mismatch for $asset: expected $expected, got $actual\n"
-    unless $expected eq $actual;
-  return 1;
-}
+sub expected_sha256 { shift; Rex::Rancher::Checksum->expected_sha256(@_) }
+sub sha256_of       { shift; Rex::Rancher::Checksum->sha256_of(@_) }
+sub verify_sha256   { shift; Rex::Rancher::Checksum->verify_sha256(@_) }
 
 =method download_cmd
 
@@ -1277,11 +1299,6 @@ sub write_registries {
     YAML::PP->new(boolean => 'JSON::PP')->dump_string($registries));
 }
 
-# Loaded last, at run time: both extend this class, which has to be complete
-# (its attributes declared) first.
-require Rex::Rancher::Distribution::RKE2;
-require Rex::Rancher::Distribution::K3s;
-
 1;
 
 =head1 SYNOPSIS
@@ -1305,7 +1322,11 @@ host steps both distributions share (artifact download and checksum, version
 check, service start and wait, secret files, the NVIDIA runtime C<PATH>).
 L<Rex::Rancher::Distribution::RKE2> and L<Rex::Rancher::Distribution::K3s>
 implement the distribution-specific methods; a change to one wants the
-other in the same edit.
+other in the same edit. Use L</new_for> to get one: it loads the class.
+
+What is the same for both and needs no host lives apart: the option checks
+in L<Rex::Rancher::Options>, the checksum parsing in
+L<Rex::Rancher::Checksum>.
 
 This is an internal building block of the Rex tasks; the functions those
 modules export are the interface for a Rexfile. The host steps use the Rex
@@ -1315,6 +1336,7 @@ DSL (C<run>, C<file>) of the current connection, like those functions.
 
 L<Rex::Rancher>, L<Rex::Rancher::Server>, L<Rex::Rancher::Agent>,
 L<Rex::Rancher::Cilium>, L<Rex::Rancher::Distribution::RKE2>,
-L<Rex::Rancher::Distribution::K3s>
+L<Rex::Rancher::Distribution::K3s>, L<Rex::Rancher::Options>,
+L<Rex::Rancher::Checksum>
 
 =cut

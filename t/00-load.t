@@ -9,6 +9,8 @@ use_ok('Rex::Rancher::Agent');
 use_ok('Rex::Rancher::Cilium');
 use_ok('Rex::Rancher::K8s');
 use_ok('Rex::Rancher::Distribution');
+use_ok('Rex::Rancher::Options');
+use_ok('Rex::Rancher::Checksum');
 use_ok('Rex::Rancher::Distribution::RKE2');
 use_ok('Rex::Rancher::Distribution::K3s');
 

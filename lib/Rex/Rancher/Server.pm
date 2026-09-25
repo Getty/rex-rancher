@@ -10,6 +10,7 @@ use Rex::Commands::Fs;
 use Rex::Commands::Run;
 use Rex::Logger;
 use Rex::Rancher::Distribution;
+use Rex::Rancher::Options;
 use YAML::PP;
 
 require Rex::Exporter;
@@ -250,14 +251,14 @@ sub install_server {
   my (%opts) = @_;
 
   my $distribution = $opts{distribution} // 'rke2';
-  Rex::Logger::info(
-    "k3s has not been run live through Rex::Rancher; rke2 is the verified "
-      . "distribution.", "warn")
-    if $distribution eq 'k3s';
   my $dist         = Rex::Rancher::Distribution->new_for($distribution);
+  Rex::Logger::info(
+    "$distribution has not been run live through Rex::Rancher; rke2 is the "
+      . "verified distribution.", "warn")
+    unless $dist->live_verified;
   # Validated before anything touches the host (the token lookup reads it).
-  my $method       = Rex::Rancher::Distribution->resolve_install_method($opts{install_method}, $opts{version});
-  my $cluster_cidr = Rex::Rancher::Distribution->check_cluster_cidr($opts{cluster_cidr});
+  my $method       = Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version});
+  my $cluster_cidr = Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr});
   # Before anything is written or installed: a rejected upgrade leaves the
   # host as it was.
   $dist->check_version_skew(version => $opts{version});

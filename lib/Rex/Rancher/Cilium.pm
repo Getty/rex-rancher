@@ -16,6 +16,7 @@ use Rex::Commands::Gather;
 use Rex::Commands::Run;
 use Rex::Logger;
 use Rex::Rancher::Distribution;
+use Rex::Rancher::Options;
 use YAML::PP;
 
 require Rex::Exporter;
@@ -309,7 +310,7 @@ sub install_cilium {
   my (%opts) = @_;
   my $o = _resolve_opts(%opts);
 
-  Rex::Logger::info("Installing Cilium $o->{version} on $o->{distribution} cluster");
+  Rex::Logger::info("Installing Cilium $o->{version} on " . $o->{dist}->name . " cluster");
 
   my $api     = $o->{kubeconfig} ? _api($o->{kubeconfig}) : undef;
   my $release = $api ? _read_release($api) : undef;
@@ -356,7 +357,7 @@ sub install_cilium {
 
   _wait_ready($api, $o->{wait_duration}) if $o->{wait};
 
-  Rex::Logger::info("Cilium $o->{version} ready on $o->{distribution} cluster");
+  Rex::Logger::info("Cilium $o->{version} ready on " . $o->{dist}->name . " cluster");
 }
 
 =method upgrade_cilium(%opts)
@@ -403,7 +404,7 @@ sub upgrade_cilium {
 
   my $o = _resolve_opts(%opts);
 
-  Rex::Logger::info("Upgrading Cilium to $o->{version} on $o->{distribution} cluster");
+  Rex::Logger::info("Upgrading Cilium to $o->{version} on " . $o->{dist}->name . " cluster");
 
   my $api = _api($o->{kubeconfig});
   _adopt_running($o, _read_running($api, _read_release($api)));
@@ -422,7 +423,7 @@ sub upgrade_cilium {
 
   _wait_ready($api, $o->{wait_duration}) if $o->{wait};
 
-  Rex::Logger::info("Cilium upgraded to $o->{version} on $o->{distribution} cluster");
+  Rex::Logger::info("Cilium upgraded to $o->{version} on " . $o->{dist}->name . " cluster");
 }
 
 =method ensure_gateway_api_crds(%opts)
@@ -510,18 +511,17 @@ sub validate_cilium_opts {
 sub _resolve_opts {
   my (%opts) = @_;
 
-  my $distribution = $opts{distribution} // 'rke2';
-  my $dist         = Rex::Rancher::Distribution->new_for($distribution);
+  my $dist         = Rex::Rancher::Distribution->new_for($opts{distribution});
   my $helm_values  = $opts{helm_values} // {};
   my $gateway_api  = $opts{gateway_api} ? 1 : 0;
   my $wait         = $opts{wait} ? 1 : 0;
   my $duration     = $opts{wait_duration} // WAIT_DURATION;
-  my $cluster_cidr = Rex::Rancher::Distribution->check_cluster_cidr($opts{cluster_cidr});
+  my $cluster_cidr = Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr});
 
   die "helm_values must be a hashref\n" unless ref $helm_values eq 'HASH';
 
   die "k8s_service_host is k3s-only: rke2 serves the API on 127.0.0.1:6443 "
-    . "on every node\n" if $distribution eq 'rke2' && defined $opts{k8s_service_host};
+    . "on every node\n" if !$dist->needs_k8s_service_host && defined $opts{k8s_service_host};
 
   my $channel = $opts{gateway_api_channel} // 'experimental';
   if ($gateway_api) {
@@ -543,7 +543,6 @@ sub _resolve_opts {
     $opts{k8s_service_host}, $cluster_cidr);
 
   my $o = {
-    distribution        => $distribution,
     dist                => $dist,
     version             => $opts{version}     // CILIUM_VERSION,
     cli_version         => $opts{cli_version} // CILIUM_CLI_VERSION,
@@ -578,7 +577,7 @@ sub _gateway_api_channel {
 # any Service works, on agents too, where 127.0.0.1:6443 does not exist.
 sub _require_k8s_service_host {
   my ($o) = @_;
-  return unless $o->{distribution} eq 'k3s';
+  return unless $o->{dist}->needs_k8s_service_host;
 
   my $host = $o->{values}{k8sServiceHost} // '';
   die "install_cilium on k3s needs k8s_service_host, the control plane "
@@ -693,7 +692,7 @@ sub _install_unchecked {
     die "cilium install failed: " . ($out // '') . "\n";
   }
 
-  Rex::Logger::info("Cilium $o->{version} installed on $o->{distribution} cluster");
+  Rex::Logger::info("Cilium $o->{version} installed on " . $o->{dist}->name . " cluster");
 }
 
 #
@@ -948,7 +947,7 @@ sub _adopt_running {
   }
 
   $values{k8sServiceHost} = $running->{k8s_service_host}
-    if $o->{distribution} eq 'k3s' && !$explicit->{k8s_service_host}
+    if $o->{dist}->needs_k8s_service_host && !$explicit->{k8s_service_host}
     && defined $running->{k8s_service_host};
 
   if (!$explicit->{operator_replicas} && defined $running->{operator_replicas}) {
@@ -1224,44 +1223,29 @@ sub _wait_crd_established {
 # Helm values generation
 #
 
-# Defaults per distribution, then gatewayAPI, then the caller's values on top.
+# The defaults both distributions share, the distribution's own
+# (cilium_helm_defaults: cni.exclusive, k8sServiceHost, the IPAM pool) over
+# them, then gatewayAPI, then the caller's values on top.
 sub _helm_values {
   my ($dist, $gateway_api, $extra, $k8s_service_host, $cluster_cidr) = @_;
-  my $distribution = $dist->name;
 
-  my %values = (
+  my $values = _merge_values({
     cni => {
-      binPath   => $dist->cni_bin_dir,
-      confPath  => $dist->cni_conf_dir,
-      exclusive => $distribution eq 'rke2' ? JSON()->false : JSON()->true,
+      binPath  => $dist->cni_bin_dir,
+      confPath => $dist->cni_conf_dir,
     },
-    ipam     => { mode => 'kubernetes' },
-    operator => { replicas => 1 },
-  );
+    ipam                 => { mode => 'kubernetes' },
+    operator             => { replicas => 1 },
+    kubeProxyReplacement => JSON()->true,
+    k8sServicePort       => '6443',
+  }, $dist->cilium_helm_defaults(
+    cluster_cidr     => $cluster_cidr,
+    k8s_service_host => $k8s_service_host,
+  ));
 
-  $values{kubeProxyReplacement} = JSON()->true;
-  $values{k8sServicePort}       = '6443';
+  $values->{gatewayAPI} = { enabled => JSON()->true } if $gateway_api;
 
-  if ($distribution eq 'rke2') {
-    $values{k8sServiceHost} = '127.0.0.1';
-    # The server's cluster-cidr as the pool, for a cluster-pool mode set in
-    # helm_values; the kubernetes mode takes the node podCIDRs cut from it.
-    $values{ipam}{operator} = { clusterPoolIPv4PodCIDRList => [ $cluster_cidr ] }
-      if defined $cluster_cidr;
-  }
-  else {
-    # k3s: the control plane address (validated in _resolve_opts), and
-    # Cilium's own pool on k3s' cluster-cidr, as kubernetes-ocp k178.
-    $values{k8sServiceHost} = $k8s_service_host if defined $k8s_service_host;
-    $values{ipam} = {
-      mode     => 'cluster-pool',
-      operator => { clusterPoolIPv4PodCIDRList => [ $cluster_cidr // $dist->default_cluster_cidr ] },
-    };
-  }
-
-  $values{gatewayAPI} = { enabled => JSON()->true } if $gateway_api;
-
-  return _merge_values(\%values, $extra // {});
+  return _merge_values($values, $extra // {});
 }
 
 # Deep merge, $over wins; hashes merge key by key, anything else replaces.
@@ -1286,7 +1270,7 @@ sub _helm_values_yaml {
 sub _write_helm_values {
   my ($o) = @_;
 
-  my $values_file = "/tmp/cilium-values-$o->{distribution}.yaml";
+  my $values_file = "/tmp/cilium-values-" . $o->{dist}->name . ".yaml";
   file $values_file, content => _helm_values_yaml($o->{values});
 
   Rex::Logger::info("Wrote Helm values to $values_file");

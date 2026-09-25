@@ -13,6 +13,7 @@ use Rex::Rancher::Agent;
 use Rex::Rancher::Cilium;
 use Rex::Rancher::K8s;
 use Rex::Rancher::Distribution;
+use Rex::Rancher::Options;
 use Rex::Logger;
 
 use File::Basename qw(dirname);
@@ -331,8 +332,8 @@ sub _check_connection {
 sub _check_distribution {
   my ( $distribution ) = @_;
   return if exists Rex::Rancher::Distribution->distribution_classes->{$distribution};
-  die "Unknown distribution: $distribution (expected 'rke2' or 'k3s'); "
-    . "nothing was done on the host\n";
+  die Rex::Rancher::Distribution->unknown_distribution($distribution)
+    . "; nothing was done on the host\n";
 }
 
 sub rancher_deploy_server {
@@ -353,7 +354,8 @@ sub rancher_deploy_server {
   # first tls_san, the name the certificate is made for. No fallback to the
   # kubeconfig_server (this machine's view) or localhost (agents have no
   # 6443 there); install_cilium dies without one.
-  if ($distribution eq 'k3s' && !exists $cilium_opts{k8s_service_host}) {
+  if (Rex::Rancher::Distribution->new_for($distribution)->needs_k8s_service_host
+      && !exists $cilium_opts{k8s_service_host}) {
     my $first_san = _kubeconfig_server_addr(tls_san => $opts{tls_san});
     $cilium_opts{k8s_service_host} = $first_san if defined $first_san && length $first_san;
   }
@@ -361,7 +363,7 @@ sub rancher_deploy_server {
 
   # Refuse bad or contradictory Cilium options before the node is touched,
   # not at step 7. cluster_cidr is install_server's too, cilium or not.
-  Rex::Rancher::Distribution->check_cluster_cidr($opts{cluster_cidr});
+  Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr});
   if ($cilium) {
     # install_cilium could read k8sServiceHost from a running Cilium, but a
     # first deploy has none: the address must come from the options here.
@@ -649,16 +651,18 @@ sub _install_opts {
   return ( %opts, nvidia_runtime_path => $opts{nvidia_runtime_path} // $steps{runtime_path} );
 }
 
-# gateway_api on rke2 (validated earlier): RKE2 v1.37+'s own Gateway API
-# CRD chart must stay off, or it overwrites what install_cilium applies. The
-# default disable list gains it; a caller's own list is theirs to keep.
+# gateway_api on a distribution with its own Gateway API CRD chart (rke2
+# v1.37+; validated earlier): the chart must stay off, or it overwrites what
+# install_cilium applies. The default disable list gains it; a caller's own
+# list is theirs to keep.
 sub _gateway_api_disable {
   my (%opts) = @_;
-  return unless $opts{gateway_api} && ($opts{distribution} // 'rke2') eq 'rke2';
+  return unless $opts{gateway_api};
 
-  my $chart = 'rke2-gateway-api-crd';
+  my $dist  = Rex::Rancher::Distribution->new_for($opts{distribution});
+  my $chart = $dist->gateway_api_crd_chart // return;
   my $disable = $opts{disable};
-  return ( disable => [ @{ Rex::Rancher::Distribution->new_for('rke2')->default_disable }, $chart ] )
+  return ( disable => [ @{ $dist->default_disable }, $chart ] )
     unless defined $disable;
 
   my @given = ref $disable eq 'ARRAY' ? @$disable : split(/,/, $disable);
