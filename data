@@ -1,0 +1,22 @@
+---
+claimed_at: 2026-09-25T17:45:56Z
+claimed_by: worker-fixes
+class: standard
+created: 2026-09-25T17:36:19Z
+id: 54
+priority: high
+started: 2026-09-25T17:36:48Z
+status: review
+title: Review-Fixes Cilium (#41/#43)
+updated: 2026-09-25T17:45:56Z
+---
+
+Aus Code-Review 2026-09-25 (395935d..1257136):
+1. _wait_ready: scalar eval { $api->get } schluckt 401/403/Netzfehler als 'not found' -> nach 600s irrefuehrend. _get_optional nutzen, andere Fehler laut.
+2. _get_optional: Regex /\b404\b|not ?found/i zu weit -> nur echten 404-Status als 'fehlt' werten (sonst Defaults statt laufender IPAM).
+3. operator.replicas nur aus Release-Values; ohne gesetzten Wert erzwingt Default replicas: 1 -> laufenden Wert aus Deployment cilium-operator spec.replicas uebernehmen.
+4. Laufende IPAM nur uebernommen wenn has_deployed; bei failed/pending-install mit existierender cilium-config wird mit rke2-Defaults (kubernetes) neu installiert -> cilium-config lesen, sobald sie existiert, unabhaengig vom Release-Status.
+5. cluster_cidr (Server-Option) zaehlt als expliziter Pool -> stirbt bei laufendem anderem Pool; OCP hat Altcluster auf 10.0.0.0/8 und will pod_cidr einfach durchreichen. cluster_cidr = Pool fuer frische Installation, laufender Pool gewinnt (mit Warnung). Explizit per helm_values gesetzter abweichender Pool stirbt weiter.
+6. Changes/POD: auf rke2 bleibt ipam.mode kubernetes, Pods folgen cluster-cidr ueber Node-PodCIDRs; der cluster-pool-Wert ist dort inaktiv -> ehrlich formulieren.
+
+Commit 6038de4. All 6 points; t/cilium.t incl. OCP 10.0.0.0/8 + cluster_cidr case. Tradeoff: API outage during wait dies immediately.
