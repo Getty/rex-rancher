@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-25T04:07:44Z
+claimed_by: worker-followup
+class: standard
+completed: 2026-09-25T04:07:44Z
+created: 2026-09-25T03:25:27Z
+id: 47
+priority: low
+started: 2026-09-25T03:55:42Z
+status: done
+title: distribution vor prepare_node/gpu_setup validieren
+updated: 2026-09-25T04:07:44Z
+---
+
+Aus #40: Tippfehler in distribution stirbt erst in Rex::GPU mit irrefuehrender containerd-Meldung; distribution => 'containerd' kommt durch Rex::GPU und stirbt erst Server.pm:69 NACH Treiber+Toolkit-Installation. Frueh in rancher_deploy_* auf rke2|k3s pruefen.
+
+Commit 83d4522. rancher_deploy_server/agent validate first; t/distribution.t.
