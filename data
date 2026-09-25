@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-09-25T03:35:20Z
+claimed_by: worker-cilium
+class: standard
+created: 2026-09-24T21:49:35Z
+id: 44
+priority: low
+started: 2026-09-25T03:21:10Z
+status: review
+tags:
+- ocp
+- agent
+- escalated-from:kubernetes-ocp#155
+title: 'install_agent: Fehlermeldung nennt die Join-Adresse nicht'
+updated: 2026-09-25T03:35:20Z
+---
+
+kubernetes-ocp k185 (live verifiziert): wird der Agent nicht aktiv, nennt OCPs Meldung neben Zustand und Journal auch die Join-URL ("It joins the cluster via https://...:9345 -- check that this node can reach that address"). Der haeufigste Grund ist eine unerreichbare Server-Adresse (falsche/private IP). Rex::Rancher::Server::_wait_for_service kennt den Server nicht. OCP haengt den Hinweis nach k155 selbst an das die() von install_agent an; schoener waere es in der Library (z.B. optionaler hint-Parameter fuer _wait_for_service, von install_agent mit server befuellt).
+
+Commit 980d812. _wait_for_service hint, install_agent passes join URL (rke2+k3s). HA server join deliberately without hint. Live-only: unreachable join address shows hint.
