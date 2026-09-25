@@ -381,6 +381,8 @@ subtest 'without kubeconfig: the re-run swallow is kept' => sub {
   @cmds = ();
   $run_hook = sub { return unless $_[0] =~ /cilium install/; $? = 1 << 8; 'Error: cannot re-use a name that is still in use' };
   ok( eval { install_cilium( distribution => 'rke2' ); 1 }, 'existing release counts as success' ) or diag $@;
+  is_deeply( [ map { /cilium (install|upgrade)/ } cilium_cmds() ], ['install'],
+    'only cilium install ran: an existing release is never upgraded without kubeconfig' );
 
   $run_hook = sub { return unless $_[0] =~ /cilium install/; $? = 1 << 8; 'Error: boom' };
   eval { install_cilium( distribution => 'rke2' ) };
@@ -562,6 +564,24 @@ subtest 'upgrade_cilium: k3s keeps the running k8sServiceHost' => sub {
   eval { upgrade_cilium( distribution => 'k3s', kubeconfig => '/kc' ) };
   like( $@, qr/k3s needs k8s_service_host/, 'no running Cilium and no host: dies' );
   is_deeply( \@cmds, [], 'before anything ran on the host' );
+};
+
+subtest 'upgrade_cilium without kubeconfig dies before the host (k51)' => sub {
+  for my $case (
+    [ 'rke2 defaults',         distribution => 'rke2' ],
+    [ 'rke2 with ipam.mode',   distribution => 'rke2', helm_values => { ipam => { mode => 'cluster-pool' } } ],
+    [ 'k3s with a host',       distribution => 'k3s', k8s_service_host => '10.0.0.1' ],
+    [ 'k3s without a host',    distribution => 'k3s' ],
+  ) {
+    my ( $name, %o ) = @$case;
+    @cmds = (); %files = ();
+    $api = FakeAPI->new( secrets => [ helm_secret( revision => 1, status => 'deployed', chart_version => '1.16.5' ) ] );
+    eval { upgrade_cilium( %o ) };
+    like( $@, qr/upgrade_cilium needs kubeconfig .*IPAM mode and pool cannot be checked.*Pass the kubeconfig/s,
+      $name.': dies naming why and what to pass' );
+    is_deeply( \@cmds, [], $name.': nothing ran on the host' );
+    is_deeply( \%files, {}, $name.': no values file written' );
+  }
 };
 
 subtest 'wait for readiness' => sub {

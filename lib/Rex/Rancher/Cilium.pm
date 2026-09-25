@@ -150,8 +150,9 @@ function returns only once Cilium is ready (see there).
 Without C<kubeconfig> the release state cannot be read, and the previous
 behaviour applies: C<cilium install> runs, and its "cannot re-use a name"
 error (the release already exists) counts as success, with a warning that
-version and values were not reconciled. Use L</upgrade_cilium> to change an
-existing installation in that case.
+version and values were not reconciled. Helm refuses to install over the
+existing release, so nothing about the running Cilium changes on this path;
+changing it needs C<kubeconfig>, here or with L</upgrade_cilium>.
 
 On both distributions C<kubeProxyReplacement=true> is passed to enable
 Cilium's eBPF-based kube-proxy replacement, so the server config must have
@@ -349,21 +350,22 @@ needed. The same Helm values generation logic as L</install_cilium> is used,
 and C<gateway_api> applies the CRDs the same way (restarting a running
 C<cilium-operator> when they were applied).
 
-With C<kubeconfig>, the running configuration is read and kept exactly as in
+C<kubeconfig> is required: without it the function dies before anything
+touches the host. The running configuration is read and kept exactly as in
 L</install_cilium> (IPAM mode and pool from C<kube-system/cilium-config>,
 K3s C<k8sServiceHost> from the DaemonSet, C<operator.replicas> from the
 release), so an upgrade needs no values the caller has to look up first, and
 a requested change of IPAM mode or pool dies before the host is touched.
-Without C<kubeconfig> nothing can be read: the values are applied as
-generated, and unless C<helm_values> sets C<ipam.mode> a warning says so --
-on RKE2 the default C<ipam.mode: kubernetes> would switch a C<cluster-pool>
-cluster. K3s then needs C<k8s_service_host>.
+Without the API none of that can be checked, and the generated values would
+be applied as they stand -- on RKE2 the default C<ipam.mode: kubernetes>
+switches a C<cluster-pool> cluster and its pods lose their addresses.
 
 Options are the same as L</install_cilium>, C<wait> and C<wait_duration>
-included.
+included, except that C<kubeconfig> is not optional.
 
   upgrade_cilium(
     distribution => 'rke2',
+    kubeconfig   => "$ENV{HOME}/.kube/mycluster.yaml",
     version      => '1.17.0',
   );
 
@@ -371,20 +373,22 @@ included.
 
 sub upgrade_cilium {
   my (%opts) = @_;
+
+  # First, so no other option error hides it and nothing reaches the host:
+  # an upgrade applies our values over a running Cilium, and only the API
+  # tells which IPAM mode and pool it runs.
+  die "upgrade_cilium needs kubeconfig (a local kubeconfig the API answers "
+    . "through): without it the running IPAM mode and pool cannot be checked, "
+    . "and an upgrade that switches a cluster-pool Cilium to kubernetes IPAM "
+    . "(the rke2 default) costs every pod its address. Pass the kubeconfig "
+    . "rancher_deploy_server saved (kubeconfig_file)\n" unless $opts{kubeconfig};
+
   my $o = _resolve_opts(%opts);
 
   Rex::Logger::info("Upgrading Cilium to $o->{version} on $o->{distribution} cluster");
 
-  my $api = $o->{kubeconfig} ? _api($o->{kubeconfig}) : undef;
-  if ($api) {
-    _adopt_running($o, _read_running($api, _read_release($api)));
-  }
-  elsif (!$o->{explicit}{ipam_mode}) {
-    Rex::Logger::info("upgrade_cilium without kubeconfig cannot read the running "
-      . "IPAM mode: ipam.mode " . (_ipam_mode($o->{values}) // 'unset') . " is "
-      . "applied as it stands, and a cluster running another mode loses its pod "
-      . "addresses. Pass kubeconfig, or the running mode in helm_values", 'warn');
-  }
+  my $api = _api($o->{kubeconfig});
+  _adopt_running($o, _read_running($api, _read_release($api)));
   _require_k8s_service_host($o);
 
   _install_cilium_cli($o->{cli_version});
@@ -661,7 +665,7 @@ sub _install_unchecked {
     if (($out // '') =~ /cannot re-use a name/i) {
       Rex::Logger::info("  Cilium already installed (Helm release exists); without "
         . "kubeconfig its version and values are not checked -- pass kubeconfig "
-        . "to reconcile them, or use upgrade_cilium", 'warn');
+        . "to reconcile them (upgrade_cilium needs it too)", 'warn');
       return;
     }
     die "cilium install failed: " . ($out // '') . "\n";
@@ -912,11 +916,6 @@ sub _adopt_running {
 
   $o->{values} = \%values;
   return $o;
-}
-
-sub _ipam_mode {
-  my ($values) = @_;
-  return ref $values->{ipam} eq 'HASH' ? $values->{ipam}{mode} : undef;
 }
 
 #
