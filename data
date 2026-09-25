@@ -1,0 +1,24 @@
+---
+claimed_at: 2026-09-25T22:49:27Z
+claimed_by: worker-cilium3
+class: standard
+created: 2026-09-25T19:55:23Z
+id: 64
+priority: medium
+started: 2026-09-25T22:36:38Z
+status: review
+tags:
+- ocp
+- cilium
+- escalated-from:kubernetes-ocp#155
+title: 'Cilium: IPAM-Modus fuer frische Installation, der einem laufenden Cilium weicht'
+updated: 2026-09-25T22:49:27Z
+---
+
+Aus der OCP-Umstellung auf 0.003 (kubernetes-ocp Branch rex-0.003-vendor).
+
+OCP muss ipam.mode cluster-pool in helm_values nennen, sonst bekommt ein frisches RKE2 den Library-Default kubernetes. Ein genannter Modus wird aber gegen den laufenden geprueft -> ein laufendes Cilium in anderem Modus laesst install/upgrade jetzt sterben, wo 0.002 den Modus behielt.
+
+Wunsch: analog zu cluster_cidr (Pool nur fuer frische Installation, laufender cluster-pool behaelt seinen) eine Option wie ipam_mode, die nur bei frischer Installation gilt und einem laufenden Cilium weicht (mit Warnung). Dann kann OCP das 0.002-Verhalten exakt halten. Niedrige Dringlichkeit: jeder OCP-gebaute Cluster laeuft cluster-pool, betroffen sind nur handgeaenderte.
+
+Commit 53dda9f. ipam_mode (kubernetes|cluster-pool) fresh-install only, running mode wins with warning; helm_values ipam.mode still dies on mismatch. Distribution->default_ipam_mode. OCP: _cilium_opts helm_values ipam -> ipam_mode => 'cluster-pool'.
