@@ -24,7 +24,10 @@ sub containerd_dir       { '/var/lib/rancher/k3s/agent/etc/containerd' }
 sub server_service       { 'k3s' }
 sub agent_service        { 'k3s-agent.service' }
 # A re-run picks up a new binary and config.yaml, as the install script's own
-# restart did before INSTALL_K3S_SKIP_START.
+# restart did before INSTALL_K3S_SKIP_START. Not narrowed to restart_reasons
+# like rke2: the script rewrites k3s.service and k3s.service.env on every run
+# (so their mtime alone would say "changed" each time), the unit's arguments
+# come from this run's installer line, and the k3s path is not live-verified.
 sub default_start_verb   { 'restart' }
 
 # Formerly --disable flags on the installer line; config.yaml carries the same
@@ -114,7 +117,9 @@ The K3s side of L<Rex::Rancher::Distribution>. Configuration in
 C</etc/rancher/k3s>, units C<k3s> and C<k3s-agent.service>, installer from
 L<https://get.k3s.io> with C<INSTALL_K3S_SKIP_START> (the unit is restarted
 C<--no-block> and waited on instead) and C<K3S_URL> for a join, release
-binaries C<k3s> / C<k3s-ARCH>. The service is restarted on every run.
+binaries C<k3s> / C<k3s-ARCH>. The service is restarted on every run: the
+install script rewrites its unit and C<k3s.service.env> each time, so it is
+not narrowed to L<Rex::Rancher::Distribution/restart_reasons> as on RKE2.
 
 With C<cilium> the server config gets C<flannel-backend: none>,
 C<disable-network-policy: true>, C<disable-kube-proxy: true> and

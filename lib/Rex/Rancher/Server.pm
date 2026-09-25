@@ -197,7 +197,7 @@ C<PATH>, and rke2 looks for the NVIDIA runtime only when the service starts;
 without it a host- or vendor-installed toolkit (C</usr/bin>, e.g. DGX OS) is
 not wired into containerd. Other lines of the file are kept, an existing
 C<PATH=> line is replaced. If the file changed while the service is already
-running, a warning asks for a restart; nothing is restarted. The GPU
+running, the service is restarted (see L</Re-runs>). The GPU
 Operator's toolkit (C</usr/local/nvidia/toolkit>) is found by rke2 without
 this. No effect on k3s. Default: C<0>; L<Rex::Rancher/rancher_deploy_server>
 turns it on for C<gpu =E<gt> 1, gpu_setup =E<gt> 0>.
@@ -592,9 +592,9 @@ L</install_server>). The service is started with C<--no-block> to avoid
 systemd's 90-second activation timeout (RKE2's first start pulls many
 container images), then polled with C<systemctl is-active> for up to 10
 minutes; a C<failed> or never-active service dies with its journal tail.
-A running C<rke2-server> is left running on a re-run (C<systemctl start>),
-with one exception: if C<agent/etc/containerd/config.toml> is still the
-output of the C<config.toml.tmpl> that L<Rex::GPU> 0.001 wrote (only
+A running C<rke2-server> is left running on a re-run (C<systemctl start>)
+unless it has to take something new (see L</Re-runs>). It is also restarted
+if C<agent/etc/containerd/config.toml> is still the output of the C<config.toml.tmpl> that L<Rex::GPU> 0.001 wrote (only
 C<imports> and C<version = 2>, no C<SystemdCgroup>, sandbox image or registry
 mirrors) and that template is gone (L<Rex::GPU> 0.002's C<gpu_setup> removes
 it), the service is restarted once, with a warning, so rke2 regenerates its
@@ -604,6 +604,39 @@ every run anyway (below), so it regenerates its config either way.
 After that the function waits until the kubeconfig file appears at
 C</etc/rancher/rke2/rke2.yaml>; API readiness is confirmed separately by the
 caller using L<Rex::Rancher::K8s/wait_for_api>.
+
+=head2 Re-runs
+
+A running RKE2 reads its configuration only when it starts, so
+C<install_server> (and L<Rex::Rancher::Agent/install_agent> for
+C<rke2-agent>) restarts a running service with C<--no-block>, logging why,
+when the host has changed under it since its main process started:
+
+=over
+
+=item * C<config.yaml>, C<config.yaml.d/>, C<registries.yaml> or
+C</etc/default/rke2-server> (C<-agent>) modified, or a containerd
+C<config.toml.tmpl>, C<config-v3.toml.tmpl> or C<config-v3.toml.d/> drop-in
+(as L<Rex::GPU> writes) — by modification time, and Rex rewrites a file only
+when its content differs, so the same options twice change nothing;
+
+=item * C<nvidia-container-runtime> installed or upgraded (by inode change
+time);
+
+=item * an installed C<rke2> binary of another version than the running one.
+
+=back
+
+Nothing changed: C<systemctl start>, the service keeps running. Changes
+made by hand or left by an interrupted earlier run count as well. What
+cannot be determined (no C<ps>) counts as unchanged, with a warning. Details
+in L<Rex::Rancher::Distribution/restart_reasons>.
+
+A restart takes this server's API and etcd member down for its duration and
+touches no other node. Several servers of one HA cluster restarting at the
+same time can lose etcd quorum: deploy them one after another (Rex's
+default), not in parallel. K3s is restarted on every run, as its install
+script rewrites the unit each time.
 
 =head2 K3s installation
 

@@ -8,7 +8,8 @@ use Test::More;
 # k3s' install script would otherwise `systemctl restart` the Type=notify
 # k3s-agent itself and block until the join, forever for an agent that cannot
 # reach its server (kubernetes-ocp k185). k3s is restarted, as the script did,
-# so a re-run still picks up a new binary and config.yaml.
+# so a re-run still picks up a new binary and config.yaml. rke2 first asks
+# whether a running agent needs a restart (t/restart-reasons.t); not here.
 #
 # run and file are faked; this proves the command order, not that a real
 # agent joins.
@@ -37,6 +38,7 @@ my $run = sub {
 
 my %expect = (
   rke2 => [ 'curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent sh -',
+            'systemctl show -p MainPID rke2-agent.service 2>/dev/null',
             'systemctl enable rke2-agent.service',
             'systemctl start --no-block rke2-agent.service',
             'systemctl is-active rke2-agent.service' ],

@@ -4,7 +4,8 @@ use Test::More;
 
 # -----------------------------------------------------------------------------
 # How the server installers start the service. rke2: get.rke2.io never starts
-# rke2-server, the service is started with --no-block and polled (unchanged).
+# rke2-server, the service is started with --no-block and polled; whether a
+# running one needs a restart instead is asked first (t/restart-reasons.t).
 # k3s: the install script runs with INSTALL_K3S_SKIP_START, since its own
 # `systemctl restart` of the Type=notify k3s unit blocks until k3s is up,
 # forever for an HA join that cannot reach its first server; k3s.service is
@@ -40,6 +41,7 @@ my @log;
 my %expect = (
   rke2 => [ 'curl -sfL https://get.rke2.io | sh -',
             'systemctl enable rke2-server',
+            'systemctl show -p MainPID rke2-server 2>/dev/null',
             'systemctl start --no-block rke2-server',
             'systemctl is-active rke2-server' ],
   k3s  => [ 'curl -sfL https://get.k3s.io | K3S_URL=https://cp1:6443 INSTALL_K3S_SKIP_START=true sh -s - server --write-kubeconfig-mode=644',

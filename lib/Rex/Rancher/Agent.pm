@@ -92,7 +92,8 @@ C<registries.yaml> in the distribution config directory.
 
 If true, and C<nvidia-container-runtime> is on the host's C<PATH>, write a
 C<PATH=> line to C</etc/default/rke2-agent> before the installer runs, so rke2
-finds a host-installed NVIDIA runtime at service start. Same behaviour as
+finds a host-installed NVIDIA runtime at service start (a running agent is
+restarted when the file changed). Same behaviour as
 L<Rex::Rancher::Server/install_server>'s C<nvidia_runtime_path>; no effect on
 k3s. Default: C<0>; L<Rex::Rancher/rancher_deploy_agent> turns it on for
 C<gpu =E<gt> 1, gpu_setup =E<gt> 0>.
@@ -195,7 +196,8 @@ sub _enable_service {
   # k3s: restart, as the install script did before INSTALL_K3S_SKIP_START,
   # so a re-run still picks up a new binary and config.yaml. rke2's
   # installer never started the agent: start, or restart for a stale
-  # containerd config (see Rex::Rancher::Distribution's start_verb).
+  # containerd config or a change since it started (see
+  # Rex::Rancher::Distribution's start_verb).
   my $verb = $dist->start_verb;
   Rex::Logger::info("Enabling and starting $service");
   run "systemctl enable $service", auto_die => 1;
@@ -268,9 +270,11 @@ C<INSTALL_K3S_SKIP_START>: instead of the script's own blocking restart, the
 agent is restarted with C<--no-block> and waited on for at most 10 minutes,
 so an agent that cannot reach its server dies with its journal instead of
 hanging the deploy. A running C<rke2-agent> is only started, which leaves it
-alone, except when its containerd config is still the output of
-L<Rex::GPU> 0.001's template: then it is restarted once, as described under
-"RKE2 installation" in L<Rex::Rancher::Server>. For both distributions the
+alone, unless its C<config.yaml>, C<registries.yaml>,
+C</etc/default/rke2-agent>, containerd drop-ins, NVIDIA runtime or binary
+changed since it started, or its containerd config is still the output of
+L<Rex::GPU> 0.001's template: then it is restarted, as described under
+"Re-runs" and "RKE2 installation" in L<Rex::Rancher::Server>. For both distributions the
 token is read from C<config.yaml> and never passed on the installer command
 line, where C<ps> would show it. C<config.yaml> and C<registries.yaml> are
 written C<0600 root:root>.

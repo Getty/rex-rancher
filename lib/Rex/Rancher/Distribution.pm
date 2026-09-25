@@ -146,8 +146,9 @@ NVIDIA runtime lookup, or C<undef> where none is needed (K3s).
 =method default_start_verb
 
 How the service is started when its containerd config is not stale:
-C<start> (RKE2 leaves a running service alone) or C<restart> (K3s picks up a
-new binary and C<config.yaml>, as its install script did).
+C<start> (RKE2: a running service is restarted only for
+L</restart_reasons>) or C<restart> (K3s, on every run, as its install
+script did).
 
 =method asset_name
 
@@ -550,13 +551,33 @@ sub verify_installed_version {
 
 =method start_verb
 
-C<start> or C<restart> for the L</service>: L</default_start_verb>, except
-that a running service whose containerd C<config.toml> is still the output
-of L<Rex::GPU> 0.001's bare C<config.toml.tmpl> (and the template is gone)
-is restarted once, with a warning, so it regenerates that config. A
-template still in place only warns with the command to run. Reads the host.
+C<start> or C<restart> for the L</service>. Reads the host.
+
+C<restart> when a running service's containerd C<config.toml> is still the
+output of L<Rex::GPU> 0.001's bare C<config.toml.tmpl> and the template is
+gone, with a warning, so it regenerates that config; a template still in
+place only warns with the command to run. Otherwise L</default_start_verb>,
+and where that is C<start> (RKE2), C<restart> when L</restart_reasons> has
+any, logging them: a running service reads its configuration only when it
+starts.
 
 =cut
+
+sub start_verb {
+  my ( $self ) = @_;
+  return 'restart' if $self->_stale_containerd_restart;
+
+  # k3s restarts anyway. A `start` of a running rke2 is a no-op, so it is
+  # turned into a restart exactly when the service runs on something older
+  # than what is on disk now.
+  my $default = $self->default_start_verb;
+  return $default unless $default eq 'start';
+  my @reasons = $self->restart_reasons;
+  return $default unless @reasons;
+  Rex::Logger::info("Restarting " . $self->service . ", which reads these only when "
+    . "it starts: " . join('; ', @reasons));
+  return 'restart';
+}
 
 # Rex::GPU 0.001 wrote agent/etc/containerd/config.toml.tmpl as a bare
 # `imports = [...]` + `version = 2`. rke2 renders a template instead of its
@@ -567,15 +588,14 @@ template still in place only warns with the command to run. Reads the host.
 # gone -> restart a running service once; the regenerated config no longer
 # matches, so the next re-run starts (a no-op) again. Template still there
 # -> a restart would render the same file: warn with what to do.
-sub start_verb {
+sub _stale_containerd_restart {
   my ( $self ) = @_;
   my $distribution = $self->name;
   my $service = $self->service;
-  my $default = $self->default_start_verb;
 
   my $dir    = $self->containerd_dir;
   my $config = Rex::Commands::Run::run("cat $dir/config.toml 2>/dev/null", auto_die => 0);
-  return $default unless $self->is_bare_template_output($config);
+  return 0 unless $self->is_bare_template_output($config);
 
   Rex::Commands::Run::run("test -e $dir/config.toml.tmpl", auto_die => 0);
   if ($? == 0) {
@@ -583,16 +603,138 @@ sub start_verb {
       . "Rex::GPU 0.001 wrote it) and replaces ${distribution}'s own containerd config: "
       . "no SystemdCgroup, sandbox image or registry mirrors. Remove it (Rex::GPU "
       . "0.002's gpu_setup does) and run: systemctl restart $service", 'warn');
-    return $default;
+    return 0;
   }
 
   Rex::Commands::Run::run("systemctl is-active --quiet $service", auto_die => 0);
   # Not running: the start renders a fresh config.toml anyway.
-  return $default unless $? == 0;
+  return 0 unless $? == 0;
   Rex::Logger::info("$dir/config.toml was rendered from a config.toml.tmpl that is "
     . "gone (Rex::GPU 0.001's); restarting $service so it regenerates its "
     . "containerd config", 'warn');
-  return 'restart';
+  return 1;
+}
+
+=method restart_watch
+
+The paths the L</role>'s service reads only when it starts and that
+Rex::Rancher or L<Rex::GPU> write:
+L</config_file>, C<config.yaml.d>, L</registries_file>, L</env_file> (if
+any), and in L</containerd_dir> C<config.toml.tmpl>, C<config-v3.toml.tmpl>
+and the C<config-v3.toml.d> drop-ins (where L<Rex::GPU> puts
+C<99-nvidia.toml>). Paths that do not exist are fine.
+
+Not the distribution's own output (the kubeconfig, C<config.toml>), which
+it rewrites on every start.
+
+=cut
+
+sub restart_watch {
+  my ( $self ) = @_;
+  my $containerd = $self->containerd_dir;
+  return (
+    $self->config_file,
+    $self->config_dir.'/config.yaml.d',
+    $self->registries_file,
+    ( defined $self->env_file ? ( $self->env_file ) : () ),
+    "$containerd/config.toml.tmpl",
+    "$containerd/config-v3.toml.tmpl",
+    "$containerd/config-v3.toml.d",
+  );
+}
+
+=method restart_reasons
+
+  my @why = $dist->restart_reasons;
+
+Why the running L</service> would have to be restarted to run what is on
+the host now, as log-ready strings; empty when it is not running or nothing
+changed. Reads the host:
+
+=over
+
+=item * a L</restart_watch> path modified (mtime) after the service's main
+process started. Rex's C<file> leaves a file with unchanged content
+untouched, so a re-run with the same options changes nothing; a change left
+behind by an interrupted earlier run, or made by hand, counts too.
+
+=item * an C<nvidia-container-runtime> on the C<PATH> whose inode changed
+(ctime: a package install or upgrade) after the process started, since the
+distribution looks for it only at start.
+
+=item * the running binary (C</proc/PID/exe --version>) reports another
+version than the installed L</binary>.
+
+=back
+
+What it cannot determine (no C<ps>, a binary that does not answer
+C<--version>) counts as unchanged, with a warning that names it.
+
+=cut
+
+sub restart_reasons {
+  my ( $self ) = @_;
+  my $service = $self->service;
+  my $pid = $self->parse_main_pid(Rex::Commands::Run::run(
+    "systemctl show -p MainPID $service 2>/dev/null", auto_die => 0));
+  return unless $pid;
+
+  my @reasons;
+
+  # Epoch seconds, both on the host's clock. Only files written after that
+  # second count, so one written in the second the process started is missed;
+  # everything here is written before the start, minutes earlier.
+  my $since = Rex::Commands::Run::run(
+    "echo \$(( \$(date +%s) - \$(ps -o etimes= -p $pid) ))", auto_die => 0);
+  if (($since // '') =~ /\A\s*(\d+)\s*\z/) {
+    $since = $1;
+    my $paths   = join(' ', map { "'$_'" } $self->restart_watch);
+    my $changed = Rex::Commands::Run::run("find $paths -newermt \@$since 2>/dev/null", auto_die => 0);
+    my @changed = grep { length } split /\n/, $changed // '';
+    push @reasons, "changed since it started: " . join(', ', @changed) if @changed;
+
+    # ctime: dpkg and rpm keep the package's mtime.
+    my $runtime = Rex::Commands::Run::run('p=$(command -v nvidia-container-runtime) && '
+      . "find \"\$p\" -newerct \@$since 2>/dev/null", auto_die => 0);
+    $runtime = '' unless defined $runtime;
+    $runtime =~ s/\s+\z//;
+    push @reasons, "$runtime installed since it started" if length $runtime;
+  }
+  else {
+    Rex::Logger::info("Could not tell when $service started (ps -o etimes= -p $pid): "
+      . "changes to " . join(', ', $self->restart_watch) . " are not detected; "
+      . "restart $service yourself if one of them changed", 'warn');
+  }
+
+  # /proc/PID/exe still runs a binary the installer replaced (unlinked).
+  my $running   = $self->parse_version_output(
+    Rex::Commands::Run::run("/proc/$pid/exe --version 2>&1", auto_die => 0));
+  my $installed = $self->parse_version_output(
+    Rex::Commands::Run::run($self->binary . " --version 2>&1", auto_die => 0));
+  if (defined $running && defined $installed) {
+    push @reasons, "it runs $running, $installed is installed"
+      unless $self->same_version($running, $installed);
+  }
+  else {
+    Rex::Logger::info("Could not compare the running $service (/proc/$pid/exe "
+      . "--version) with the installed " . $self->binary . " --version: a new binary "
+      . "is not detected; restart $service yourself after an upgrade", 'warn');
+  }
+
+  return @reasons;
+}
+
+=method parse_main_pid
+
+The PID in C<systemctl show -p MainPID> output (C<MainPID=1234>), or
+nothing for C<0> (not running) and anything else.
+
+=cut
+
+sub parse_main_pid {
+  my ( $self, $out ) = @_;
+  return $1 if ($out // '') =~ /^MainPID=([1-9]\d*)\s*$/m;
+  return;
 }
 
 =method is_bare_template_output
@@ -710,8 +852,9 @@ sub env_with_runtime_path {
 
 When the L</role>'s unit has an L</env_file> and C<nvidia-container-runtime>
 is on the host's C<PATH>, make that file carry L</runtime_path_line>, other
-lines kept. Restarts nothing: if the file changed while the service runs, a
-warning asks for the restart.
+lines kept. Restarts nothing itself: the file is in L</restart_watch>, so
+the L</start_verb> of an RKE2 service running since before the write is
+C<restart>.
 
 =cut
 
@@ -747,7 +890,8 @@ sub ensure_nvidia_runtime_path {
   # Only on a re-run: the service reads the file when it starts.
   my $service = $self->service;
   Rex::Commands::Run::run("systemctl is-active --quiet $service", auto_die => 0);
-  Rex::Logger::info("$service is running: restart it to pick up the new PATH", 'warn')
+  Rex::Logger::info("$service is running: it takes the new PATH at its next start "
+    . "(install_server and install_agent restart it for that)")
     if $? == 0;
 }
 

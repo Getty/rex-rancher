@@ -292,8 +292,9 @@ With C<gateway_api>, Cilium's CRDs have to be the only ones: RKE2 v1.37+
 would otherwise install its own C<rke2-gateway-api-crd> chart over them
 (older RKE2 ignores the name). Without a C<disable> of yours it is added to
 the default list; a C<disable> of yours that lacks it is used as given, with
-a warning. On a running cluster the change to C<config.yaml> takes effect
-only when C<rke2-server> restarts; until then
+a warning. On a running cluster the changed C<config.yaml> makes
+L<Rex::Rancher::Server/install_server> restart C<rke2-server>; RKE2 removes
+its release after that restart, and until it is gone
 L<Rex::Rancher::Cilium/install_cilium> dies while RKE2's release exists.
 
 =back
