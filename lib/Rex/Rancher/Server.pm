@@ -9,8 +9,8 @@ use Rex::Commands::File;
 use Rex::Commands::Fs;
 use Rex::Commands::Run;
 use Rex::Logger;
+use Rex::Rancher::Distribution;
 use YAML::PP;
-use JSON::MaybeXS;
 
 require Rex::Exporter;
 use base qw(Rex::Exporter);
@@ -24,55 +24,9 @@ use vars qw(@EXPORT);
   get_token
 );
 
-my %PATHS = (
-  rke2 => {
-    config_dir   => '/etc/rancher/rke2/',
-    service      => 'rke2-server',
-    install_url  => 'https://get.rke2.io',
-    kubeconfig   => '/etc/rancher/rke2/rke2.yaml',
-    token_file   => '/var/lib/rancher/rke2/server/node-token',
-    server_token => '/var/lib/rancher/rke2/server/token',
-    disable      => ['rke2-ingress-nginx', 'rke2-traefik', 'rke2-traefik-crd'],
-    binary       => 'rke2',
-    release_url  => 'https://github.com/rancher/rke2/releases/download',
-    artifact_dir => '/tmp/rke2-artifacts',
-    env_file     => '/etc/default/rke2-server',
-    containerd_dir => '/var/lib/rancher/rke2/agent/etc/containerd',
-  },
-  k3s => {
-    config_dir   => '/etc/rancher/k3s/',
-    service      => 'k3s',
-    install_url  => 'https://get.k3s.io',
-    kubeconfig   => '/etc/rancher/k3s/k3s.yaml',
-    token_file   => '/var/lib/rancher/k3s/server/node-token',
-    server_token => '/var/lib/rancher/k3s/server/token',
-    disable      => ['traefik', 'servicelb'],
-    # k3s' built-in default, written out with cilium because Cilium's
-    # cluster-pool IPAM has to hand out the same range (Rex::Rancher::Cilium
-    # _paths_for holds the same value, t/server-config.t keeps them equal).
-    cluster_cidr => '10.42.0.0/16',
-    binary       => 'k3s',
-    release_url  => 'https://github.com/k3s-io/k3s/releases/download',
-    artifact_dir => '/tmp/k3s-artifacts',
-    containerd_dir => '/var/lib/rancher/k3s/agent/etc/containerd',
-    # No env_file: k3s needs no PATH for the NVIDIA runtime lookup
-    # (see _nvidia_runtime_path).
-  },
-);
-
 =head1 FUNCTIONS
 
 =cut
-
-sub _paths {
-  my ($distribution) = @_;
-  $distribution //= 'rke2';
-
-  die "Unknown distribution: $distribution (expected 'rke2' or 'k3s')\n"
-    unless exists $PATHS{$distribution};
-
-  return { %{$PATHS{$distribution}} };
-}
 
 =method install_server(%opts)
 
@@ -275,11 +229,11 @@ sub install_server {
     "k3s has not been run live through Rex::Rancher; rke2 is the verified "
       . "distribution.", "warn")
     if $distribution eq 'k3s';
-  my $paths        = _paths($distribution);
+  my $dist         = Rex::Rancher::Distribution->new_for($distribution);
   # Validated before anything touches the host (the token lookup reads it).
-  my $method       = _install_method($opts{install_method}, $opts{version});
-  my $cluster_cidr = _cluster_cidr($opts{cluster_cidr});
-  my $token        = _resolve_token($paths, $opts{token});
+  my $method       = Rex::Rancher::Distribution->resolve_install_method($opts{install_method}, $opts{version});
+  my $cluster_cidr = Rex::Rancher::Distribution->check_cluster_cidr($opts{cluster_cidr});
+  my $token        = _resolve_token($dist, $opts{token});
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
   my $node_labels  = $opts{node_labels};
@@ -292,28 +246,23 @@ sub install_server {
   Rex::Logger::info("Installing $distribution server (control plane)...");
 
   # Ensure config directory exists
-  file $paths->{config_dir}, ensure => 'directory';
+  file $dist->config_dir . '/', ensure => 'directory';
 
   # Write config.yaml
-  _write_config($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium,
+  _write_config($dist, $token, $server, $tls_san, $node_labels, $cilium,
     $node_name, $disable, $cluster_cidr);
 
   # Write registries.yaml if configured
   if ($registries) {
-    _generate_registries_yaml($paths->{config_dir}, $registries);
+    $dist->write_registries($registries);
   }
 
   # Before the installer: rke2 looks for the NVIDIA runtime only when its
   # service starts.
-  _nvidia_runtime_path($paths) if $opts{nvidia_runtime_path};
+  $dist->ensure_nvidia_runtime_path if $opts{nvidia_runtime_path};
 
   # Install and start
-  if ($distribution eq 'k3s') {
-    _install_k3s($paths, $server, $version, $method);
-  }
-  else {
-    _install_rke2($paths, $version, $method);
-  }
+  _install($dist, $server, $version, $method);
 
   Rex::Logger::info("$distribution server installation complete");
 
@@ -367,21 +316,14 @@ sub update_registries {
 
   my $distribution = $opts{distribution} // 'rke2';
   my $registries   = $opts{registries} or die "update_registries requires 'registries' option\n";
-  my $paths        = _paths($distribution);
+  my $dist         = Rex::Rancher::Distribution->new_for($distribution);
 
   Rex::Logger::info("Updating registries.yaml for $distribution");
 
-  _generate_registries_yaml($paths->{config_dir}, $registries);
+  $dist->write_registries($registries);
 
-  # Restart containerd to pick up new config
-  if ($distribution eq 'rke2') {
-    run "systemctl restart rke2-server.service 2>/dev/null || systemctl restart rke2-agent.service 2>/dev/null",
-      auto_die => 0;
-  }
-  else {
-    run "systemctl restart k3s.service 2>/dev/null || systemctl restart k3s-agent.service 2>/dev/null",
-      auto_die => 0;
-  }
+  # Restart containerd to pick up new config: whichever unit this node runs.
+  run $dist->restart_services_cmd, auto_die => 0;
 
   Rex::Logger::info("Registries updated, containerd restarted");
 }
@@ -404,11 +346,11 @@ Dies if the file cannot be read.
 
 sub get_kubeconfig {
   my ($distribution) = @_;
-  my $paths = _paths($distribution);
+  my $dist = Rex::Rancher::Distribution->new_for($distribution);
 
-  Rex::Logger::info("Retrieving kubeconfig from " . $paths->{kubeconfig});
+  Rex::Logger::info("Retrieving kubeconfig from " . $dist->kubeconfig);
 
-  my $content = run "cat " . $paths->{kubeconfig}, auto_die => 1;
+  my $content = run "cat " . $dist->kubeconfig, auto_die => 1;
   return $content;
 }
 
@@ -435,11 +377,11 @@ Dies if the file cannot be read (e.g. server not yet started).
 
 sub get_token {
   my ($distribution) = @_;
-  my $paths = _paths($distribution);
+  my $dist = Rex::Rancher::Distribution->new_for($distribution);
 
-  Rex::Logger::info("Retrieving node token from " . $paths->{token_file});
+  Rex::Logger::info("Retrieving node token from " . $dist->token_file);
 
-  my $content = run "cat " . $paths->{token_file}, auto_die => 1;
+  my $content = run "cat " . $dist->token_file, auto_die => 1;
   chomp $content;
   return $content;
 }
@@ -449,11 +391,11 @@ sub get_token {
 # NEXT start, so a fresh token in config.yaml arms a fatal "bootstrap data
 # already found and encrypted with different token" on the next restart.
 sub _resolve_token {
-  my ($paths, $given) = @_;
+  my ($dist, $given) = @_;
   return $given if defined $given;
-  my $existing = _existing_server_token($paths);
+  my $existing = _existing_server_token($dist);
   if (defined $existing) {
-    Rex::Logger::info("Reusing existing cluster token from " . $paths->{server_token});
+    Rex::Logger::info("Reusing existing cluster token from " . $dist->server_token);
     return $existing;
   }
   return _generate_token();
@@ -462,8 +404,8 @@ sub _resolve_token {
 # Read over the exec channel (no SFTP). A missing or unreadable file means
 # "fresh server" and degrades to undef; it must never abort the install.
 sub _existing_server_token {
-  my ($paths) = @_;
-  my $out = run "cat " . $paths->{server_token} . " 2>/dev/null", auto_die => 0;
+  my ($dist) = @_;
+  my $out = run "cat " . $dist->server_token . " 2>/dev/null", auto_die => 0;
   return unless $? == 0 && defined $out;
   $out =~ s/\s+\z//;
   return length $out ? $out : undef;
@@ -483,46 +425,28 @@ sub _generate_token {
 #
 
 sub _build_server_config {
-  my ($distribution, $token, $server, $tls_san, $node_labels, $cilium,
+  my ($dist, $token, $server, $tls_san, $node_labels, $cilium,
     $node_name, $disable, $cluster_cidr) = @_;
-
-  $distribution //= 'rke2';
 
   my %config = (
     'token' => $token,
   );
 
   # With cilium, Cilium is the only CNI and replaces kube-proxy on both
-  # distributions (Rex::Rancher::Cilium wires kubeProxyReplacement). rke2:
-  # cni:none + disable-kube-proxy. k3s: Flannel, the embedded network policy
-  # controller and kube-proxy go; cluster-cidr is stated so Cilium's
-  # cluster-pool gets the same range (as kubernetes-ocp k178, verified live
-  # there). All server-side; k3s agents take them from the server.
-  if ($cilium) {
-    if ($distribution eq 'rke2') {
-      $config{'cni'}                = 'none';
-      $config{'disable-kube-proxy'} = JSON()->true;
-    }
-    else {
-      $config{'flannel-backend'}        = 'none';
-      $config{'disable-network-policy'} = JSON()->true;
-      $config{'disable-kube-proxy'}     = JSON()->true;
-      $config{'cluster-cidr'}           = _paths($distribution)->{cluster_cidr};
-    }
-  }
+  # distributions (Rex::Rancher::Cilium wires kubeProxyReplacement); which
+  # keys that takes is the distribution's cilium_config.
+  %config = ( %config, %{ $dist->cilium_config } ) if $cilium;
 
   # A given cluster_cidr is written on both distributions, with or without
   # cilium; every server of a cluster must carry the same one (RKE2 refuses
   # a join that differs). Without it rke2 keeps its own default, unwritten.
   $config{'cluster-cidr'} = $cluster_cidr if defined $cluster_cidr;
 
-  # Packaged components to switch off. Undef means the per-distribution
-  # default from %PATHS (rke2: ingress-nginx + traefik charts, unknown chart
-  # names are ignored by RKE2; k3s: traefik + servicelb, formerly --disable
-  # flags on the k3s installer line -- config.yaml carries the same flag,
-  # keeps caller-supplied names out of the shell, and matches rke2). An
-  # explicit empty list disables nothing. Independent of cilium.
-  my @disable = !defined $disable       ? @{ _paths($distribution)->{disable} }
+  # Packaged components to switch off. Undef means the distribution's
+  # default_disable (rke2: ingress-nginx + traefik charts, unknown chart
+  # names are ignored by RKE2; k3s: traefik + servicelb). An explicit empty
+  # list disables nothing. Independent of cilium.
+  my @disable = !defined $disable       ? @{ $dist->default_disable }
               : ref $disable eq 'ARRAY' ? @{$disable}
               :                           split(/,/, $disable);
   $config{'disable'} = \@disable if @disable;
@@ -544,245 +468,50 @@ sub _build_server_config {
 }
 
 sub _write_config {
-  my ($paths, $distribution, $token, $server, $tls_san, $node_labels, $cilium,
+  my ($dist, $token, $server, $tls_san, $node_labels, $cilium,
     $node_name, $disable, $cluster_cidr) = @_;
 
   my $config =
-    _build_server_config($distribution, $token, $server, $tls_san, $node_labels, $cilium,
+    _build_server_config($dist, $token, $server, $tls_san, $node_labels, $cilium,
       $node_name, $disable, $cluster_cidr);
 
-  my $config_file = $paths->{config_dir} . "config.yaml";
+  my $config_file = $dist->config_file;
   Rex::Logger::info("Writing config to $config_file");
 
-  _write_secret_file($config_file,
+  $dist->write_secret_file($config_file,
     YAML::PP->new(boolean => 'JSON::PP')->dump_string($config));
 }
 
-# One IPv4 CIDR, or undef. Shared with Rex::Rancher::Cilium, which hands
-# the same value to Cilium's cluster-pool (IPv4 only there, so no dual-stack).
-sub _cluster_cidr {
-  my ($cidr) = @_;
-  return unless defined $cidr;
-  my @part = $cidr =~ m{\A(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})\z};
-  die "cluster_cidr must be one IPv4 CIDR such as 10.42.0.0/16, got '$cidr' "
-    . "(dual-stack is not supported: Cilium's pool is IPv4 here)\n"
-    unless @part && !grep({ $_ > 255 } @part[0 .. 3]) && $part[4] <= 32;
-  return $cidr;
-}
-
 #
-# RKE2 installation (pre-download artifact approach)
+# Install and start. Server and agent share the steps in
+# Rex::Rancher::Distribution; what differs between rke2 and k3s is there too.
 #
 
-sub _install_rke2 {
-  my ($paths, $version, $method) = @_;
+sub _install {
+  my ($dist, $server, $version, $method) = @_;
 
-  if (($method // 'script') eq 'artifact') {
-    my $spec = _fetch_artifacts('rke2', $version);
-    Rex::Logger::info("Installing RKE2 from verified artifact $spec->{asset}...");
-    # auto_die => 1: with an artifact path the script takes its tarball
-    # method, which has no GPG key import (the Rocky 10 noise below is the
-    # RPM method's), so a non-zero exit here is a real failure.
-    run _rke2_artifact_install_cmd($spec, $version), auto_die => 1;
-  }
-  else {
-    Rex::Logger::info("Installing RKE2 via install script...");
-    # Download and run the RKE2 install script.
-    # auto_die => 0: the script emits GPG key import info on STDERR which can
-    # cause a non-zero exit on some distros (Rocky 10). Verify via rpm/dpkg instead.
-    run _rke2_server_install_cmd($paths, $version), auto_die => 0;
-  }
-  my $check = run "command -v rke2 2>/dev/null", auto_die => 0;
-  die "RKE2 install script failed — rke2 binary not found\n"
-    unless $check && $check =~ /rke2/;
+  # No token on any installer line: it is already in config.yaml (written
+  # before the installer runs), and anything on these lines shows up in ps.
+  $dist->install_server_package($server, $version, $method);
   # The binary being there is not enough when a version is pinned: a failed
-  # pinned upgrade (swallowed above) leaves the old one in place.
-  _verify_installed_version('rke2', $version);
+  # pinned upgrade leaves the old one in place.
+  $dist->verify_installed_version($version);
 
-  # Enable and start the service
-  run "systemctl enable " . $paths->{service}, auto_die => 1;
-  # --no-block: return immediately; RKE2 first start pulls many images and
-  # exceeds systemctl's default 90s activation timeout. start, not restart:
-  # a re-run leaves a running control plane alone, unless its containerd
-  # config is stale (_start_verb).
-  run "systemctl " . _start_verb($paths, 'rke2') . " --no-block " . $paths->{service},
+  # Enable and start the service. --no-block: return immediately; RKE2 first
+  # start pulls many images and exceeds systemctl's default 90s activation
+  # timeout, and k3s' Type=notify unit blocks until k3s is up, forever for
+  # an HA join that cannot reach its first server. Start or restart as the
+  # distribution wants it (start_verb), then the bounded wait.
+  my $service = $dist->service;
+  run "systemctl enable " . $service, auto_die => 1;
+  run "systemctl " . $dist->start_verb . " --no-block " . $service,
     auto_die => 1;
 
-  _wait_for_service($paths->{service});
+  $dist->wait_for_service;
 
   # Then wait until kubeconfig is written — API readiness is checked locally
   # by the caller via Rex::Rancher::K8s::wait_for_api after saving the file.
-  _wait_for_kubeconfig($paths);
-}
-
-sub _rke2_server_install_cmd {
-  my ($paths, $version) = @_;
-
-  my $env_str = $version ? "INSTALL_RKE2_VERSION=$version " : '';
-  return "curl -sfL " . $paths->{install_url} . " | ${env_str}sh -";
-}
-
-#
-# K3s installation (simple curl | sh approach)
-#
-
-sub _install_k3s {
-  my ($paths, $server, $version, $method) = @_;
-
-  # No K3S_TOKEN here: the token is already in config.yaml (written before the
-  # installer runs, same as rke2), and anything on this line shows up in ps.
-  if (($method // 'script') eq 'artifact') {
-    my $spec = _fetch_artifacts('k3s', $version);
-    Rex::Logger::info("Installing K3s from verified artifact $spec->{asset}...");
-    run _k3s_binary_place_cmd($spec), auto_die => 1;
-    run _k3s_artifact_install_cmd($spec, $server, $version, 'server'), auto_die => 1;
-  }
-  else {
-    Rex::Logger::info("Installing K3s via install script...");
-    run _k3s_server_install_cmd($paths, $server, $version), auto_die => 1;
-  }
-  _verify_installed_version('k3s', $version);
-
-  # INSTALL_K3S_SKIP_START: the script's own `systemctl restart` of the
-  # Type=notify unit blocks until k3s is up, forever for an HA join that
-  # cannot reach its first server. Restart (a re-run still picks up a new
-  # binary and config.yaml) with --no-block, then the bounded wait.
-  run "systemctl enable " . $paths->{service}, auto_die => 1;
-  run "systemctl " . _start_verb($paths, 'k3s') . " --no-block " . $paths->{service},
-    auto_die => 1;
-  _wait_for_service($paths->{service});
-  _wait_for_kubeconfig($paths);
-}
-
-# traefik/servicelb are disabled via config.yaml `disable:` (see
-# _build_server_config), not as --disable flags here.
-sub _k3s_server_install_cmd {
-  my ($paths, $server, $version) = @_;
-
-  my @env;
-  push @env, "K3S_URL=$server"              if $server;
-  push @env, "INSTALL_K3S_VERSION=$version" if $version;
-  push @env, 'INSTALL_K3S_SKIP_START=true';   # started by _install_k3s
-  my $env_str = join('', map { "$_ " } @env);
-  return "curl -sfL " . $paths->{install_url}
-    . " | ${env_str}sh -s - server"
-    . " --write-kubeconfig-mode=644";
-}
-
-#
-# NVIDIA runtime lookup: a PATH for the rke2 unit.
-# Shared with Rex::Rancher::Agent (rke2-agent has the same unit shape).
-#
-
-# systemd's own default directories, not the SSH session's PATH: this becomes
-# the environment of a service running as root.
-my $RUNTIME_PATH_LINE = 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
-
-# rke2-server/-agent.service carry no Environment= and read
-# EnvironmentFile=-/etc/default/%N; rke2 scans PATH for nvidia-container-runtime
-# at service start only, and the RKE2 GPU docs say to set PATH there. The rke2
-# install script does not touch /etc/default, so this survives the install.
-# k3s has no env_file in %PATHS: its agent code does the same scan and wired a
-# host toolkit plus the nvidia RuntimeClass on a DGX without help
-# (kubernetes-ocp, _configure_nvidia_runtime_path).
-sub _nvidia_runtime_path {
-  my ($paths) = @_;
-  my $env_file = $paths->{env_file} or return;
-
-  unless (can_run('nvidia-container-runtime')) {
-    Rex::Logger::info("nvidia-container-runtime not on PATH, $env_file left alone "
-      . "(the GPU Operator's toolkit is found without it)");
-    return;
-  }
-
-  my $current = run "cat $env_file 2>/dev/null", auto_die => 0;
-  my $content = _env_with_runtime_path($? == 0 ? $current : '');
-  unless (defined $content) {
-    Rex::Logger::info("$env_file already carries the PATH for the NVIDIA runtime");
-    return;
-  }
-
-  Rex::Logger::info("Writing PATH to $env_file for the NVIDIA runtime lookup");
-  run "mkdir -p /etc/default", auto_die => 1;
-  # No secret in here: the file keeps its mode, a new one gets root's umask.
-  file $env_file, content => $content;
-
-  # Only on a re-run: the service reads the file when it starts.
-  my $service = $paths->{service};
-  run "systemctl is-active --quiet $service", auto_die => 0;
-  Rex::Logger::info("$service is running: restart it to pick up the new PATH", 'warn')
-    if $? == 0;
-}
-
-#
-# Start or restart: k3s is always restarted (a re-run picks up a new binary
-# and config.yaml, as its install script did); rke2 is started, which leaves
-# a running service alone -- except when its containerd config is stale.
-# Shared with Rex::Rancher::Agent.
-#
-
-# Rex::GPU 0.001 wrote /var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl
-# as a bare `imports = [...]` + `version = 2`. rke2 renders a template instead
-# of its own config, so config.toml became exactly that: no SystemdCgroup,
-# sandbox image or registry mirrors. Rex::GPU 0.002's gpu_setup removes the
-# template but deliberately restarts nothing, and config.toml is rewritten
-# only when the service starts. So: config.toml still in that shape and the
-# template gone -> restart a running service once; the regenerated config no
-# longer matches, so the next re-run starts (a no-op) again. Template still
-# there -> a restart would render the same file: warn with what to do.
-sub _start_verb {
-  my ($paths, $distribution) = @_;
-  my $service = $paths->{service};
-  my $default = $distribution eq 'k3s' ? 'restart' : 'start';
-
-  my $dir    = $paths->{containerd_dir};
-  my $config = run "cat $dir/config.toml 2>/dev/null", auto_die => 0;
-  return $default unless _is_bare_template_output($config);
-
-  run "test -e $dir/config.toml.tmpl", auto_die => 0;
-  if ($? == 0) {
-    Rex::Logger::info("$dir/config.toml.tmpl holds only imports and version = 2 (as "
-      . "Rex::GPU 0.001 wrote it) and replaces ${distribution}'s own containerd config: "
-      . "no SystemdCgroup, sandbox image or registry mirrors. Remove it (Rex::GPU "
-      . "0.002's gpu_setup does) and run: systemctl restart $service", 'warn');
-    return $default;
-  }
-
-  run "systemctl is-active --quiet $service", auto_die => 0;
-  # Not running: the start renders a fresh config.toml anyway.
-  return $default unless $? == 0;
-  Rex::Logger::info("$dir/config.toml was rendered from a config.toml.tmpl that is "
-    . "gone (Rex::GPU 0.001's); restarting $service so it regenerates its "
-    . "containerd config", 'warn');
-  return 'restart';
-}
-
-# Pure: is this config.toml the verbatim output of Rex::GPU 0.001's template --
-# ignoring blank lines and comments, exactly an `imports =` and a
-# `version = 2` line and nothing else? Same narrow match as Rex::GPU 0.002's
-# _is_rke2_clobber_tmpl; rke2's own config always has [plugins...] sections.
-sub _is_bare_template_output {
-  my ($content) = @_;
-  return 0 unless defined $content && length $content;
-  my @lines = grep { /\S/ && !/^\s*#/ } split /\n/, $content;
-  return 0 unless @lines;
-  my ($imports, $version2) = (0, 0);
-  for my $l (@lines) {
-    if    ($l =~ /^\s*imports\s*=/)         { $imports  = 1 }
-    elsif ($l =~ /^\s*version\s*=\s*2\s*$/) { $version2 = 1 }
-    else                                    { return 0 }
-  }
-  return ($imports && $version2) ? 1 : 0;
-}
-
-# Pure: the env file with exactly one PATH line (ours, last), every other line
-# kept in order. undef when the file already is exactly that.
-sub _env_with_runtime_path {
-  my ($current) = @_;
-  $current //= '';
-  my @keep = grep { !/^\s*PATH=/ } split /\n/, $current;
-  my $content = join('', map { $_."\n" } @keep, $RUNTIME_PATH_LINE);
-  return $content eq $current ? undef : $content;
+  _wait_for_kubeconfig($dist);
 }
 
 #
@@ -791,10 +520,10 @@ sub _env_with_runtime_path {
 #
 
 sub _wait_for_kubeconfig {
-  my ($paths) = @_;
-  my $kubeconfig = $paths->{kubeconfig};
+  my ($dist) = @_;
+  my $kubeconfig = $dist->kubeconfig;
 
-  Rex::Logger::info("Waiting for " . $paths->{service} . " to write kubeconfig...");
+  Rex::Logger::info("Waiting for " . $dist->service . " to write kubeconfig...");
 
   for my $i (1..60) {
     my $out = run "test -f $kubeconfig && echo yes", auto_die => 0;
@@ -806,273 +535,8 @@ sub _wait_for_kubeconfig {
     sleep 5;
   }
 
-  Rex::Logger::info($paths->{service} . " kubeconfig did not appear — check manually", "warn");
+  Rex::Logger::info($dist->service . " kubeconfig did not appear — check manually", "warn");
   return 0;
-}
-
-#
-# Install method, release artifacts, version check, service wait.
-# Shared with Rex::Rancher::Agent (same distributions, same artifacts).
-#
-
-sub _install_method {
-  my ($method, $version) = @_;
-  $method //= 'script';
-  die "Unknown install_method: $method (expected 'script' or 'artifact')\n"
-    unless $method eq 'script' || $method eq 'artifact';
-  die "install_method 'artifact' requires a version (e.g. v1.30.4+rke2r1)\n"
-    if $method eq 'artifact' && !$version;
-  return $method;
-}
-
-# Release artifacts are named by GOARCH, not by `uname -m`.
-sub _goarch {
-  my ($uname) = @_;
-  $uname //= '';
-  $uname =~ s/\s+\z//;
-  my %goarch = (
-    x86_64  => 'amd64',
-    amd64   => 'amd64',
-    aarch64 => 'arm64',
-    arm64   => 'arm64',
-  );
-  return $goarch{$uname}
-    // die "Unsupported node architecture '$uname' for install_method 'artifact'"
-    . " (amd64 and arm64 only)\n";
-}
-
-sub _artifact_spec {
-  my ($distribution, $arch, $version) = @_;
-  my $paths = _paths($distribution);
-
-  die "install_method 'artifact' requires a version\n" unless $version;
-  die "Invalid version '$version'\n" unless $version =~ /\A[A-Za-z0-9._+-]+\z/;
-
-  (my $url_version = $version) =~ s/\+/%2B/g;
-  my $base  = $paths->{release_url} . '/' . $url_version;
-  my $dir   = $paths->{artifact_dir};
-  my $asset = $distribution eq 'k3s'
-    ? ($arch eq 'amd64' ? 'k3s' : "k3s-$arch")
-    : "rke2.linux-$arch.tar.gz";
-  my $sums  = "sha256sum-$arch.txt";
-
-  return {
-    dir        => $dir,
-    script     => "$dir/install.sh",
-    script_url => $paths->{install_url},
-    asset      => $asset,
-    asset_url  => "$base/$asset",
-    sums       => $sums,
-    sums_url   => "$base/$sums",
-  };
-}
-
-# The line for exactly $asset in an official sha256sum-ARCH.txt, or undef.
-# Exact name match: 'k3s' must not pick up 'k3s-airgap-images-...'.
-sub _expected_sha256 {
-  my ($sums_text, $asset) = @_;
-  for my $line (split /\n/, $sums_text // '') {
-    return lc $1 if $line =~ /\A\s*([0-9a-fA-F]{64})\s+\*?\Q$asset\E\s*\z/;
-  }
-  return;
-}
-
-# First field of `sha256sum FILE` output, or undef.
-sub _sha256_of {
-  my ($out) = @_;
-  return lc $1 if ($out // '') =~ /\A\s*([0-9a-fA-F]{64})\b/;
-  return;
-}
-
-sub _verify_sha256 {
-  my ($expected, $actual, $asset) = @_;
-  die "No checksum for $asset in the release's sha256sum file\n"
-    unless defined $expected;
-  die "Could not compute sha256 of downloaded $asset\n"
-    unless defined $actual;
-  die "Checksum mismatch for $asset: expected $expected, got $actual\n"
-    unless $expected eq $actual;
-  return 1;
-}
-
-sub _download_cmd {
-  my ($url, $dest, $progress) = @_;
-  # --progress-bar keeps output flowing during the ~60 MB tarball download,
-  # so a long silent curl does not look like a hung channel.
-  my $flags = $progress ? '-fL --progress-bar' : '-fsSL';
-  return "curl $flags -o '$dest' '$url' 2>&1";
-}
-
-# Download install script, artifact and checksum file on the host (curl, no
-# SFTP, no upload) and verify the artifact. Dies on any failure.
-sub _fetch_artifacts {
-  my ($distribution, $version) = @_;
-
-  my $arch = _goarch(run "uname -m", auto_die => 1);
-  my $spec = _artifact_spec($distribution, $arch, $version);
-  my $dir  = $spec->{dir};
-
-  Rex::Logger::info("Downloading $distribution $version artifacts for $arch to $dir");
-
-  run "rm -rf '$dir' && mkdir -p '$dir'", auto_die => 1;
-
-  for my $dl (
-    [ $spec->{script_url}, $spec->{script},             0 ],
-    [ $spec->{sums_url},   "$dir/$spec->{sums}",        0 ],
-    [ $spec->{asset_url},  "$dir/$spec->{asset}",       1 ],
-  ) {
-    my ($url, $dest, $progress) = @{$dl};
-    my $out = run _download_cmd($url, $dest, $progress), auto_die => 0;
-    die "Download failed: $url\n"
-      . ($progress ? "If this 404s, $distribution $version publishes no build for '$arch'.\n" : '')
-      . ($out // '') . "\n"
-      unless $? == 0;
-  }
-
-  my $sums   = run "cat '$dir/$spec->{sums}'", auto_die => 1;
-  my $actual = run "sha256sum '$dir/$spec->{asset}'", auto_die => 1;
-  # scalar(): both return empty on no match; in this list they must stay undef.
-  _verify_sha256(scalar(_expected_sha256($sums, $spec->{asset})),
-    scalar(_sha256_of($actual)), $spec->{asset});
-  Rex::Logger::info("  $spec->{asset}: sha256 verified");
-
-  return $spec;
-}
-
-# $type: undef for a server, 'agent' for an agent.
-sub _rke2_artifact_install_cmd {
-  my ($spec, $version, $type) = @_;
-  my @env = ("INSTALL_RKE2_ARTIFACT_PATH=$spec->{dir}");
-  push @env, "INSTALL_RKE2_TYPE=$type" if $type;
-  push @env, "INSTALL_RKE2_VERSION=$version";
-  return join(' ', @env) . " sh $spec->{script}";
-}
-
-# Put the verified binary where the K3s install script looks for it: next to
-# it, then rename, so a running k3s ("text file busy") is replaced atomically.
-sub _k3s_binary_place_cmd {
-  my ($spec) = @_;
-  return "install -m 0755 -o root -g root '$spec->{dir}/$spec->{asset}' /usr/local/bin/.k3s.rex-new"
-    . " && mv -f /usr/local/bin/.k3s.rex-new /usr/local/bin/k3s";
-}
-
-# SKIP_DOWNLOAD=binary skips only the binary; the SELinux RPM on RHEL-likes is
-# still fetched, as with curl | sh. BIN_DIR pinned to where we put the binary.
-sub _k3s_artifact_install_cmd {
-  my ($spec, $server, $version, $role) = @_;
-  my @env;
-  push @env, "K3S_URL=$server" if $server;
-  push @env, 'INSTALL_K3S_SKIP_DOWNLOAD=binary', 'INSTALL_K3S_BIN_DIR=/usr/local/bin',
-    "INSTALL_K3S_VERSION=$version";
-  # No start from the script, server or agent: see _install_k3s.
-  push @env, 'INSTALL_K3S_SKIP_START=true';
-  my $cmd = join(' ', @env) . " sh $spec->{script} $role";
-  $cmd .= ' --write-kubeconfig-mode=644' if $role eq 'server';
-  return $cmd;
-}
-
-# "rke2 version v1.30.4+rke2r1 (abc)" / "k3s version v1.30.4+k3s1 (abc)"
-sub _parse_version_output {
-  my ($out) = @_;
-  return $1 if ($out // '') =~ /^(?:rke2|k3s) version (\S+)/m;
-  return;
-}
-
-sub _same_version {
-  my ($want, $got) = @_;
-  return 0 unless defined $want && defined $got;
-  my ($w, $g) = ($want, $got);
-  s/\Av// for $w, $g;
-  return $w eq $g ? 1 : 0;
-}
-
-sub _verify_installed_version {
-  my ($distribution, $version) = @_;
-  return 1 unless $version;
-
-  my $binary = _paths($distribution)->{binary};
-  my $out    = run "$binary --version 2>&1", auto_die => 0;
-  my $got    = _parse_version_output($out);
-  die "Could not determine installed $distribution version ($binary --version):\n"
-    . ($out // '') . "\n"
-    unless defined $got;
-  die "Installed $distribution version is $got, expected $version — the "
-    . "install or upgrade did not take effect\n"
-    unless _same_version($version, $got);
-  Rex::Logger::info("  $distribution $got installed");
-  return 1;
-}
-
-# Poll `systemctl is-active` until active. 'failed' dies at once; any other
-# state (activating, inactive right after --no-block, auto-restart loops)
-# is polled until the timeout. Either failure carries the journal tail, and
-# the caller's hint (the agent's join address) right under the reason.
-sub _wait_for_service {
-  my ($service, %args) = @_;
-  my $attempts = $args{attempts} // 60;
-  my $interval = $args{interval} // 10;
-  my $hint     = $args{hint};
-
-  Rex::Logger::info("Waiting for $service to become active...");
-
-  my $state = '';
-  for my $i (1 .. $attempts) {
-    $state = run "systemctl is-active $service", auto_die => 0;
-    $state = '' unless defined $state;
-    $state =~ s/\s+\z//;
-    if ($state eq 'active') {
-      Rex::Logger::info("  $service is active");
-      return 1;
-    }
-    die _service_failure($service, "is failed", $hint) if $state eq 'failed';
-    Rex::Logger::info("  $service is " . ($state || 'unknown') . " ($i/$attempts)");
-    sleep $interval if $i < $attempts;
-  }
-
-  die _service_failure($service,
-    "did not become active within " . ($attempts * $interval) . "s (last state: "
-      . ($state || 'unknown') . ")", $hint);
-}
-
-sub _service_failure {
-  my ($service, $reason, $hint) = @_;
-  my $journal = run "journalctl -u $service -n 50 --no-pager 2>&1", auto_die => 0;
-  $journal = '' unless defined $journal;
-  $journal =~ s/\s+\z//;
-  return "$service $reason\n"
-    . ( defined $hint ? "$hint\n" : '' )
-    . "--- journalctl -u $service -n 50 ---\n"
-    . ($journal eq '' ? '(no journal output)' : $journal) . "\n";
-}
-
-sub _generate_registries_yaml {
-  my ($config_dir, $registries) = @_;
-
-  my $registries_file = $config_dir . "registries.yaml";
-  Rex::Logger::info("Writing registries config to $registries_file");
-
-  _write_secret_file($registries_file,
-    YAML::PP->new(boolean => 'JSON::PP')->dump_string($registries));
-}
-
-# config.yaml carries the join token and registries.yaml may carry registry
-# passwords, so both end up 0600 root:root. Rex's `file` writes content to a
-# ".rex.tmp.<name>" sibling (LibSSH: `cat >` over an exec channel, no SFTP),
-# renames it over the target and only then chmods -- the tmp file would be
-# umask-mode (0644) in between. Pre-creating that tmp name at 0600 closes the
-# window: `cat >` and SFTP open-truncate both keep an existing inode's mode,
-# and the rename carries it to the target. The explicit chmod afterwards is
-# what fixes an existing 0644 file whose content is unchanged (Rex then drops
-# the tmp file and never touches the target), and fails loudly.
-sub _write_secret_file {
-  my ($path, $content) = @_;
-
-  my $tmp = Rex::Commands::File::get_tmp_file_name($path);
-  run "install -m 600 -o root -g root /dev/null $tmp", auto_die => 1;
-
-  file $path, content => $content;
-
-  run "chown root:root $path && chmod 600 $path", auto_die => 1;
 }
 
 1;

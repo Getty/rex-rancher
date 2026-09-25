@@ -8,7 +8,7 @@ use warnings;
 use Rex::Commands::File;
 use Rex::Commands::Run;
 use Rex::Logger;
-use Rex::Rancher::Server;
+use Rex::Rancher::Distribution;
 use YAML::PP;
 
 require Rex::Exporter;
@@ -19,31 +19,6 @@ use vars qw(@EXPORT);
 @EXPORT = qw(
   install_agent
 );
-
-my %PATHS = (
-  rke2 => {
-    config_dir => '/etc/rancher/rke2',
-    config_file => '/etc/rancher/rke2/config.yaml',
-    registries_file => '/etc/rancher/rke2/registries.yaml',
-    service => 'rke2-agent.service',
-    env_file => '/etc/default/rke2-agent',
-    containerd_dir => '/var/lib/rancher/rke2/agent/etc/containerd',
-  },
-  k3s => {
-    config_dir => '/etc/rancher/k3s',
-    config_file => '/etc/rancher/k3s/config.yaml',
-    registries_file => '/etc/rancher/k3s/registries.yaml',
-    service => 'k3s-agent.service',
-    containerd_dir => '/var/lib/rancher/k3s/agent/etc/containerd',
-    # No env_file: see Rex::Rancher::Server::_nvidia_runtime_path.
-  },
-);
-
-sub _paths {
-  my ($distribution) = @_;
-  return $PATHS{$distribution}
-    || die "Unknown distribution: $distribution (expected 'rke2' or 'k3s')\n";
-}
 
 =method install_agent
 
@@ -140,25 +115,25 @@ sub install_agent {
   my $token        = $opts{token} or die "token is required for install_agent\n";
   my $version      = $opts{version};
   my $node_name    = $opts{node_name};
-  my $method       = Rex::Rancher::Server::_install_method($opts{install_method}, $version);
+  my $method       = Rex::Rancher::Distribution->resolve_install_method($opts{install_method}, $version);
 
-  my $paths = _paths($distribution);
+  my $dist = Rex::Rancher::Distribution->new_for($distribution, role => 'agent');
 
   Rex::Logger::info("Installing $distribution agent to join $server");
 
-  _write_config($paths, $distribution, %opts);
-  _write_registries($paths, %opts);
+  _write_config($dist, %opts);
+  _write_registries($dist, %opts);
   # Before the installer and the first start, as on the server.
-  Rex::Rancher::Server::_nvidia_runtime_path($paths) if $opts{nvidia_runtime_path};
-  _run_installer($distribution, $version, $server, $method);
-  Rex::Rancher::Server::_verify_installed_version($distribution, $version);
-  _enable_service($paths, $distribution, $server);
+  $dist->ensure_nvidia_runtime_path if $opts{nvidia_runtime_path};
+  _run_installer($dist, $version, $server, $method);
+  $dist->verify_installed_version($version);
+  _enable_service($dist, $server);
 
   Rex::Logger::info("$distribution agent installed and running");
 }
 
-# Same keys on rke2 and k3s agents; node-label as in
-# Rex::Rancher::Server::_build_server_config.
+# Same keys on rke2 and k3s agents; node-label as in the server's
+# config.yaml (Rex::Rancher::Server).
 sub _build_agent_config {
   my (%opts) = @_;
 
@@ -177,90 +152,61 @@ sub _build_agent_config {
 }
 
 sub _write_config {
-  my ($paths, $distribution, %opts) = @_;
+  my ($dist, %opts) = @_;
 
-  Rex::Logger::info("Writing $distribution agent config");
+  Rex::Logger::info("Writing " . $dist->name . " agent config");
 
-  run "mkdir -p $paths->{config_dir}", auto_die => 1;
+  run "mkdir -p " . $dist->config_dir, auto_die => 1;
 
-  Rex::Rancher::Server::_write_secret_file($paths->{config_file},
+  $dist->write_secret_file($dist->config_file,
     YAML::PP->new->dump_string(_build_agent_config(%opts)));
 }
 
 sub _write_registries {
-  my ($paths, %opts) = @_;
+  my ($dist, %opts) = @_;
 
   return unless $opts{registries};
 
-  Rex::Rancher::Server::_generate_registries_yaml(
-    $paths->{config_dir} . '/', $opts{registries}
-  );
+  $dist->write_registries($opts{registries});
 }
 
+# The token is NOT on any installer line, for either distribution:
+# _write_config has already put it into config.yaml, and anything on these
+# lines shows up in ps. k3s' script does not start the agent
+# (INSTALL_K3S_SKIP_START); _enable_service starts it bounded.
 sub _run_installer {
-  my ($distribution, $version, $server, $method) = @_;
+  my ($dist, $version, $server, $method) = @_;
 
-  Rex::Logger::info("Running $distribution agent installer");
+  Rex::Logger::info("Running " . $dist->name . " agent installer");
 
   if (($method // 'script') eq 'artifact') {
-    my $spec = Rex::Rancher::Server::_fetch_artifacts($distribution, $version);
-    if ($distribution eq 'k3s') {
-      run Rex::Rancher::Server::_k3s_binary_place_cmd($spec), auto_die => 1;
-      run Rex::Rancher::Server::_k3s_artifact_install_cmd($spec, $server, $version, 'agent'),
-        auto_die => 1;
-    }
-    else {
-      run Rex::Rancher::Server::_rke2_artifact_install_cmd($spec, $version, 'agent'),
-        auto_die => 1;
-    }
+    my $spec = $dist->fetch_artifacts($version);
+    run $_, auto_die => 1 for $dist->artifact_install_cmds($spec, $server, $version);
     return;
   }
 
-  run _installer_cmd($distribution, $version, $server), auto_die => 1;
-}
-
-# The token is NOT passed here for either distribution: _write_config has
-# already put it into config.yaml, and anything on this line shows up in ps.
-sub _installer_cmd {
-  my ($distribution, $version, $server) = @_;
-
-  if ($distribution eq 'k3s') {
-    # INSTALL_K3S_SKIP_START: the script's own `systemctl restart` of the
-    # Type=notify unit blocks until the agent has joined, forever for one
-    # that cannot reach $server; _enable_service starts it bounded instead.
-    my @env;
-    push @env, "K3S_URL=$server";
-    push @env, "INSTALL_K3S_VERSION=$version" if $version;
-    push @env, 'INSTALL_K3S_SKIP_START=true';
-    my $env = join(" ", @env);
-    return "curl -sfL https://get.k3s.io | $env sh -s - agent";
-  }
-  my @env;
-  push @env, "INSTALL_RKE2_TYPE=agent";
-  push @env, "INSTALL_RKE2_VERSION=$version" if $version;
-  my $env = join(" ", @env);
-  return "curl -sfL https://get.rke2.io | $env sh -";
+  run $dist->script_install_cmd($server, $version), auto_die => 1;
 }
 
 sub _enable_service {
-  my ($paths, $distribution, $server) = @_;
+  my ($dist, $server) = @_;
 
-  my $service = $paths->{service};
+  my $service = $dist->service;
   # k3s: restart, as the install script did before INSTALL_K3S_SKIP_START,
   # so a re-run still picks up a new binary and config.yaml. rke2's
   # installer never started the agent: start, or restart for a stale
-  # containerd config (see Rex::Rancher::Server::_start_verb).
-  my $verb = Rex::Rancher::Server::_start_verb($paths, $distribution);
+  # containerd config (see Rex::Rancher::Distribution's start_verb).
+  my $verb = $dist->start_verb;
   Rex::Logger::info("Enabling and starting $service");
   run "systemctl enable $service", auto_die => 1;
   # --no-block, same as the server: a start that fails or outlasts systemd's
-  # activation timeout ends in _wait_for_service, which reports the journal,
+  # activation timeout ends in wait_for_service, which reports the journal,
   # instead of a bare systemctl error (or, for an agent that cannot reach
   # its server, a Type=notify start that never returns).
   run "systemctl $verb --no-block $service", auto_die => 1;
   # An unreachable server address (a wrong or private IP) is the usual
   # reason an agent never gets active: name it next to the journal.
-  Rex::Rancher::Server::_wait_for_service($service,
+  $dist->wait_for_service(
     hint => "It joins the cluster via $server -- check that this node can reach that address");
 }
 

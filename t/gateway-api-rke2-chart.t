@@ -18,6 +18,9 @@ use Test::More;
 
 use Rex::Rancher;
 use Rex::Rancher::Cilium;
+use Rex::Rancher::Distribution;
+
+sub rke2_default { Rex::Rancher::Distribution->new_for('rke2')->default_disable }
 
 my @warnings;
 {
@@ -26,7 +29,7 @@ my @warnings;
 }
 
 my $CHART   = 'rke2-gateway-api-crd';
-my @DEFAULT = @{ Rex::Rancher::Server::_paths('rke2')->{disable} };
+my @DEFAULT = @{ rke2_default() };
 my %gw      = ( gateway_api => 1, gateway_api_version => 'v1.2.0' );
 
 sub disable_for { my %o = Rex::Rancher::_gateway_api_disable(@_); $o{disable} }
@@ -52,8 +55,7 @@ subtest 'install_server disable list' => sub {
   is( disable_for( %gw, disable => [] ), undef, 'empty list: as given' );
   is( scalar @warnings, 1, '... with a warning' );
 
-  is_deeply( [ @{ Rex::Rancher::Server::_paths('rke2')->{disable} } ], \@DEFAULT,
-    'the Server default list is not mutated' );
+  is_deeply( rke2_default(), \@DEFAULT, 'the rke2 default list is not mutated' );
 };
 
 subtest 'rancher_deploy_server hands it to install_server' => sub {

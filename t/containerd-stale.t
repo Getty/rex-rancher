@@ -5,7 +5,7 @@ use Test::More;
 # -----------------------------------------------------------------------------
 # A node set up with Rex::GPU 0.001 has a config.toml.tmpl that replaced
 # rke2's containerd config; Rex::GPU 0.002 removes it but restarts nothing,
-# and rke2 is only started (a no-op while it runs). _start_verb restarts a
+# and rke2 is only started (a no-op while it runs). start_verb restarts a
 # running rke2 exactly when config.toml is still that template's output and
 # the template is gone; otherwise rke2 keeps `start` and k3s keeps `restart`.
 # A template still in place gets a warning with the command, no restart.
@@ -16,6 +16,9 @@ use Test::More;
 
 use Rex::Rancher::Server;
 use Rex::Rancher::Agent;
+use Rex::Rancher::Distribution;
+
+my $D = 'Rex::Rancher::Distribution';
 
 my @perl_warnings;
 $SIG{__WARN__} = sub { push @perl_warnings, @_ };
@@ -30,8 +33,8 @@ root = "/var/lib/rancher/rke2/agent/containerd"
   SystemdCgroup = true
 TOML
 
-subtest '_is_bare_template_output' => sub {
-  my $is = \&Rex::Rancher::Server::_is_bare_template_output;
+subtest 'is_bare_template_output' => sub {
+  my $is = sub { $D->is_bare_template_output(@_) };
   ok( $is->($CLOBBER), 'Rex::GPU 0.001 output' );
   ok( $is->("# c\n\nversion = 2\nimports = []\n"), 'order, comments and blank lines do not matter' );
   ok( !$is->($NATIVE),  'rke2 native config' );
@@ -58,8 +61,10 @@ my ( @log, @warn, %host );
     if ( $cmd =~ m{^test -f} ) { return "yes\n" }
     return '';
   };
+  *Rex::Commands::Run::run    = $run;
   *Rex::Rancher::Server::run  = $run;
   *Rex::Rancher::Agent::run   = $run;
+  *Rex::Commands::File::file  = sub { push @log, 'file '.$_[0] };
   *Rex::Rancher::Server::file = sub { push @log, 'file '.$_[0] };
   *Rex::Logger::info = sub { push @warn, $_[0] if ( $_[1] // '' ) eq 'warn' };
 }
@@ -78,13 +83,13 @@ for my $c (@case) {
   for my $dist (qw( rke2 k3s )) {
     %host = %$state;
     ( @log, @warn ) = ();
-    my $paths = Rex::Rancher::Server::_paths($dist);
-    is( Rex::Rancher::Server::_start_verb($paths, $dist), $dist eq 'rke2' ? $rke2 : $k3s,
+    my $d = $D->new_for($dist);
+    is( $d->start_verb, $dist eq 'rke2' ? $rke2 : $k3s,
       $dist.', '.$name.': verb' );
     if ($warn) {
       is( scalar @warn, 1, $dist.', '.$name.': one warning' );
       like( $warn[0], $warn, $dist.', '.$name.': warning says what happens' );
-      like( $warn[0], qr/\Q$paths->{service}\E/, $dist.', '.$name.': names the service' );
+      like( $warn[0], qr/\Q${\ $d->service }\E/, $dist.', '.$name.': names the service' );
     }
     else {
       is_deeply( \@warn, [], $dist.', '.$name.': no warning' );
@@ -97,18 +102,18 @@ for my $c (@case) {
 # Wired into the start steps: server and agent, rke2 restarts once stale.
 %host = ( config => $CLOBBER, active => 1 );
 @log = ();
-Rex::Rancher::Server::_install_rke2( Rex::Rancher::Server::_paths('rke2'), undef, 'script' );
+Rex::Rancher::Server::_install( $D->new_for('rke2'), undef, undef, 'script' );
 is_deeply( [ grep { /^systemctl (?:start|restart)/ } @log ], [ 'systemctl restart --no-block rke2-server' ],
   'rke2 server, stale: restart --no-block' );
 
 @log = ();
-Rex::Rancher::Agent::_enable_service( Rex::Rancher::Agent::_paths('rke2'), 'rke2', 'https://cp:9345' );
+Rex::Rancher::Agent::_enable_service( $D->new_for( 'rke2', role => 'agent' ), 'https://cp:9345' );
 is_deeply( [ grep { /^systemctl (?:start|restart)/ } @log ], [ 'systemctl restart --no-block rke2-agent.service' ],
   'rke2 agent, stale: restart --no-block' );
 
 %host = ( config => $NATIVE, active => 1 );
 @log = ();
-Rex::Rancher::Agent::_enable_service( Rex::Rancher::Agent::_paths('rke2'), 'rke2', 'https://cp:9345' );
+Rex::Rancher::Agent::_enable_service( $D->new_for( 'rke2', role => 'agent' ), 'https://cp:9345' );
 is_deeply( [ grep { /^systemctl (?:start|restart)/ } @log ], [ 'systemctl start --no-block rke2-agent.service' ],
   'rke2 agent, native config: start, a running agent is left alone' );
 

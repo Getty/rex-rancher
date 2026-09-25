@@ -15,7 +15,7 @@ use Rex::Commands::File;
 use Rex::Commands::Gather;
 use Rex::Commands::Run;
 use Rex::Logger;
-use Rex::Rancher::Server ();
+use Rex::Rancher::Distribution;
 use YAML::PP;
 
 require Rex::Exporter;
@@ -474,7 +474,7 @@ sub _resolve_opts {
   my $gateway_api  = $opts{gateway_api} ? 1 : 0;
   my $wait         = $opts{wait} ? 1 : 0;
   my $duration     = $opts{wait_duration} // WAIT_DURATION;
-  my $cluster_cidr = Rex::Rancher::Server::_cluster_cidr($opts{cluster_cidr});
+  my $cluster_cidr = Rex::Rancher::Distribution->check_cluster_cidr($opts{cluster_cidr});
 
   die "helm_values must be a hashref\n" unless ref $helm_values eq 'HASH';
 

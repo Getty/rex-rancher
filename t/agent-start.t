@@ -4,7 +4,7 @@ use Test::More;
 
 # -----------------------------------------------------------------------------
 # How install_agent starts the agent, rke2 and k3s alike: the installer never
-# starts it, then systemctl --no-block and the bounded _wait_for_service.
+# starts it, then systemctl --no-block and the bounded wait_for_service.
 # k3s' install script would otherwise `systemctl restart` the Type=notify
 # k3s-agent itself and block until the join, forever for an agent that cannot
 # reach its server (kubernetes-ocp k185). k3s is restarted, as the script did,

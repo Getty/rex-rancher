@@ -54,6 +54,7 @@ task 'deploy_agents', group => 'workers', sub {
 | `Rex::Rancher::Node` | Node preparation (kernel, swap, modules) |
 | `Rex::Rancher::Cilium` | Cilium CNI installation |
 | `Rex::Rancher::K8s` | Local Kubernetes API ops (device plugin, readiness wait) |
+| `Rex::Rancher::Distribution` | What RKE2 and K3s differ in (`::RKE2`, `::K3s`), used by the modules above |
 
 ## Requirements
 

@@ -43,6 +43,11 @@ Revision history for Rex-Rancher
     and the template is gone, as Rex::GPU 0.002 leaves it, install_server
     and install_agent restart the running rke2 service once, with a
     warning. A template still in place gets a warning with the command.
+  - Internal: what RKE2 and K3s differ in (paths, units, installer, release
+    artifacts) and the host steps server and agent share moved into the new
+    Rex::Rancher::Distribution with ::RKE2 and ::K3s (new dependencies Moo
+    and namespace::autoclean). The commands run on the host, their order and
+    the error messages are unchanged.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

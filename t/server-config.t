@@ -21,8 +21,12 @@ use Test::More;
 use JSON::MaybeXS ();
 use Rex::Rancher::Server;
 use Rex::Rancher::Cilium;
+use Rex::Rancher::Distribution;
 
-sub cfg { Rex::Rancher::Server::_build_server_config(@_) }
+sub cfg {
+  my ( $dist, @rest ) = @_;
+  Rex::Rancher::Server::_build_server_config( Rex::Rancher::Distribution->new_for($dist), @rest );
+}
 #          ($distribution, $token, $server, $tls_san, $node_labels, $cilium)
 
 subtest 'rke2 + cilium: kube-proxy replacement config present' => sub {
@@ -100,7 +104,7 @@ subtest 'cluster_cidr (k41): written on rke2 and k3s alike' => sub {
   is(cfg('k3s', 'tok', 'https://cp1:6443', undef, undef, 1, undef, undef, '10.244.0.0/16')->{'cluster-cidr'},
     '10.244.0.0/16', 'joining k3s server carries the same value');
 
-  my $check = Rex::Rancher::Server->can('_cluster_cidr');
+  my $check = sub { Rex::Rancher::Distribution->check_cluster_cidr(@_) };
   is($check->(undef), undef, 'undef: default');
   is($check->('10.42.0.0/16'), '10.42.0.0/16', 'IPv4 CIDR accepted');
   for my $bad ('10.42.0.0', '10.42.0.0/33', '300.1.0.0/16', '10.42.0.0/16,fd00::/56', 'fd00::/56', '') {
@@ -114,6 +118,8 @@ subtest 'cluster_cidr (k41): written on rke2 and k3s alike' => sub {
   no warnings 'redefine';
   local *Rex::Rancher::Server::run  = sub { push @ran, $_[0]; '' };
   local *Rex::Rancher::Server::file = sub { push @ran, "file $_[0]" };
+  local *Rex::Commands::Run::run    = sub { push @ran, $_[0]; '' };
+  local *Rex::Commands::File::file  = sub { push @ran, "file $_[0]" };
   use warnings 'redefine';
   for my $dist (qw( rke2 k3s )) {
     @ran = ();

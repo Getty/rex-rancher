@@ -12,6 +12,7 @@ use Rex::Rancher::Server;
 use Rex::Rancher::Agent;
 use Rex::Rancher::Cilium;
 use Rex::Rancher::K8s;
+use Rex::Rancher::Distribution;
 use Rex::Logger;
 
 use File::Basename qw(dirname);
@@ -320,7 +321,7 @@ sub _check_connection {
 # $distribution) and only die in install_server/install_agent.
 sub _check_distribution {
   my ( $distribution ) = @_;
-  return if $distribution eq 'rke2' || $distribution eq 'k3s';
+  return if exists Rex::Rancher::Distribution->distribution_classes->{$distribution};
   die "Unknown distribution: $distribution (expected 'rke2' or 'k3s'); "
     . "nothing was done on the host\n";
 }
@@ -351,7 +352,7 @@ sub rancher_deploy_server {
 
   # Refuse bad or contradictory Cilium options before the node is touched,
   # not at step 7. cluster_cidr is install_server's too, cilium or not.
-  Rex::Rancher::Server::_cluster_cidr($opts{cluster_cidr});
+  Rex::Rancher::Distribution->check_cluster_cidr($opts{cluster_cidr});
   if ($cilium) {
     my $o = Rex::Rancher::Cilium::_resolve_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
     # install_cilium could read k8sServiceHost from a running Cilium, but a
@@ -640,7 +641,7 @@ sub _gateway_api_disable {
 
   my $chart = 'rke2-gateway-api-crd';
   my $disable = $opts{disable};
-  return ( disable => [ @{ Rex::Rancher::Server::_paths('rke2')->{disable} }, $chart ] )
+  return ( disable => [ @{ Rex::Rancher::Distribution->new_for('rke2')->default_disable }, $chart ] )
     unless defined $disable;
 
   my @given = ref $disable eq 'ARRAY' ? @$disable : split(/,/, $disable);

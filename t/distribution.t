@@ -18,6 +18,9 @@ local *Rex::Rancher::Server::run  = sub { push @ran, 'server run'; '' };
 local *Rex::Rancher::Server::file = sub { push @ran, 'server file' };
 local *Rex::Rancher::Agent::run   = sub { push @ran, 'agent run'; '' };
 local *Rex::Rancher::Agent::file  = sub { push @ran, 'agent file' };
+# The shared steps in Rex::Rancher::Distribution call Rex::Commands::* directly.
+local *Rex::Commands::Run::run    = sub { push @ran, 'rex run'; '' };
+local *Rex::Commands::File::file  = sub { push @ran, 'rex file' };
 use warnings 'redefine';
 
 # The public install functions keep their own check. Before the pipeline fakes
