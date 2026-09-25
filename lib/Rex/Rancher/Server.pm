@@ -210,9 +210,9 @@ cluster-pool IPAM is given the same range (see L<Rex::Rancher::Cilium>). These
 are server settings that k3s agents take from the server; an additional
 server joining with C<server> gets the same keys, as k3s requires them to
 match across servers. The same keys and Cilium values were verified live in
-kubernetes-ocp (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API v1.6.1); the
-k3s path through Rex::Rancher has not been run live, and differs in the
-Cilium version it defaults to (see L<Rex::Rancher::Cilium>).
+kubernetes-ocp (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API v1.6.1), the
+Cilium version L<Rex::Rancher::Cilium> defaults to; the k3s path through
+Rex::Rancher has not been run live.
 
 =item C<nvidia_runtime_path>
 

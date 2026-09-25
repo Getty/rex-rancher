@@ -30,8 +30,14 @@ use vars qw(@EXPORT);
   ensure_gateway_api_crds
 );
 
-use constant CILIUM_VERSION     => '1.17.0';
-use constant CILIUM_CLI_VERSION => 'v0.16.23';
+# The pair kubernetes-ocp runs live (OCP::Versions). Cilium 1.20 is e2e
+# tested on Kubernetes 1.33-1.36, the CLI supports Cilium 1.16 and newer.
+use constant CILIUM_VERSION     => '1.20.0';
+use constant CILIUM_CLI_VERSION => 'v0.19.7';
+
+# Cilium 1.20 requires TLSRoute and BackendTLSPolicy at v1, which the
+# Gateway API bundles carry from this version.
+use constant GATEWAY_API_MIN_FOR_1_20 => 'v1.6.1';
 
 # The cilium CLI installs a Helm release of this name into this namespace;
 # Helm keeps one Secret per revision there (labels owner=helm,name=cilium).
@@ -182,8 +188,8 @@ C<k8s_service_host>, and dies without one.
 
 B<rke2 is the verified distribution.> The k3s values are those
 kubernetes-ocp verified live (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API
-v1.6.1 standard); Rex::Rancher's k3s path has not been run live itself and
-defaults to Cilium 1.17.0.
+v1.6.1 standard), with the Cilium and CLI versions this module defaults to;
+Rex::Rancher's k3s path has not been run live itself.
 
 Options:
 
@@ -195,11 +201,36 @@ C<rke2> (default) or C<k3s>.
 
 =item C<version>
 
-Cilium version to install, e.g. C<1.17.0>. Default: C<1.17.0>.
+Cilium version to install, e.g. C<1.20.0>. Default: C<1.20.0>.
+
+Cilium upgrades and rolls back one minor version at a time. With
+C<kubeconfig>, the version a Cilium on the cluster runs (the C<cilium-agent>
+image tag of the C<cilium> DaemonSet, else the chart of a C<deployed>
+release) is read before the host is touched:
+
+=over
+
+=item * a C<version> more than one minor version from it, up or down, dies
+naming the minor to go to first;
+
+=item * without C<version>, the default applies only to a fresh install
+and to a newer patch of the running minor. A running Cilium of an older
+minor keeps its version, with a warning (pass C<version> to upgrade, one
+minor at a time); one newer than the default keeps its version too. So a
+re-run after a Rex::Rancher upgrade never moves a cluster by more than a
+patch release.
+
+=back
+
+Without C<kubeconfig> nothing is compared, and nothing running changes
+(see below). Cilium C<1.18> and newer need Linux 5.10 or newer on every
+node (4.18 on RHEL 8.10); Cilium C<1.20> is tested on Kubernetes 1.33 to
+1.36.
 
 =item C<cli_version>
 
-Cilium CLI version to download, e.g. C<v0.16.23>. Default: C<v0.16.23>.
+Cilium CLI version to download, e.g. C<v0.19.7>. Default: C<v0.19.7>, which
+supports Cilium 1.16 and newer; an older Cilium needs an older CLI.
 
 =item C<k8s_service_host>
 
@@ -300,8 +331,12 @@ C<gateway_api>.
 
 =item C<gateway_api_version>
 
-Gateway API release to apply, e.g. C<v1.2.0>. It must match what the Cilium
+Gateway API release to apply, e.g. C<v1.6.1>. It must match what the Cilium
 C<version> supports; there is no default because the two are version-locked.
+Cilium 1.20 and newer need C<v1.6.1> or newer (C<TLSRoute> and
+C<BackendTLSPolicy> at v1); an older one with such a Cilium dies before the
+host is touched -- for a pinned C<version> already in option checks, for the
+default once it is known whether a running Cilium keeps an older version.
 
 =item C<gateway_api_channel>
 
@@ -313,8 +348,10 @@ API v1.5 the standard channel has no C<TLSRoute>, so C<standard> costs TLS
 passthrough. Gateway API v1.5 moved C<TLSRoute> (as v1) into the standard
 channel, v1.6 also C<TCPRoute> and C<UDPRoute>; Cilium 1.20 requires
 C<TLSRoute> v1 and C<BackendTLSPolicy> v1, which the v1.5+ standard channel
-carries. The default stays C<experimental> so the default Cilium keeps
-C<TLSRoute>.
+carries. The default stays C<experimental>: it is the channel every Cilium
+version works with, and it keeps C<TLSRoute> v1alpha2 objects of an older
+Cilium readable (the v1.6 standard C<TLSRoute> CRD drops that version, and
+such objects disappear).
 
 Gateway API v1.5+ ships an admission policy that refuses experimental CRDs
 on top of standard ones: a cluster that started on C<standard> cannot move
@@ -338,8 +375,13 @@ sub install_cilium {
   # release state: a failed or pending install can have left cilium-config
   # and pods behind, and the ConfigMap is what those pods run with. Read and
   # settled before the host is touched, so a refusal leaves it as it was.
-  _adopt_running($o, _read_running($api, $release)) if $api;
+  if ($api) {
+    my $running = _read_running($api, $release);
+    _adopt_running($o, $running);
+    _settle_version($o, $running->{version});
+  }
   _require_k8s_service_host($o);
+  _check_gateway_api_version($o);
 
   _install_cilium_cli($o->{cli_version});
 
@@ -392,7 +434,10 @@ L</install_cilium> (IPAM mode and pool from C<kube-system/cilium-config>,
 K3s C<k8sServiceHost> from the DaemonSet, C<operator.replicas> from the
 C<cilium-operator> Deployment), so an upgrade needs no values the caller has
 to look up first, and a change of IPAM mode or pool asked for in
-C<helm_values> dies before the host is touched.
+C<helm_values> dies before the host is touched. The version follows the
+same one-minor-at-a-time rule as there: pass C<version> to upgrade to a
+new minor. Without it, a running Cilium of an older minor keeps its version
+(with a warning) and C<cilium upgrade> only re-applies the values.
 Without the API none of that can be checked, and the generated values would
 be applied as they stand -- on RKE2 the default C<ipam.mode: kubernetes>
 switches a C<cluster-pool> cluster and its pods lose their addresses.
@@ -403,7 +448,7 @@ included, except that C<kubeconfig> is not optional.
   upgrade_cilium(
     distribution => 'rke2',
     kubeconfig   => "$ENV{HOME}/.kube/mycluster.yaml",
-    version      => '1.17.0',
+    version      => '1.20.0',
   );
 
 =cut
@@ -425,8 +470,11 @@ sub upgrade_cilium {
   Rex::Logger::info("Upgrading Cilium to $o->{version} on " . $o->{dist}->name . " cluster");
 
   my $api = _api($o->{kubeconfig});
-  _adopt_running($o, _read_running($api, _read_release($api)));
+  my $running = _read_running($api, _read_release($api));
+  _adopt_running($o, $running);
+  _settle_version($o, $running->{version});
   _require_k8s_service_host($o);
+  _check_gateway_api_version($o);
 
   _install_cilium_cli($o->{cli_version});
 
@@ -573,6 +621,7 @@ sub _resolve_opts {
   my $o = {
     dist                => $dist,
     version             => $opts{version}     // CILIUM_VERSION,
+    version_pinned      => defined $opts{version} ? 1 : 0,
     cli_version         => $opts{cli_version} // CILIUM_CLI_VERSION,
     api_server          => $opts{api_server},
     kubeconfig          => $opts{kubeconfig},
@@ -590,6 +639,10 @@ sub _resolve_opts {
   # With a kubeconfig a running Cilium's k8sServiceHost is read later, so
   # the check waits for that; without one it can only come from the caller.
   _require_k8s_service_host($o) unless $opts{kubeconfig};
+
+  # A pinned version is the one installed; the default may still give way
+  # to a running Cilium (_settle_version), so it is checked after that.
+  _check_gateway_api_version($o) if $o->{version_pinned};
 
   return $o;
 }
@@ -904,11 +957,31 @@ sub _read_running {
     $running{pool} = \@pool if @pool;
   }
 
+  # The version the agents run: their image tag, else the chart of a
+  # deployed release (a failed upgrade's newest revision names the chart
+  # that did not make it).
+  $running{version} = $release->{chart_version}
+    if $release && $release->{status} eq 'deployed' && defined $release->{chart_version};
+
   if (my $ds = _get_optional($api, 'DaemonSet', RELEASE_NAME)) {
     $running{k8s_service_host} = _daemonset_env($ds, 'KUBERNETES_SERVICE_HOST');
+    my $image = _daemonset_version($ds);
+    $running{version} = $image if defined $image;
   }
 
   return \%running;
+}
+
+# The cilium-agent image tag as a version (quay.io/cilium/cilium:v1.20.0@sha256:...
+# gives 1.20.0), or undef when the tag is no version (a digest only, latest).
+sub _daemonset_version {
+  my ($ds) = @_;
+  my $containers = eval { $ds->spec->template->spec->containers } // [];
+  for my $c (grep { $_->name eq 'cilium-agent' } @$containers) {
+    my ($tag) = ( $c->image // '' ) =~ m{:v?(\d+\.\d+\.\d+[^\@/:]*)(?:\@|\z)};
+    return $tag if defined $tag;
+  }
+  return;
 }
 
 sub _daemonset_env {
@@ -1018,6 +1091,87 @@ sub _warn_ipam_mode_kept {
     . "ipam.mode $mode (ConfigMap " . RELEASE_NAMESPACE . "/" . CILIUM_CONFIGMAP
     . "), and the IPAM mode of a running cluster cannot change. Keeping $mode; "
     . "redeploy the cluster to use $want", 'warn');
+}
+
+# Cilium upgrades and rolls back one minor version at a time (its upgrade
+# guide: the only tested path is between consecutive minors). Against the
+# version a Cilium on the cluster runs:
+#   - pinned: at most one minor away, either way; more dies before the host
+#     is touched, naming the step to take;
+#   - default: a patch release of the running minor is taken; a newer minor
+#     or an older version is not -- the running version is kept, a newer
+#     minor with a warning. The default is what a fresh install gets, as
+#     for rke2/k3s's own version: a re-run after a library upgrade must not
+#     jump a cluster several minors or pull it back.
+# Nothing running, or a version that does not parse: nothing to compare.
+sub _settle_version {
+  my ($o, $running) = @_;
+  return unless defined $running;
+  my @have = _minor_version($running) or return;
+  my @want = _minor_version($o->{version}) or return;
+
+  my $apart = $want[0] != $have[0] ? 99 : abs($want[1] - $have[1]);
+
+  if ($o->{version_pinned}) {
+    return if $apart <= 1;
+    my $step = $want[0] == $have[0]
+      ? "$have[0]." . ( $want[1] > $have[1] ? $have[1] + 1 : $have[1] - 1 )
+      : 'the next minor';
+    die "Cilium runs " . _norm_version($running) . ", version "
+      . _norm_version($o->{version}) . " is more than one minor version away: "
+      . "Cilium upgrades and rolls back one minor at a time. Go to the latest "
+      . "$step.x first, then on\n";
+  }
+
+  my $cmp = _cmp_version($o->{version}, $running);
+  return if $cmp > 0 && $apart == 0;    # a newer patch of the running minor
+  return if $cmp == 0;
+
+  if ($cmp > 0) {
+    Rex::Logger::info("Cilium runs " . _norm_version($running) . "; the default "
+      . _norm_version($o->{version}) . " is a newer minor version and is not "
+      . "applied to a running Cilium. Keeping " . _norm_version($running)
+      . "; pass version (cilium_version) to upgrade, one minor at a time", 'warn');
+  }
+  else {
+    Rex::Logger::info("Cilium runs " . _norm_version($running) . ", newer than "
+      . "the default " . _norm_version($o->{version}) . "; keeping it");
+  }
+  $o->{version} = _norm_version($running);
+  return $o;
+}
+
+# (major, minor) of 1.20.0 / v1.20.0-rc.1, or () when it is no version.
+sub _minor_version {
+  my ($v) = @_;
+  return ( ( $v // '' ) =~ /\Av?(\d+)\.(\d+)(?:\.\d+)?/ );
+}
+
+# <=> on the numeric major.minor.patch; anything after it is ignored.
+sub _cmp_version {
+  my ($x, $y) = @_;
+  my @x = ( ( $x // '' ) =~ /\Av?(\d+)\.(\d+)(?:\.(\d+))?/ );
+  my @y = ( ( $y // '' ) =~ /\Av?(\d+)\.(\d+)(?:\.(\d+))?/ );
+  for my $i (0 .. 2) {
+    my $c = ( $x[$i] // 0 ) <=> ( $y[$i] // 0 );
+    return $c if $c;
+  }
+  return 0;
+}
+
+# Cilium 1.20 refuses to start its Gateway controller on a bundle older than
+# v1.6.1 (TLSRoute and BackendTLSPolicy at v1). Checked on the version that
+# will run, before the host is touched.
+sub _check_gateway_api_version {
+  my ($o) = @_;
+  return unless $o->{gateway_api};
+  my @cilium = _minor_version($o->{version}) or return;
+  return unless $cilium[0] > 1 || ( $cilium[0] == 1 && $cilium[1] >= 20 );
+  return if _cmp_version($o->{gateway_api_version}, GATEWAY_API_MIN_FOR_1_20) >= 0;
+  die "Cilium " . _norm_version($o->{version}) . " needs Gateway API "
+    . GATEWAY_API_MIN_FOR_1_20 . " or newer (TLSRoute and BackendTLSPolicy at "
+    . "v1), gateway_api_version is $o->{gateway_api_version}: raise it, or pin "
+    . "version (cilium_version) to a Cilium that supports it\n";
 }
 
 #
@@ -1329,7 +1483,7 @@ sub _write_helm_values {
   use Rex::Rancher::Cilium;
   use JSON::MaybeXS;    # JSON()->true below
 
-  # Install Cilium on an RKE2 cluster (defaults to version 1.17.0)
+  # Install Cilium on an RKE2 cluster (defaults to version 1.20.0)
   install_cilium(
     distribution => 'rke2',
   );
@@ -1339,9 +1493,9 @@ sub _write_helm_values {
   install_cilium(
     distribution        => 'rke2',
     kubeconfig          => "$ENV{HOME}/.kube/mycluster.yaml",
-    version             => '1.17.0',
+    version             => '1.20.0',
     gateway_api         => 1,
-    gateway_api_version => 'v1.2.0',
+    gateway_api_version => 'v1.6.1',
     helm_values         => { hubble => { relay => { enabled => JSON()->true } } },
   );
 
@@ -1349,8 +1503,8 @@ sub _write_helm_values {
   install_cilium(
     distribution     => 'k3s',
     k8s_service_host => '10.0.0.1',    # the control plane, not localhost
-    version          => '1.17.0',
-    cli_version      => 'v0.16.23',
+    version          => '1.20.0',
+    cli_version      => 'v0.19.7',
   );
 
   # Upgrade an existing Cilium installation, keeping what it runs,
@@ -1358,14 +1512,14 @@ sub _write_helm_values {
   upgrade_cilium(
     distribution => 'rke2',
     kubeconfig   => "$ENV{HOME}/.kube/mycluster.yaml",
-    version      => '1.17.0',
+    version      => '1.20.0',
     wait         => 1,
   );
 
   # Only move the Gateway API CRDs (restarts cilium-operator if applied)
   ensure_gateway_api_crds(
     kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
-    version    => 'v1.2.0',
+    version    => 'v1.6.1',
   );
 
 =head1 DESCRIPTION
@@ -1423,9 +1577,12 @@ L</install_cilium>).
 =head2 Default versions
 
 The module ships with pinned defaults for reproducibility:
-Cilium C<1.17.0> and Cilium CLI C<v0.16.23>. Override with the
-C<version> and C<cli_version> options. The Gateway API version has no
-default; see C<gateway_api_version>.
+Cilium C<1.20.0> and Cilium CLI C<v0.19.7>, the pair kubernetes-ocp runs.
+Override with the C<version> and C<cli_version> options. The default
+version is that of a fresh install: a running Cilium of another minor
+version keeps its own (see C<version> in L</install_cilium>). The Gateway
+API version has no default; see C<gateway_api_version> (v1.6.1 or newer
+for Cilium 1.20).
 
 =head1 SEE ALSO
 

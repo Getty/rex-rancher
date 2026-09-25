@@ -1,6 +1,14 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - Cilium defaults to 1.20.0 with CLI v0.19.7 (was 1.17.0 / v0.16.23),
+    the pair kubernetes-ocp runs; Cilium 1.17 is not tested on Kubernetes
+    1.33+. 1.20 needs Linux 5.10+ (RHEL 8.10: 4.18) and, with gateway_api,
+    gateway_api_version v1.6.1+ (older dies before the host is touched).
+    Cilium moves one minor at a time: with kubeconfig, a version more than
+    one minor from the running Cilium dies before the host is touched, and
+    without version a running older minor keeps its version with a warning
+    (a re-run no longer takes 1.17 to 1.20, or pulls a newer one back).
   - install_cilium and upgrade_cilium with kubeconfig keep what a running
     Cilium uses: IPAM mode and pool from ConfigMap kube-system/cilium-config
     whenever it exists, whatever the Helm release state (an rke2 upgrade or

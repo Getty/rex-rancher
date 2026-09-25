@@ -45,7 +45,7 @@ our $run_hook;
   *Rex::Rancher::Cilium::run = sub {
     my ( $cmd ) = @_;
     push @cmds, $cmd;
-    if ( $cmd =~ /^cilium version --client/ ) { $? = 0; return 'cilium-cli: v0.16.23' }
+    if ( $cmd =~ /^cilium version --client/ ) { $? = 0; return 'cilium-cli: v0.19.7' }
     if ( $run_hook ) { my @r = $run_hook->( $cmd ); return $r[0] if @r }
     $? = 0;
     return '';
@@ -228,7 +228,7 @@ subtest 'option validation dies before touching the host' => sub {
 subtest 'cilium command lines' => sub {
   my $cmd = $C->can('_cilium_command');
   my $rke2 = $cmd->( 'install', $C->can('_resolve_opts')->( distribution => 'rke2' ), '/tmp/v.yaml' );
-  is( $rke2, 'KUBECONFIG=/etc/rancher/rke2/rke2.yaml cilium install --version 1.17.0 '
+  is( $rke2, 'KUBECONFIG=/etc/rancher/rke2/rke2.yaml cilium install --version 1.20.0 '
     .'--helm-values /tmp/v.yaml --set kubeProxyReplacement=true', 'rke2 install' );
   my $k3s = $cmd->( 'upgrade', $C->can('_resolve_opts')->( distribution => 'k3s',
     k8s_service_host => 'cp', version => '1.18.1' ), '/tmp/v.yaml' );
@@ -337,8 +337,8 @@ subtest 'with kubeconfig: existing release at the version is a noop' => sub {
 subtest 'with kubeconfig: other version upgrades' => sub {
   @cmds = ();
   $api = FakeAPI->new( secrets => [
-    helm_secret( revision => 1, status => 'deployed', chart_version => '1.16.5', config => $deployed_cfg ) ] );
-  install_cilium( distribution => 'rke2', kubeconfig => '/kc' );
+    helm_secret( revision => 1, status => 'deployed', chart_version => '1.19.8', config => $deployed_cfg ) ] );
+  install_cilium( distribution => 'rke2', kubeconfig => '/kc', version => '1.20.0' );
   is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'exactly one upgrade' );
 };
 
@@ -896,6 +896,140 @@ subtest 'ipam_mode (k64): the mode of a fresh install' => sub {
   is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['install'], 'fresh rke2: installed' );
   like( $files{'/tmp/cilium-values-rke2.yaml'}, qr/^  mode: cluster-pool$/m, 'on cluster-pool' );
   like( $files{'/tmp/cilium-values-rke2.yaml'}, qr{^    - 10\.42\.0\.0/16$}m, 'with cluster_cidr as its pool' );
+};
+
+# -----------------------------------------------------------------------------
+# k65: the default Cilium is 1.20.0 (CLI v0.19.7); Cilium moves one minor at
+# a time, so the default never jumps or pulls back a running Cilium, and a
+# pinned version more than one minor away dies before the host is touched.
+# -----------------------------------------------------------------------------
+
+subtest 'version skew against a running Cilium (k65)' => sub {
+  my $o = $C->can('_resolve_opts')->( distribution => 'rke2' );
+  is( $o->{version}, '1.20.0', 'default Cilium 1.20.0' );
+  is( $o->{cli_version}, 'v0.19.7', 'default CLI v0.19.7' );
+
+  my @warn;
+  no warnings 'redefine';
+  local *Rex::Logger::info = sub { push @warn, $_[0] if ( $_[1] // '' ) eq 'warn' };
+  use warnings 'redefine';
+
+  my $settle = sub {
+    my ( $running, $version, $pinned ) = @_;
+    my $x = { version => $version, version_pinned => $pinned };
+    $C->can('_settle_version')->( $x, $running );
+    return $x->{version};
+  };
+  for my $case (
+    # running,  version,  pinned, result,    warns
+    [ undef,    '1.20.0', 0, '1.20.0', 0, 'nothing running: the default' ],
+    [ 'latest', '1.20.0', 0, '1.20.0', 0, 'unreadable running version: no check' ],
+    [ '1.20.0', '1.20.0', 0, '1.20.0', 0, 'the same' ],
+    [ '1.20.0', '1.20.3', 0, '1.20.3', 0, 'default a newer patch: taken' ],
+    [ '1.19.8', '1.20.0', 0, '1.19.8', 1, 'default one minor newer: running kept, warned' ],
+    [ '1.17.0', '1.20.0', 0, '1.17.0', 1, 'default three minors newer: running kept, warned' ],
+    [ '1.20.2', '1.20.0', 0, '1.20.2', 0, 'running a newer patch: kept' ],
+    [ '1.21.0', '1.20.0', 0, '1.21.0', 0, 'running a newer minor: kept' ],
+    [ 'v1.17.0', '1.20.0', 0, '1.17.0', 1, 'leading v on the running version' ],
+    [ '1.17.0', '1.18.0', 1, '1.18.0', 0, 'pinned next minor: taken' ],
+    [ '1.20.0', '1.19.8', 1, '1.19.8', 0, 'pinned previous minor (rollback): taken' ],
+    [ '1.20.0', '1.20.0', 1, '1.20.0', 0, 'pinned the same' ],
+  ) {
+    my ( $run, $ver, $pin, $res, $warns, $name ) = @$case;
+    @warn = ();
+    is( $settle->( $run, $ver, $pin ), $res, $name );
+    is( scalar @warn, $warns, $name.': '.$warns.' warning(s)' );
+  }
+  like( do { @warn = (); $settle->( '1.17.0', '1.20.0', 0 ); $warn[0] },
+    qr/^Cilium runs 1\.17\.0; the default 1\.20\.0 is a newer minor version .*Keeping 1\.17\.0; pass version \(cilium_version\)/s,
+    'the warning names both and the way out' );
+
+  eval { $settle->( '1.17.0', '1.20.0', 1 ) };
+  like( $@, qr/Cilium runs 1\.17\.0, version 1\.20\.0 is more than one minor version away.*latest 1\.18\.x first/s,
+    'pinned three minors up: dies naming the next step' );
+  eval { $settle->( '1.18.3', '1.16.0', 1 ) };
+  like( $@, qr/latest 1\.17\.x first/, 'pinned two minors down: dies naming the step' );
+  eval { $settle->( '1.20.0', '2.0.0', 1 ) };
+  like( $@, qr/more than one minor version away/, 'another major: dies' );
+
+  my $dsv = $C->can('_daemonset_version');
+  my $ds_image = sub {
+    $k8s->struct_to_object( { apiVersion => 'apps/v1', kind => 'DaemonSet',
+      metadata => { name => 'cilium', namespace => 'kube-system' },
+      spec => { selector => {}, template => { spec => { containers => [
+        { name => 'cilium-agent', image => $_[0] } ] } } } } );
+  };
+  is( $dsv->( $ds_image->('quay.io/cilium/cilium:v1.17.0@sha256:abc') ), '1.17.0', 'tag with digest' );
+  is( $dsv->( $ds_image->('mirror.lan:5000/cilium/cilium:v1.18.2') ), '1.18.2', 'mirror with a port' );
+  is( $dsv->( $ds_image->('quay.io/cilium/cilium@sha256:abc') ), undef, 'digest only: unknown' );
+  is( $dsv->( $ds_image->('quay.io/cilium/cilium:latest') ), undef, 'latest: unknown' );
+
+  my $rel = sub { $C->can('_release_from_secrets')->( [ helm_secret( revision => 1, chart_version => '1.17.0', @_ ) ] ) };
+  $api = FakeAPI->new( objects => { 'DaemonSet/cilium' => $ds_image->('quay.io/cilium/cilium:v1.18.1') } );
+  is( $C->can('_read_running')->( $api, $rel->( status => 'deployed' ) )->{version}, '1.18.1',
+    'the agents\' image wins over the release' );
+  $api = FakeAPI->new;
+  is( $C->can('_read_running')->( $api, $rel->( status => 'deployed' ) )->{version}, '1.17.0',
+    'no DaemonSet: the deployed chart' );
+  is( $C->can('_read_running')->( $api, $rel->( status => 'failed' ) )->{version}, undef,
+    'a failed release names no running version' );
+
+  # End to end on a cluster deployed with the old default.
+  my $old = sub { FakeAPI->new( secrets => [
+    helm_secret( revision => 1, status => 'deployed', chart_version => '1.17.0', config => $deployed_cfg ) ] ) };
+
+  @cmds = (); @warn = ();
+  $api = $old->();
+  install_cilium( distribution => 'rke2', kubeconfig => '/kc' );
+  is( scalar cilium_cmds(), 0, 'install_cilium re-run without version on 1.17: left alone' );
+  ok( grep( { /Keeping 1\.17\.0/ } @warn ), 'with the warning' );
+
+  @cmds = ();
+  $api = $old->();
+  upgrade_cilium( distribution => 'rke2', kubeconfig => '/kc' );
+  is_deeply( [ map { /cilium upgrade --version (\S+)/ } @cmds ], ['1.17.0'],
+    'upgrade_cilium without version: stays on 1.17.0' );
+
+  @cmds = ();
+  $api = $old->();
+  install_cilium( distribution => 'rke2', kubeconfig => '/kc', version => '1.18.0' );
+  ok( grep( { /cilium upgrade --version 1\.18\.0 / } @cmds ), 'pinned next minor: upgraded' );
+
+  for my $fn ( \&install_cilium, \&upgrade_cilium ) {
+    @cmds = (); %files = ();
+    $api = $old->();
+    eval { $fn->( distribution => 'rke2', kubeconfig => '/kc', version => '1.20.0' ) };
+    like( $@, qr/runs 1\.17\.0, version 1\.20\.0 is more than one minor/, 'pinned 1.17 -> 1.20: dies' );
+    is_deeply( \@cmds, [], 'before anything ran on the host' );
+    is_deeply( \%files, {}, 'no values file written' );
+  }
+};
+
+subtest 'Gateway API bundle for Cilium 1.20 (k65)' => sub {
+  my %gw = ( distribution => 'rke2', kubeconfig => '/kc', gateway_api => 1 );
+  eval { $C->can('_resolve_opts')->( %gw, version => '1.20.0', gateway_api_version => 'v1.2.0' ) };
+  like( $@, qr/Cilium 1\.20\.0 needs Gateway API v1\.6\.1 or newer.*gateway_api_version is v1\.2\.0/s,
+    'pinned 1.20 + v1.2.0: dies in option resolution' );
+  ok( eval { $C->can('_resolve_opts')->( %gw, version => '1.20.0', gateway_api_version => 'v1.6.1' ); 1 },
+    '1.20 + v1.6.1: fine' ) or diag $@;
+  ok( eval { $C->can('_resolve_opts')->( %gw, version => '1.17.0', gateway_api_version => 'v1.2.0' ); 1 },
+    '1.17 + v1.2.0: fine' ) or diag $@;
+  ok( eval { $C->can('_resolve_opts')->( %gw, gateway_api_version => 'v1.2.0' ); 1 },
+    'default version: not yet, a running Cilium may keep an older one' ) or diag $@;
+
+  @cmds = ();
+  $api = FakeAPI->new;
+  eval { install_cilium( %gw, gateway_api_version => 'v1.2.0' ) };
+  like( $@, qr/Cilium 1\.20\.0 needs Gateway API v1\.6\.1/, 'fresh cluster, default 1.20 + v1.2.0: dies' );
+  is_deeply( \@cmds, [], 'before anything ran on the host' );
+
+  my $check = $C->can('_check_gateway_api_version');
+  ok( eval { $check->( { gateway_api => 1, version => '1.17.0', gateway_api_version => 'v1.2.0' } ); 1 },
+    'the default kept at a running 1.17: v1.2.0 fine' );
+  ok( eval { $check->( { gateway_api => 0, version => '1.20.0', gateway_api_version => undef } ); 1 },
+    'without gateway_api: no check' );
+  ok( eval { $check->( { gateway_api => 1, version => '1.21.0', gateway_api_version => 'v1.7.0' } ); 1 },
+    'newer both: fine' );
 };
 
 # -----------------------------------------------------------------------------

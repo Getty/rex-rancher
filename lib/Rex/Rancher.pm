@@ -277,8 +277,8 @@ and C<disable-kube-proxy: true>; K3s: C<flannel-backend: none>,
 C<disable-network-policy: true>, C<disable-kube-proxy: true> and
 C<cluster-cidr: 10.42.0.0/16>) and Cilium is installed in step 5 with
 kube-proxy replacement. K3s carries the configuration kubernetes-ocp
-verified live, but has not been run live through Rex::Rancher, which
-defaults to an older Cilium (see L<Rex::Rancher::Cilium>). Set to
+verified live, with the Cilium version Rex::Rancher defaults to (see
+L<Rex::Rancher::Cilium>), but has not been run live through Rex::Rancher. Set to
 C<0> and Rex::Rancher does nothing CNI-related: the distribution's built-in
 CNI comes up (Canal for RKE2, Flannel for K3s) and the pipeline skips
 L<Rex::Rancher::Cilium/install_cilium> entirely. Passing
@@ -289,7 +289,11 @@ C<cilium =E<gt> 0> dies before the node is touched.
 =item C<cilium_version>, C<cilium_cli_version>, C<cilium_helm_values>
 
 Passed to L<Rex::Rancher::Cilium/install_cilium> as C<version>,
-C<cli_version> and C<helm_values>.
+C<cli_version> and C<helm_values>. Without C<cilium_version> a fresh
+cluster gets Cilium C<1.20.0>, while a re-run keeps a running Cilium of
+another minor version (with a warning when it is older); a
+C<cilium_version> more than one minor away from the running one dies
+before Cilium is touched.
 
 =item C<k8s_service_host>
 
