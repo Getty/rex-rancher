@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-09-25T04:31:31Z
+claimed_by: worker-refactor
+class: standard
+created: 2026-09-25T03:29:52Z
+id: 48
+priority: medium
+started: 2026-09-25T04:08:09Z
+status: review
+title: 'Refactor: Distribution-Objekt statt Querzugriffe auf private Server-Funktionen'
+updated: 2026-09-25T04:31:31Z
+---
+
+Module rufen gegenseitig private Funktionen vollqualifiziert auf: Agent.pm:138-255 (Rex::Rancher::Server::_install_method, _nvidia_runtime_path, _verify_installed_version, _write_secret_file, _generate_registries_yaml, _fetch_artifacts, _wait_for_service), Rancher.pm:330 (Cilium::_resolve_opts), Rancher.pm:615 (Server::_paths('rke2')->{disable}). _paths($distribution) ist faktisch ein Objekt als Hash.
+
+Ziel: Rex::Rancher::Distribution (Moo) mit rke2/k3s-Subklassen: Pfade, service, install URL/method, wait_for_service(hint => ...), config/registries schreiben etc. als Methoden. Server.pm/Agent.pm/Rancher.pm arbeiten mit der Instanz; rke2 und k3s koennen nicht mehr halb geaendert werden. Oeffentliche Rex-API (exportierte Funktionen rancher_deploy_*, install_*, prepare_node, install_cilium) bleibt funktional — das ist Rex-Konvention. Rex::Logger::info und Rex-DSL (run/pkg/host_entry) bleiben Funktionen (keine Objekt-API).
+
+Nach #41/#43/#44 angehen (die fassen dieselben Stellen an; #44 fuegt hint an _wait_for_service hinzu). Kein Verhaltenswechsel; Pipeline-Reihenfolge und auto_die-Stellen unveraendert. Braucht Live-Lauf rke2 + k3s (eg/hetzner-gpu.Rexfile).
+
+Commits 2f9598f b9bf6d3 3389279 7ea14de. Moo Rex::Rancher::Distribution + ::RKE2/::K3s (role server|agent). Cross-module private calls: 0. Fake-host trace over 93 scenarios byte-identical before/after (scratchpad trace.pl). die "...\n" kept instead of croak to keep messages identical. cpanfile + Moo, namespace::autoclean. Live-only: full rke2+k3s run.
