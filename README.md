@@ -100,6 +100,26 @@ before 'ALL' => sub {
 };
 ```
 
+## Examples
+
+- [`eg/hetzner-gpu.Rexfile`](eg/hetzner-gpu.Rexfile) — single-node RKE2 with
+  GPU on a Hetzner dedicated server.
+- [`eg/lan.Rexfile`](eg/lan.Rexfile) — a test node on the local network:
+  RKE2 or K3s (`LAN_DIST`), GPU optional (`LAN_GPU=1`), the LAN address as
+  `tls_san`, and optionally a second host joining as agent. Its tasks follow a
+  live test plan: `deploy`, `rerun` (same options again, compares the service
+  before and after), `cilium_upgrade` (through the saved kubeconfig) and
+  `check`, which prints the control points — node state and
+  `nvidia.com/gpu` through the kubeconfig, `--version`, `systemctl
+  is-active`, `nvidia-smi` and the containerd drop-in on the host. All
+  settings are `LAN_*` environment variables, listed at the top of the file:
+
+  ```
+  rex -f eg/lan.Rexfile -H 192.0.2.10 deploy
+  LAN_DIST=k3s LAN_GPU=1 rex -f eg/lan.Rexfile -H 192.0.2.10 deploy
+  LAN_SERVER=192.0.2.10 rex -f eg/lan.Rexfile -H 192.0.2.11 join_agent
+  ```
+
 ## Installation
 
 ```
