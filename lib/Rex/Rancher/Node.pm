@@ -37,13 +37,22 @@ timers bring them back on schedule, C<unattended-upgrades> at the next boot.
 
 =item * Set hostname via C<hostnamectl> or C</etc/hostname> (optional)
 
-=item * Add FQDN entry to C</etc/hosts> (when both C<hostname> and C<domain> given)
+=item * Add a C<127.0.1.1> entry to C</etc/hosts> when C<hostname> is given:
+C<FQDN hostname> with a C<domain>, C<hostname> alone without one (then only
+if no line in C</etc/hosts> names the host yet)
 
 =item * Set timezone via C<timedatectl> or symlink (default: C<UTC>)
 
-=item * Set locale via C<localectl> or C</etc/default/locale> (default: C<en_US.UTF-8>)
+=item * Set locale via C<localectl> or C</etc/default/locale> (default: C<en_US.UTF-8>).
+On Debian/Ubuntu the locale is first enabled in C</etc/locale.gen> and
+generated with C<locale-gen> (skipped for C<C>/C<POSIX> and when
+C<locale-gen> is not installed)
 
-=item * Install and start C<chrony> for NTP synchronisation (default: enabled)
+=item * NTP (default: enabled): nothing is installed when C<timedatectl>
+already reports the clock as NTP-synchronized; otherwise C<chrony> is
+installed and started. If the C<chrony> install fails, C<systemd-timesyncd>
+is started instead, and C<prepare_node> dies only when that is not active
+either
 
 =item * Disable and remove swap entries from C</etc/fstab>
 
@@ -61,11 +70,12 @@ then apply with C<sysctl --system>
     domain   => 'k8s.local',      # optional — domain suffix for FQDN
     timezone => 'Europe/Berlin',  # optional, default: UTC
     locale   => 'en_US.UTF-8',    # optional, default: en_US.UTF-8
-    ntp      => 1,                 # optional, default: 1 (enable chrony)
+    ntp      => 1,                 # optional, default: 1 (ensure NTP sync)
   );
 
-If C<hostname> is provided without C<domain>, the hostname is still set
-but no C</etc/hosts> entry is written.
+If C<hostname> is provided without C<domain>, C</etc/hosts> gets
+C<127.0.1.1 hostname> unless a line already names the host (e.g. the public
+IP the provider wrote), which is then left alone.
 
 =cut
 
@@ -125,11 +135,25 @@ sub _set_hostname {
 
 sub _set_hosts_entry {
   my ($hostname, $fqdn) = @_;
-  Rex::Logger::info("Configuring /etc/hosts for $fqdn");
-  host_entry $fqdn,
-    ensure  => "present",
-    ip      => "127.0.1.1",
-    aliases => [$hostname];
+  if ($fqdn) {
+    Rex::Logger::info("Configuring /etc/hosts for $fqdn");
+    host_entry $fqdn,
+      ensure  => "present",
+      ip      => "127.0.1.1",
+      aliases => [$hostname];
+    return;
+  }
+  # Without a domain only add a missing name: host_entry replaces every line
+  # naming the host -- the provider's public-IP line, or a
+  # "127.0.0.1 localhost <hostname>" line and localhost with it.
+  if (get_host($hostname)) {
+    Rex::Logger::info("/etc/hosts already names $hostname, leaving it");
+    return;
+  }
+  Rex::Logger::info("Configuring /etc/hosts for $hostname");
+  host_entry $hostname,
+    ensure => "present",
+    ip     => "127.0.1.1";
 }
 
 sub _set_timezone {
@@ -147,6 +171,8 @@ sub _set_timezone {
 sub _set_locale {
   my ($locale) = @_;
   Rex::Logger::info("Setting locale to $locale");
+  # Generate first: localectl refuses a locale that is not installed.
+  _generate_locale($locale) if is_debian();
   if (can_run("localectl")) {
     run "localectl set-locale LANG=$locale", auto_die => 0;
   }
@@ -155,11 +181,54 @@ sub _set_locale {
   }
 }
 
+# Debian/Ubuntu only. Debian's locale-gen ignores its arguments and builds
+# what /etc/locale.gen enables, Ubuntu's generates the locale it is given;
+# enabling the line and naming the locale covers both.
+sub _generate_locale {
+  my ($locale) = @_;
+  return if $locale =~ /^(?:C|POSIX)(?:\.|$)/;
+  unless (can_run("locale-gen")) {
+    Rex::Logger::info("locale-gen not installed, $locale is not generated", 'warn');
+    return;
+  }
+  my ($charset) = $locale =~ /\.([^.@]+)/;
+  run _enable_locale_cmd($locale.' '.$charset, '/etc/locale.gen'), auto_die => 0
+    if $charset;
+  run "locale-gen $locale", auto_die => 0;
+  Rex::Logger::info("locale-gen $locale failed", 'warn') if $? != 0;
+}
+
+# Uncomment "<locale> <charset>" in locale.gen, append it when absent.
+sub _enable_locale_cmd {
+  my ($line, $file) = @_;
+  (my $re = $line) =~ s/\./\\./g;
+  return 'if [ -f '.$file.' ]; then '
+    .q{sed -i -E 's/^#\s*(}.$re.q{)\s*$/\1/' }.$file.'; '
+    .q{grep -qE '^}.$re.q{\s*$' }.$file.q{ || echo '}.$line.q{' >> }.$file.'; fi';
+}
+
 sub _setup_ntp {
+  my $synced = run "timedatectl show --property=NTPSynchronized --value 2>/dev/null", auto_die => 0;
+  if (defined $synced && $synced =~ /^\s*yes\s*$/) {
+    Rex::Logger::info("Clock already NTP-synchronized, not installing chrony");
+    return;
+  }
+
   Rex::Logger::info("Installing and enabling chrony for NTP");
-  pkg ["chrony"], ensure => "present";
-  run "systemctl enable chronyd 2>/dev/null || systemctl enable chrony 2>/dev/null", auto_die => 0;
-  run "systemctl start chronyd 2>/dev/null || systemctl start chrony 2>/dev/null", auto_die => 0;
+  if (eval { pkg ["chrony"], ensure => "present"; 1 }) {
+    run "systemctl enable chronyd 2>/dev/null || systemctl enable chrony 2>/dev/null", auto_die => 0;
+    run "systemctl start chronyd 2>/dev/null || systemctl start chrony 2>/dev/null", auto_die => 0;
+    return;
+  }
+  my $err = $@;
+  chomp $err;
+  Rex::Logger::info("chrony install failed ($err), falling back to systemd-timesyncd", 'warn');
+
+  run "systemctl enable --now systemd-timesyncd 2>/dev/null", auto_die => 0;
+  my $active = run "systemctl is-active systemd-timesyncd 2>/dev/null", auto_die => 0;
+  die "No NTP: chrony install failed ($err) and systemd-timesyncd is not active\n"
+    unless defined $active && $active =~ /^\s*active\s*$/;
+  Rex::Logger::info("Using systemd-timesyncd for NTP");
 }
 
 sub _disable_swap {
@@ -233,7 +302,9 @@ bridged traffic; C<overlay> is required for containerd's overlay filesystem.
 required by Kubernetes networking and CNI plugins.
 
 =item * B<NTP> — Time skew between nodes causes certificate validation
-failures and etcd instability. C<chrony> is installed and started.
+failures and etcd instability. An already synchronized clock is left as it
+is; otherwise C<chrony> is installed and started, with C<systemd-timesyncd>
+as the fallback when that install fails.
 
 =back
 

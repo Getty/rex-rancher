@@ -22,6 +22,13 @@ Revision history for Rex-Rancher
   - install_agent's error for an agent that never gets active names the
     server it joins through ("It joins the cluster via ... -- check that
     this node can reach that address") above the journal tail.
+  - prepare_node leaves an already NTP-synchronized clock alone instead of
+    installing chrony; a failed chrony install falls back to
+    systemd-timesyncd and dies only when that is not active either.
+  - prepare_node with hostname but no domain writes 127.0.1.1 hostname to
+    /etc/hosts, unless a line already names the host.
+  - prepare_node on Debian/Ubuntu enables the locale in /etc/locale.gen and
+    runs locale-gen before setting it.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
