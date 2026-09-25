@@ -236,11 +236,14 @@ C<gateway_api> below). See L<Rex::Rancher::Server/install_server>.
 
 The pod network, one IPv4 CIDR, passed to
 L<Rex::Rancher::Server/install_server> (C<cluster-cidr> in C<config.yaml>,
-RKE2 and K3s) and to L<Rex::Rancher::Cilium/install_cilium>, which uses it as
-Cilium's cluster-pool. An invalid value dies before the node is touched.
-Default: as without it (K3s with Cilium C<10.42.0.0/16>, RKE2 its own
-default). An additional server joining with C<server> needs the same value.
-On an existing cluster it must match what runs: Cilium dies on another pool.
+RKE2 and K3s) and to L<Rex::Rancher::Cilium/install_cilium>, which writes it
+as Cilium's pool; that pool is used in C<cluster-pool> mode (K3s, or RKE2
+with that mode in C<cilium_helm_values>), while RKE2's default C<kubernetes>
+mode takes the node C<podCIDR>s cut from C<cluster-cidr>. An invalid value
+dies before the node is touched. Default: as without it (K3s with Cilium
+C<10.42.0.0/16>, RKE2 its own default). An additional server joining with
+C<server> needs the same value. On a cluster whose Cilium already runs
+C<cluster-pool> with another pool, that pool is kept, with a warning.
 
 =item C<node_labels>
 

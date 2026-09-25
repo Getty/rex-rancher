@@ -140,9 +140,9 @@ C<cilium>. Anything else (including a dual-stack list) dies before the host
 is touched. Every server of a cluster needs the same value (RKE2 refuses a
 joining server that differs), and it cannot be changed on a running cluster.
 L<Rex::Rancher::Cilium/install_cilium> takes the same value as Cilium's
-cluster-pool. Default: nothing written on RKE2 (RKE2's own default,
-C<10.42.0.0/16>, applies); on K3s with C<cilium> C<10.42.0.0/16> is written,
-without it nothing.
+pool, used in C<cluster-pool> mode (see there). Default: nothing written on
+RKE2 (RKE2's own default, C<10.42.0.0/16>, applies); on K3s with C<cilium>
+C<10.42.0.0/16> is written, without it nothing.
 
 =item C<node_labels>
 

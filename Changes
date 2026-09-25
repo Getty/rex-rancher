@@ -3,23 +3,30 @@ Revision history for Rex-Rancher
 {{$NEXT}}
   - install_cilium and upgrade_cilium with kubeconfig keep what a running
     Cilium uses: IPAM mode and pool from ConfigMap kube-system/cilium-config
-    (an rke2 upgrade no longer switches a cluster-pool cluster to kubernetes
-    IPAM), k8sServiceHost on k3s from the cilium DaemonSet (k8s_service_host
-    is then optional), operator.replicas from the release. A different mode
-    or pool asked for in helm_values dies before the host is touched.
+    whenever it exists, whatever the Helm release state (an rke2 upgrade or
+    a reinstall after a failed install no longer switches a cluster-pool
+    cluster to kubernetes IPAM), k8sServiceHost on k3s from the cilium
+    DaemonSet (k8s_service_host is then optional), operator.replicas from
+    the cilium-operator Deployment. A different mode or pool asked for in
+    helm_values dies before the host is touched; an API error other than a
+    404 while reading them dies instead of falling back to the defaults.
     upgrade_cilium requires kubeconfig and dies without it before the host
     is touched: the running IPAM mode and pool cannot be checked otherwise.
   - New wait and wait_duration (seconds, default 600) options for
     install_cilium/upgrade_cilium: wait until the cilium DaemonSet and
-    cilium-operator are ready, or die naming their state.
+    cilium-operator are ready, or die naming their state; an API error
+    other than a 404 (no access, no connection) dies at once.
   - New ensure_gateway_api_crds(kubeconfig, version, channel): apply only
     the Gateway API CRDs and restart cilium-operator when they changed.
   - New cluster_cidr option (one IPv4 CIDR) for install_server and
     rancher_deploy_server: written as cluster-cidr on rke2 and k3s, and
-    used by install_cilium (new option, passed through by
-    rancher_deploy_server) as Cilium's cluster-pool unless helm_values sets
-    one. Without it nothing changes: k3s keeps 10.42.0.0/16, rke2 writes
-    none.
+    handed to install_cilium (new option, passed through by
+    rancher_deploy_server) as Cilium's pool unless helm_values sets one.
+    The pool counts in cluster-pool mode (k3s, or rke2 with that mode in
+    helm_values); rke2's default kubernetes mode ignores it and pods follow
+    the node podCIDRs cut from cluster-cidr. It is the pool of a fresh
+    install: a running cluster-pool Cilium keeps its own, with a warning.
+    Without it nothing changes: k3s keeps 10.42.0.0/16, rke2 writes none.
   - install_agent's error for an agent that never gets active names the
     server it joins through ("It joins the cluster via ... -- check that
     this node can reach that address") above the journal tail.
