@@ -1,0 +1,16 @@
+---
+claimed_at: 2026-09-25T17:52:22Z
+claimed_by: worker-fixes2
+class: standard
+created: 2026-09-25T17:46:15Z
+id: 59
+priority: medium
+started: 2026-09-25T17:46:33Z
+status: review
+title: 'Cilium: restliche eval{get}/404-Regex-Stellen'
+updated: 2026-09-25T17:52:22Z
+---
+
+Aus #54-Nachlauf: _purge_release nutzt noch /\b404\b|not ?found/ beim delete; blanke eval { get } in _restart_operator (403 ueberspringt Restart still), Gateway-API-Probe in _ensure_gateway_api_crds (403 -> apply), _wait_crd_established. Auf _get_optional/_is_not_found umstellen.
+
+Commit 1c0ca22. _purge_release/_restart_operator/gateway probe/_wait_crd_established/_verify_daemonset on _is_not_found. Kept deliberately: cannot-re-use swallow, wait_for_api loop, device plugin already-exists, _decode_release. Note: 403 in _restart_operator now dies after CRDs+Cilium applied.
