@@ -1,0 +1,16 @@
+---
+claimed_at: 2026-09-25T22:49:35Z
+claimed_by: worker-cilium3
+class: standard
+created: 2026-09-25T22:24:55Z
+id: 65
+priority: medium
+started: 2026-09-25T22:36:43Z
+status: review
+title: Cilium-Default-Version 1.17.0 vs. OCP live 1.20.0 (k3s)
+updated: 2026-09-25T22:49:35Z
+---
+
+Aus #53-Vorbereitung: Rex::Rancher installiert standardmaessig Cilium 1.17.0 (install_server warnt auf k3s), kubernetes-ocp hat k3s live mit Cilium 1.20.0 verifiziert. Default-Version (und cilium-cli) anheben? Pruefen, welche Cilium-Version OCP aktuell pinnt und ob die Helm-Default-Values (KPR, IPAM) fuer 1.20 passen.
+
+Commit 8f8076a (+ eg fix 14ae067). Default Cilium 1.20.0 / cli v0.19.7 (OCP-verified pair; 1.17 untested on K8s 1.36). Minor-skew: pinned >1 minor dies; unpinned keeps running older minor with warning; running version from cilium-agent image tag. gateway_api_version >= v1.6.1 enforced for 1.20. Note: Cilium >=1.18 needs kernel >=5.10 (documented, not checked).
