@@ -78,7 +78,10 @@ Revision history for Rex-Rancher
     stable channel's, resolved on the host. The next minor is restarted
     onto only with version pinned; unpinned it is installed, but the
     running service is left on its old version with a warning. Before, an
-    unpinned re-run restarted k3s onto whatever the channel installed.
+    unpinned re-run restarted k3s onto whatever the channel installed. A
+    service that is not running is held to the same rules against the
+    installed rke2/k3s binary; there an unpinned next minor only warns, as
+    the service starts on it. No binary: a fresh install, not checked.
   - New kubeconfig option for install_agent (kubeconfig_file for
     rancher_deploy_agent): an agent of a newer minor than the control plane
     dies before it is installed. New control_plane_version(kubeconfig) in

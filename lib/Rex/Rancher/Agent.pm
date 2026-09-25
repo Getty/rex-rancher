@@ -67,7 +67,7 @@ The version skew rules of L<Rex::Rancher::Server/install_server>'s
 C<version> apply to a running agent the same way (a jump of more than one
 minor or a downgrade dies before anything is installed; the next minor
 without a pinned C<version> is installed but not restarted onto, with a
-warning). With C<kubeconfig>, the agent is also never brought to a newer
+warning), and to a stopped one against its installed binary. With C<kubeconfig>, the agent is also never brought to a newer
 minor than the control plane (see there).
 
 =item C<kubeconfig>

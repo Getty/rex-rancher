@@ -706,11 +706,19 @@ Against a running L</service> (its L</running_version>), a L</version_skew>
 of C<jump> or C<downgrade> dies. With C<server_version> (the control plane's
 version, for an agent), a version of a newer minor than it dies too.
 
-Nothing running and no C<server_version>: nothing to check, nothing asked
-beyond L</main_pid>. A channel that cannot be resolved, or a running
-version that cannot be read, is a warning, not a die: L</start_verb> checks
-the installed binary against the running one again before it restarts
-anything.
+When the L</service> is not running (stopped, crashed, never started), the
+reference is the L</installed_version> instead, the binary it would start
+on: C<jump> or C<downgrade> dies the same way, and C<minor> without
+C<version> warns that the service starts on the new minor (nothing holds a
+stopped service back once the installer replaced its binary). No binary
+there: a fresh install, nothing to check.
+
+Nothing to compare against and no C<server_version>: nothing asked beyond
+L</main_pid> and L</installed_version>. A channel that cannot be resolved,
+or a running version that cannot be read, is a warning, not a die: for a
+running service L</start_verb> checks the installed binary against the
+running one again before it restarts anything; a stopped one is not
+checked again.
 
 =cut
 
@@ -726,15 +734,24 @@ sub check_version_skew {
     . "for its version: the version skew is checked only after the install, "
     . "before $service is restarted", 'warn')
     if $pid && !defined $running;
-  return unless defined $running || defined $server;
+  # Not running (stopped, crashed, never started): the binary on disk is what
+  # the node last ran, and start_verb has nothing to hold back once the
+  # installer replaced it. No binary: a fresh install, nothing to check.
+  my $installed = $pid ? undef : $self->installed_version;
+  return unless defined $running || defined $installed || defined $server;
 
   my $target = $pinned;
   unless (defined $target && length $target) {
     $target = $self->channel_version;
     unless (defined $target) {
       Rex::Logger::info("Could not resolve the version " . $self->channel_url
-        . " would install: the version skew is checked only after the install, "
-        . "before $service is (re)started", 'warn');
+        . " would install: "
+        . ( defined $installed
+            ? "the version skew against the installed " . $self->binary . " $installed "
+              . "is not checked, and $service, which is not running, starts on "
+              . "whatever the install brings"
+            : "the version skew is checked only after the install, before $service "
+              . "is (re)started" ), 'warn');
       return;
     }
     Rex::Logger::info("version not pinned: the stable channel installs $target");
@@ -748,9 +765,32 @@ sub check_version_skew {
       . " Nothing was installed; $service keeps running $running.\n"
       if $skew eq 'jump' || $skew eq 'downgrade';
   }
+  elsif (defined $installed) {
+    $self->_check_installed_skew($installed, $target, $pinned);
+  }
 
   $self->check_agent_version($target, $server) if defined $server;
   return $target;
+}
+
+# The service is not running: against the binary it would have started on.
+sub _check_installed_skew {
+  my ( $self, $installed, $target, $pinned ) = @_;
+  my $service = $self->service;
+  my $binary  = $self->binary;
+  my $skew    = $self->version_skew($installed, $target) // '';
+  die "Refusing to install " . $self->name . " $target"
+    . ( $pinned ? '' : " (the stable channel's version; version is not pinned)" )
+    . ": $service is not running, and the installed $binary is $installed; "
+    . $self->_skew_rule($skew, $installed)
+    . " Nothing was installed; $binary $installed stays in place.\n"
+    if $skew eq 'jump' || $skew eq 'downgrade';
+  Rex::Logger::info("$service is not running, and the installed $binary is "
+    . "$installed: the stable channel's $target, a new minor version, is "
+    . "installed since version is not pinned, and $service starts on it. Pin "
+    . "version => '$installed' to stay on it", 'warn')
+    if $skew eq 'minor' && !$pinned;
+  return;
 }
 
 sub _skew_rule {

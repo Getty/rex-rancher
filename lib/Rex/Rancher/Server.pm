@@ -105,6 +105,15 @@ server is B<not> restarted and keeps its old version until its next start
 C<systemctl restart SERVICE>. Upgrade a cluster server by server, one minor
 at a time, then the agents.
 
+A server that is not running (stopped, crashed, never started) is held to
+the same rules against the installed binary (C<rke2 --version> /
+C<k3s --version>), the version it would start on: a jump or a downgrade dies
+before anything is installed, and the next minor without C<version> is
+installed with a warning, since nothing holds a stopped service back from
+starting on it. No binary on the host is a fresh install and is not
+checked. If the stable channel cannot be resolved there, only a warning
+says the skew is not checked.
+
 =item C<install_method>
 
 How the distribution gets onto the host. C<script> (default) pipes the

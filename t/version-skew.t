@@ -134,8 +134,9 @@ my $k3s  = $D->new_for('k3s');
 
 subtest 'check_version_skew: before the install' => sub {
   reset_host( pid => 0 );
-  is( scalar $rke2->check_version_skew, undef, 'not running: nothing to check' );
-  is_deeply( \@log, [ 'systemctl show -p MainPID rke2-server 2>/dev/null' ], 'only MainPID asked, no channel' );
+  is( scalar $rke2->check_version_skew, undef, 'not running, no binary: fresh, nothing to check' );
+  is_deeply( \@log, [ 'systemctl show -p MainPID rke2-server 2>/dev/null', 'rke2 --version 2>&1' ],
+    'only MainPID and the binary asked, no channel' );
 
   for my $c (
     [ 'v1.30.5+rke2r1', 'patch' ], [ 'v1.31.2+rke2r1', 'next minor' ], [ 'v1.30.4+rke2r1', 'same' ],
@@ -178,6 +179,58 @@ subtest 'check_version_skew: before the install' => sub {
   reset_host( pid => 7, running => 'v1.30.4+k3s1' );
   ok( !eval { $k3s->check_version_skew( version => 'v1.32.0+k3s1' ); 1 }, 'k3s: the same rule' );
   like( $@, qr/^Refusing to install k3s v1\.32\.0\+k3s1: k3s runs v1\.30\.4\+k3s1/, 'k3s message' );
+};
+
+# k63: a stopped service (crashed node, re-run) is checked against the
+# binary on disk: after the install nothing is left to compare with.
+subtest 'check_version_skew: a stopped service, against the installed binary' => sub {
+  for my $c ( [ $rke2, 'rke2-server', 'rke2', '+rke2r1' ], [ $k3s, 'k3s', 'k3s', '+k3s1' ] ) {
+    my ( $d, $svc, $bin, $r ) = @$c;
+
+    reset_host( pid => 0, installed => "v1.30.4$r" );
+    ok( !eval { $d->check_version_skew( version => "v1.32.1$r" ); 1 }, "$bin: pinned jump: dies" );
+    is( $@, "Refusing to install $bin v1.32.1$r: $svc is not running, and the installed $bin is "
+      . "v1.30.4$r; that skips a minor version: Kubernetes' version skew policy moves a node one "
+      . "minor version at a time. Upgrade to a v1.31 release first (pin version). Nothing was "
+      . "installed; $bin v1.30.4$r stays in place.\n", "$bin: message" );
+    ok( !( grep { /^\/proc\// } @log ), "$bin: no process asked" );
+
+    reset_host( pid => 0, installed => "v1.30.4$r" );
+    ok( !eval { $d->check_version_skew( version => "v1.29.9$r" ); 1 }, "$bin: pinned downgrade: dies" );
+    like( $@, qr/^Refusing to install \Q$bin\E v1\.29\.9.*that is a downgrade/, "$bin: downgrade message" );
+
+    reset_host( pid => 0, installed => "v1.30.4$r", channel => ( $bin eq 'k3s' ? $CH_K3S : $CH_RKE2 )."v1.36.4$r" );
+    ok( !eval { $d->check_version_skew; 1 }, "$bin: unpinned, channel six minors ahead: dies" );
+    like( $@, qr/^Refusing to install \Q$bin\E v1\.36\.4\S+ \(the stable channel's version; version is not pinned\): \Q$svc\E is not running/,
+      "$bin: says it is the channel" );
+
+    reset_host( pid => 0, installed => "v1.35.2$r", channel => ( $bin eq 'k3s' ? $CH_K3S : $CH_RKE2 )."v1.36.4$r" );
+    is( $d->check_version_skew, "v1.36.4$r", "$bin: unpinned next minor: allowed" );
+    is( scalar @warn, 1, "$bin: with one warning" );
+    like( $warn[0], qr/^\Q$svc\E is not running, and the installed \Q$bin\E is v1\.35\.2\S+: the stable channel's v1\.36\.4\S+, a new minor version, is installed since version is not pinned, and \Q$svc\E starts on it\. Pin version => 'v1\.35\.2\S+' to stay on it$/,
+      "$bin: the warning" );
+
+    for my $v ( "v1.31.0$r", "v1.30.9$r", "v1.30.4$r" ) {
+      reset_host( pid => 0, installed => "v1.30.4$r" );
+      is( $d->check_version_skew( version => $v ), $v, "$bin: pinned $v: allowed" );
+      is_deeply( \@warn, [], "$bin: pinned $v: no warning" );
+    }
+
+    reset_host( pid => 0, installed => "v1.30.4$r" );
+    is( scalar $d->check_version_skew, undef, "$bin: channel unresolved: no die" );
+    like( $warn[0], qr/the version skew against the installed \Q$bin\E v1\.30\.4\S+ is not checked, and \Q$svc\E, which is not running, starts on whatever the install brings$/,
+      "$bin: a warning that says it is not checked at all" );
+  }
+
+  reset_host( pid => 0, installed => 'v1.30.4+rke2r1' );
+  ok( !eval { install_server( token => 't', version => 'v1.32.1+rke2r1' ); 1 }, 'install_server: dies' );
+  is_deeply( [ installed_anything() ], [], 'nothing written or installed' );
+
+  reset_host( pid => 0, installed => 'v1.30.4+k3s1' );
+  ok( !eval { install_agent( distribution => 'k3s', server => 'https://cp:6443', token => 't',
+    version => 'v1.28.1+k3s1' ); 1 }, 'install_agent: dies' );
+  like( $@, qr/^Refusing to install k3s v1\.28\.1\+k3s1: k3s-agent\.service is not running/, 'the agent unit' );
+  is_deeply( [ installed_anything() ], [], 'nothing written or installed' );
 };
 
 subtest 'install_server refuses before it writes or installs anything' => sub {
