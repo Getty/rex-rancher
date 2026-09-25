@@ -110,6 +110,8 @@ concurrency requirement).
 
 After applying, polls up to 24 times (2-minute timeout) for
 C<nvidia.com/gpu> capacity to appear in any node's C<status.capacity>.
+When it does not, a warning says so (no die), naming the API error of the
+last attempt if that one failed (a 403, no connection).
 
 Required options:
 
@@ -342,6 +344,9 @@ sub _nvidia_device_plugin_daemonset_spec {
 sub _wait_for_gpu_resource {
   my ($api) = @_;
 
+  # The error of the last attempt, if it failed: a 403 or a dead API reads
+  # the same as a plugin that has not reported yet until the warning names it.
+  my $last_error;
   for my $i (1..24) {
     my $found = eval {
       my $nodes = $api->list('Node');
@@ -356,12 +361,14 @@ sub _wait_for_gpu_resource {
       }
       0;
     };
+    $last_error = $@ ? ( $@ =~ s/\s+\z//r ) : undef;
     return 1 if $found;  # exit the sub once GPU capacity is confirmed
     Rex::Logger::info("  No GPU capacity yet ($i/24), waiting...");
     sleep 5;
   }
 
-  Rex::Logger::info("  nvidia.com/gpu resource did not appear — check device plugin", "warn");
+  Rex::Logger::info("  nvidia.com/gpu resource did not appear — check device plugin"
+    . ( defined $last_error ? " (last API error: $last_error)" : '' ), "warn");
   return 0;
 }
 

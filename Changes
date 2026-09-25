@@ -86,6 +86,9 @@ Revision history for Rex-Rancher
     rancher_deploy_agent): an agent of a newer minor than the control plane
     dies before it is installed. New control_plane_version(kubeconfig) in
     Rex::Rancher::K8s.
+  - deploy_nvidia_device_plugin's warning when no nvidia.com/gpu capacity
+    appears within two minutes names the API error of the last attempt (a
+    403, no connection) instead of only "check device plugin".
   - Internal: what RKE2 and K3s differ in (paths, units, installer, release
     artifacts) and the host steps server and agent share moved into the new
     Rex::Rancher::Distribution with ::RKE2 and ::K3s (new dependencies Moo
