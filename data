@@ -1,0 +1,23 @@
+---
+claimed_at: 2026-09-25T19:49:07Z
+claimed_by: worker-skew
+class: standard
+created: 2026-09-25T17:36:28Z
+id: 56
+priority: high
+started: 2026-09-25T19:37:25Z
+status: review
+title: 'restart_reasons: Toolkit-Upgrade und ungepinnte rke2-Version loesen Control-Plane-Restart
+  aus'
+updated: 2026-09-25T19:49:07Z
+---
+
+Aus Code-Review 2026-09-25 (#49):
+1. ctime-Check auf nvidia-container-runtime startet rke2 nach jedem Toolkit-Paket-Upgrade neu. containerd ruft die Runtime pro Container-Create auf; ein Binary-Upgrade braucht keinen containerd-Restart, nur die Registrierung (Drop-in/Config) -> ctime-Trigger streichen.
+2. Ohne version installiert curl|sh die neueste rke2; restart_reasons sieht den Versionsunterschied und startet einen laufenden Control-Plane neu = stilles Upgrade durch blossen Re-Run. Maintainer-Entscheidung offen: ohne Pin Binary-Aenderung nur warnen (kein Restart) vs. restart.
+
+Point 1 done in 295a45b (runtime ctime trigger removed). Point 2 (unpinned version) awaits maintainer.
+
+Maintainer-Entscheidung 2026-09-25 (Punkt 2): Binary-Version != laufende Version: gleiche Minor (Patch-Update) -> restart, egal ob gepinnt. +1 Minor -> restart nur mit explizit gepinnter version, ohne Pin laut warnen (kein Restart). >1 Minor-Sprung oder Downgrade -> abbrechen BEVOR installiert wird. Agent nie auf neuere Minor als die Server (pruefbar nur mit kubeconfig, in rancher_deploy_agent optional). Grund: K8s-Skew-Policy (Server 1 Minor/Schritt, Server vor Agents, kubelet nie neuer als apiserver, kein Downgrade). KillMode=process: Pods ueberleben restart. Langfristig: system-upgrade-controller (eigenes Ticket).
+
+Point 2 done in 3cdd6d2 (+ POD fix 110346d). Target version unpinned via channel redirect on host (update.rke2.io / update.k3s.io); checked before install and again against installed binary before restart. Any downgrade (incl. patch) aborts. Agent: new kubeconfig option, control_plane_version = lowest control-plane kubelet. Pushed.
