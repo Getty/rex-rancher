@@ -132,10 +132,11 @@ The directory holding the generated containerd C<config.toml>.
 
 =method server_service
 
+The server's systemd unit: C<rke2-server> / C<k3s>.
+
 =method agent_service
 
-The systemd units: C<rke2-server> / C<rke2-agent.service>, C<k3s> /
-C<k3s-agent.service>.
+The agent's systemd unit: C<rke2-agent.service> / C<k3s-agent.service>.
 
 =method env_file
 
@@ -195,9 +196,11 @@ sub service {
 
 =method config_file
 
+C<config.yaml> in L</config_dir>.
+
 =method registries_file
 
-C<config.yaml> and C<registries.yaml> in L</config_dir>.
+C<registries.yaml> in L</config_dir>.
 
 =cut
 
@@ -206,11 +209,13 @@ sub registries_file { $_[0]->config_dir.'/registries.yaml' }
 
 =method cni_bin_dir
 
+Where the kubelet of either distribution looks for CNI binaries once its
+own CNI is off, C</opt/cni/bin>: Cilium's C<cni.binPath>.
+
 =method cni_conf_dir
 
-Where the kubelet of either distribution looks for CNI binaries and
-configuration once its own CNI is off (C</opt/cni/bin>, C</etc/cni/net.d>):
-Cilium's C<cni.binPath> and C<cni.confPath>.
+Where it looks for CNI configuration, C</etc/cni/net.d>: Cilium's
+C<cni.confPath>.
 
 =cut
 
