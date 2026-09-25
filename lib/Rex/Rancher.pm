@@ -138,8 +138,8 @@ hostname is left unchanged.
 =item C<domain>
 
 Domain suffix for the FQDN (optional). Used together with C<hostname> to
-set C</etc/hosts>. If C<hostname> is given without C<domain>, hostname is
-still set but no hosts entry is written.
+set C</etc/hosts>. If C<hostname> is given without C<domain>, C</etc/hosts>
+gets C<127.0.1.1 hostname> unless a line already names the host.
 
 =item C<timezone>
 
