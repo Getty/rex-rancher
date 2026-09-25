@@ -9,7 +9,8 @@ use Test::More;
 # k3s: the install script runs with INSTALL_K3S_SKIP_START, since its own
 # `systemctl restart` of the Type=notify k3s unit blocks until k3s is up,
 # forever for an HA join that cannot reach its first server; k3s.service is
-# then restarted with --no-block (a re-run picks up a new binary and
+# then (after the version skew check of a running k3s, t/version-skew.t)
+# restarted with --no-block (a re-run picks up a new binary and
 # config.yaml) and polled by the bounded wait_for_service, like the agents
 # (t/agent-start.t).
 #
@@ -46,6 +47,7 @@ my %expect = (
             'systemctl is-active rke2-server' ],
   k3s  => [ 'curl -sfL https://get.k3s.io | K3S_URL=https://cp1:6443 INSTALL_K3S_SKIP_START=true sh -s - server --write-kubeconfig-mode=644',
             'systemctl enable k3s',
+            'systemctl show -p MainPID k3s 2>/dev/null',
             'systemctl restart --no-block k3s',
             'systemctl is-active k3s' ],
 );

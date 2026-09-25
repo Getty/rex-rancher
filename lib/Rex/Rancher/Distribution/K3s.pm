@@ -14,6 +14,7 @@ sub name                 { 'k3s' }
 sub label                { 'K3s' }
 sub config_dir           { '/etc/rancher/k3s' }
 sub install_url          { 'https://get.k3s.io' }
+sub channel_url          { 'https://update.k3s.io/v1-release/channels/stable' }
 sub kubeconfig           { '/etc/rancher/k3s/k3s.yaml' }
 sub token_file           { '/var/lib/rancher/k3s/server/node-token' }
 sub server_token         { '/var/lib/rancher/k3s/server/token' }
@@ -120,6 +121,9 @@ C<--no-block> and waited on instead) and C<K3S_URL> for a join, release
 binaries C<k3s> / C<k3s-ARCH>. The service is restarted on every run: the
 install script rewrites its unit and C<k3s.service.env> each time, so it is
 not narrowed to L<Rex::Rancher::Distribution/restart_reasons> as on RKE2.
+The version skew rules of L<Rex::Rancher::Distribution/start_verb> and
+L<Rex::Rancher::Distribution/check_version_skew> apply as on RKE2: a
+running k3s is not restarted onto an unpinned new minor.
 
 With C<cilium> the server config gets C<flannel-backend: none>,
 C<disable-network-policy: true>, C<disable-kube-proxy: true> and

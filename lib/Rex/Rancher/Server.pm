@@ -89,6 +89,22 @@ mismatch dies (on RKE2 before the service is started; the K3s install
 script has already restarted it). This catches a pinned
 install or upgrade that failed while an older binary is still on the host.
 
+Against a running server the version skew policy applies, for RKE2 and K3s
+alike, before anything is written or installed: a version more than one
+minor ahead of the running one, or older than it, dies with both versions
+and the host unchanged. Without C<version> the version checked is the one
+the install script would take from the stable channel
+(C<https://update.rke2.io/v1-release/channels/stable>, K3s:
+C<update.k3s.io>), resolved on the host with C<curl>; if that fails, a
+warning, and the check happens after the install instead, before any
+restart (see L</Re-runs>). A patch release of the running minor is
+installed and the service restarted, pinned or not. The next minor restarts
+it only when C<version> is pinned; unpinned, it is installed but the running
+server is B<not> restarted and keeps its old version until its next start
+(a reboot), with a warning that says so and names
+C<systemctl restart SERVICE>. Upgrade a cluster server by server, one minor
+at a time, then the agents.
+
 =item C<install_method>
 
 How the distribution gets onto the host. C<script> (default) pipes the
@@ -233,6 +249,9 @@ sub install_server {
   # Validated before anything touches the host (the token lookup reads it).
   my $method       = Rex::Rancher::Distribution->resolve_install_method($opts{install_method}, $opts{version});
   my $cluster_cidr = Rex::Rancher::Distribution->check_cluster_cidr($opts{cluster_cidr});
+  # Before anything is written or installed: a rejected upgrade leaves the
+  # host as it was.
+  $dist->check_version_skew(version => $opts{version});
   my $token        = _resolve_token($dist, $opts{token});
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
@@ -504,8 +523,8 @@ sub _install {
   # distribution wants it (start_verb), then the bounded wait.
   my $service = $dist->service;
   run "systemctl enable " . $service, auto_die => 1;
-  run "systemctl " . $dist->start_verb . " --no-block " . $service,
-    auto_die => 1;
+  run "systemctl " . $dist->start_verb(pinned => ( defined $version && length $version ))
+    . " --no-block " . $service, auto_die => 1;
 
   $dist->wait_for_service;
 
@@ -622,9 +641,18 @@ when its content differs, so the same options twice change nothing. An
 upgraded C<nvidia-container-runtime> alone is no reason, containerd runs it
 anew per container;
 
-=item * an installed C<rke2> binary of another version than the running one.
+=item * an installed C<rke2> binary of another version than the running one,
+where the version skew policy lets it be restarted: a patch release, or the
+next minor with C<version> pinned.
 
 =back
+
+Before any of that, the installed binary is compared with the running one
+(RKE2 and K3s): the next minor without a pinned C<version> is not restarted
+onto, with a warning, and a jump of more than one minor or a downgrade
+(possible only when the stable channel could not be resolved before the
+install, or moved in between) dies without a restart. See C<version> under
+L</install_server>.
 
 Nothing changed: C<systemctl start>, the service keeps running. Changes
 made by hand or left by an interrupted earlier run count as well. What
@@ -635,7 +663,7 @@ A restart takes this server's API and etcd member down for its duration and
 touches no other node. Several servers of one HA cluster restarting at the
 same time can lose etcd quorum: deploy them one after another (Rex's
 default), not in parallel. K3s is restarted on every run, as its install
-script rewrites the unit each time.
+script rewrites the unit each time, except onto an unpinned new minor.
 
 =head2 K3s installation
 

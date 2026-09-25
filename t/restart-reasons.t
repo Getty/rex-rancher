@@ -9,7 +9,9 @@ use Test::More;
 # when restart_reasons finds something newer than its main process, and logs
 # why; nothing changed keeps `start`. k3s is restarted on every run, as
 # before, and is not asked. An upgraded nvidia-container-runtime binary is
-# no reason (k56): containerd runs it anew per container.
+# no reason (k56): containerd runs it anew per container. Whether a new
+# binary may be restarted onto at all (version skew, an unpinned new minor
+# is held) is t/version-skew.t; the new binaries here are patch releases.
 #
 # run is faked: this proves the decision, the commands that ask the host and
 # the log line. That `find -newermt`, `ps -o etimes=` and `/proc/PID/exe
@@ -58,6 +60,7 @@ my ( @log, @info, @warn, %host );
 
 my $V1 = "rke2 version v1.30.4+rke2r1 (abc)\ngo version go1.22.5\n";
 my $V2 = "rke2 version v1.31.1+rke2r1 (def)\ngo version go1.22.5\n";
+my $V1P = "rke2 version v1.30.5+rke2r1 (fed)\ngo version go1.22.5\n";
 my %QUIET = ( pid => 4242, since => 1790000000, running => $V1, installed => $V1 );
 
 sub reset_host { %host = @_; ( @log, @info, @warn ) = () }
@@ -164,7 +167,7 @@ subtest 'undeterminable: unchanged, but said loudly' => sub {
   like( $warn[0], qr{^Could not tell when rke2-server started .*config\.yaml.* restart rke2-server yourself},
     'names what is not detected' );
 
-  reset_host( %QUIET, since => undef, installed => $V2 );
+  reset_host( %QUIET, since => undef, installed => $V1P );
   is( $rke2->start_verb, 'restart', 'no ps, new binary: still restart' );
 
   reset_host( %QUIET, running => "exec failed\n" );
@@ -181,11 +184,11 @@ subtest 'rke2 agent: same checks on its own unit' => sub {
     'log' );
 };
 
-subtest 'k3s: restart on every run, not asked' => sub {
+subtest 'k3s: restart on every run, only the version skew asked' => sub {
   for my $role (qw( server agent )) {
     reset_host(%QUIET);
     is( $D->new_for( 'k3s', role => $role )->start_verb, 'restart', $role.': verb' );
-    ok( !( grep { /MainPID|-newermt|--version/ } @log ), $role.': no change detection' );
+    ok( !( grep { /-newermt|etimes/ } @log ), $role.': no change detection' );
     is_deeply( [ @info, @warn ], [], $role.': nothing logged' );
   }
 };
@@ -204,7 +207,7 @@ subtest 'stale Rex::GPU 0.001 containerd config wins, asked no further' => sub {
     };
   };
   is( $rke2->start_verb, 'restart', 'verb' );
-  ok( !( grep { /MainPID/ } @log ), 'restart_reasons not asked' );
+  ok( !( grep { /-newermt|etimes/ } @log ), 'restart_reasons not asked' );
   is( scalar @warn, 1, 'only the stale-config warning' );
 };
 
@@ -219,7 +222,7 @@ Rex::Rancher::Server::_install( $D->new_for('rke2'), undef, undef, 'script' );
 is_deeply( [ grep { /^systemctl (?:start|restart)/ } @log ], [ 'systemctl start --no-block rke2-server' ],
   'rke2 server, nothing changed: start, the running server is left alone' );
 
-reset_host( %QUIET, installed => $V2 );
+reset_host( %QUIET, installed => $V1P );
 Rex::Rancher::Agent::_enable_service( $D->new_for( 'rke2', role => 'agent' ), 'https://cp:9345' );
 is_deeply( [ grep { /^systemctl (?:start|restart)/ } @log ], [ 'systemctl restart --no-block rke2-agent.service' ],
   'rke2 agent, new binary: restart --no-block' );

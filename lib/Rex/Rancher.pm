@@ -214,7 +214,10 @@ affected; the address must still be a name in the API server certificate
 
 Pinned distribution version (C<INSTALL_RKE2_VERSION> / C<INSTALL_K3S_VERSION>).
 Default: latest stable. When given, the installed version is verified and a
-mismatch dies. See L<Rex::Rancher::Server/install_server>.
+mismatch dies. On a running server, more than one minor ahead or a
+downgrade dies before anything is installed, and the next minor is
+restarted onto only when pinned; unpinned it is installed but not
+restarted, with a warning. See L<Rex::Rancher::Server/install_server>.
 
 =item C<install_method>
 
@@ -446,6 +449,13 @@ Override the node name registered in Kubernetes (optional).
 As for L</rancher_deploy_server>; passed to
 L<Rex::Rancher::Agent/install_agent>.
 
+=item C<kubeconfig_file>
+
+The cluster's kubeconfig, as L</rancher_deploy_server> saved it; read, not
+written. Passed to L<Rex::Rancher::Agent/install_agent> as C<kubeconfig>:
+the agent dies before it is installed when its version is of a newer minor
+than the control plane's. Without it that is not checked. Optional.
+
 =item C<hostname>, C<domain>, C<timezone>, C<locale>, C<ntp>
 
 As for L</rancher_deploy_server>; passed to
@@ -463,8 +473,7 @@ server, an SFTP-less host needs the C<LibSSH> connection backend; without it
 the deploy dies before the first step with a hint to C<Rex::LibSSH>.
 
 The server-only options have no effect on an agent and are ignored:
-C<tls_san>, C<disable>, C<cluster_cidr>, C<kubeconfig_file>,
-C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
+C<tls_san>, C<disable>, C<cluster_cidr>, C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
 C<cilium_helm_values>, C<gateway_api>, C<gateway_api_version>,
 C<gateway_api_channel>, C<k8s_service_host> and C<gpu_device_plugin>. Whether
 a K3s agent runs Flannel and kube-proxy or leaves both to Cilium follows the
@@ -487,7 +496,10 @@ sub rancher_deploy_agent {
 
   _gpu_setup_if_requested($distribution, %opts);
 
-  install_agent(_install_opts(%opts));
+  # The server's saved kubeconfig, if given, lets install_agent check the
+  # control plane's version before it installs anything.
+  install_agent(_install_opts(%opts),
+    ( defined $opts{kubeconfig_file} ? ( kubeconfig => $opts{kubeconfig_file} ) : () ));
 
   Rex::Logger::info("$distribution agent deployment complete");
 }

@@ -94,7 +94,8 @@ for my $c (@case) {
     else {
       is_deeply( \@warn, [], $dist.', '.$name.': no warning' );
     }
-    like( $log[0], qr{^cat /var/lib/rancher/\Q$dist\E/agent/etc/containerd/config\.toml },
+    like( ( grep { !/^systemctl show -p MainPID / } @log )[0],
+      qr{^cat /var/lib/rancher/\Q$dist\E/agent/etc/containerd/config\.toml },
       $dist.', '.$name.': reads its own containerd dir' );
   }
 }

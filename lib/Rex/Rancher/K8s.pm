@@ -7,6 +7,7 @@ use warnings;
 
 use Kubernetes::REST::Kubeconfig;
 use Rex::Logger;
+use Rex::Rancher::Distribution;
 
 require Rex::Exporter;
 use base qw(Rex::Exporter);
@@ -14,6 +15,7 @@ use base qw(Rex::Exporter);
 use vars qw(@EXPORT);
 
 @EXPORT = qw(
+  control_plane_version
   deploy_nvidia_device_plugin
   wait_for_api
   untaint_node
@@ -222,6 +224,54 @@ sub untaint_node {
   }
 }
 
+=method control_plane_version(%opts)
+
+The Kubernetes version of the cluster's control plane, as the agent side of
+the version skew policy needs it: the lowest C<kubeletVersion> among the
+nodes labelled C<node-role.kubernetes.io/control-plane> (or C<master>) —
+during a rolling server upgrade that is the server not yet upgraded — or,
+without such nodes, the API server's C</version>. RKE2 and K3s report their
+own release there (C<v1.30.4+rke2r1>). Nothing when neither gives a
+version. Runs locally via L<Kubernetes::REST>; an API error dies.
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+  my $version = control_plane_version(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+
+=cut
+
+sub control_plane_version {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+  my $D = 'Rex::Rancher::Distribution';
+
+  my $api = _api($kubeconfig);
+  my @versions;
+  for my $node (@{ $api->list('Node')->items }) {
+    my $labels = $node->metadata->labels // {};
+    next unless exists $labels->{'node-role.kubernetes.io/control-plane'}
+      || exists $labels->{'node-role.kubernetes.io/master'};
+    my $info = $node->status && $node->status->nodeInfo;
+    my $version = $info && $info->kubeletVersion;
+    my @parts = $D->parse_release($version);
+    push @versions, $version if @parts;
+  }
+  my ($lowest) = sort { $D->compare_versions($a, $b) } @versions;
+  return $lowest if defined $lowest;
+
+  my $version = $api->cluster_version;
+  my @parts = $D->parse_release($version);
+  return @parts ? $version : ();
+}
+
 # ============================================================
 #  Internal helpers
 # ============================================================
@@ -336,7 +386,7 @@ sub _wait_for_gpu_resource {
 =head1 DESCRIPTION
 
 L<Rex::Rancher::K8s> provides Kubernetes API operations for L<Rex::Rancher>
-using L<Kubernetes::REST> and L<IO::K8s>. All three public functions run
+using L<Kubernetes::REST> and L<IO::K8s>. All four public functions run
 entirely on the B<local machine> against the cluster's HTTP API — no
 C<kubectl> binary is required anywhere, and no SSH connection to the cluster
 nodes is needed for these operations.
@@ -350,6 +400,9 @@ The module is used internally by L<Rex::Rancher/rancher_deploy_server> to:
 =item 2. Deploy the NVIDIA device plugin when C<gpu =E<gt> 1>
 
 =back
+
+L<Rex::Rancher::Agent/install_agent> uses L</control_plane_version> to keep
+an agent from a newer minor version than the control plane.
 
 It can also be used standalone for post-deploy operations such as removing
 control-plane taints on single-node clusters.

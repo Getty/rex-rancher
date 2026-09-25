@@ -9,6 +9,7 @@ use Rex::Commands::File;
 use Rex::Commands::Run;
 use Rex::Logger;
 use Rex::Rancher::Distribution;
+use Rex::Rancher::K8s ();
 use YAML::PP;
 
 require Rex::Exporter;
@@ -61,6 +62,29 @@ for K3s. If omitted, the latest stable release is installed. When given, the
 installed binary's C<--version> is checked against it after the installer
 ran, and a mismatch dies (on RKE2 before the service is started; the K3s
 install script has already started it).
+
+The version skew rules of L<Rex::Rancher::Server/install_server>'s
+C<version> apply to a running agent the same way (a jump of more than one
+minor or a downgrade dies before anything is installed; the next minor
+without a pinned C<version> is installed but not restarted onto, with a
+warning). With C<kubeconfig>, the agent is also never brought to a newer
+minor than the control plane (see there).
+
+=item C<kubeconfig>
+
+Local path to a kubeconfig of the cluster (as C<rancher_deploy_server>'s
+C<kubeconfig_file> saves it). With it, the control plane's version is read
+through the API before anything is written to the host (the lowest
+C<kubeletVersion> of the control-plane nodes, see
+L<Rex::Rancher::K8s/control_plane_version>), and an agent version of a
+newer minor dies: a kubelet must never be newer than the API server. A
+newer patch of the same minor is fine. The agent version checked is
+C<version>, or the stable channel's (as for C<install_server>); when that
+cannot be resolved, the installed binary is checked before the agent is
+started, and dies with it installed but not (re)started. An API that does
+not answer dies before the host is touched. Without C<kubeconfig> the agent
+cannot be checked against the control plane: upgrade the servers first and
+pin C<version>.
 
 =item C<install_method>
 
@@ -120,6 +144,11 @@ sub install_agent {
 
   my $dist = Rex::Rancher::Distribution->new_for($distribution, role => 'agent');
 
+  # Before anything is written or installed: an agent never goes to a newer
+  # minor than the control plane, nor skips or goes back a minor itself.
+  my $server_version = _control_plane_version($opts{kubeconfig});
+  $dist->check_version_skew(version => $version, server_version => $server_version);
+
   Rex::Logger::info("Installing $distribution agent to join $server");
 
   _write_config($dist, %opts);
@@ -128,9 +157,29 @@ sub install_agent {
   $dist->ensure_nvidia_runtime_path if $opts{nvidia_runtime_path};
   _run_installer($dist, $version, $server, $method);
   $dist->verify_installed_version($version);
-  _enable_service($dist, $server);
+  # Again with what was installed: the check above had to go without it
+  # when the channel did not resolve.
+  $dist->check_agent_version($dist->installed_version, $server_version, 1)
+    if defined $server_version;
+  _enable_service($dist, $server, $version);
 
   Rex::Logger::info("$distribution agent installed and running");
+}
+
+# The control plane's version through the given kubeconfig, or nothing
+# without one. Asked for with a kubeconfig, so it has to answer: an API
+# error or no version dies before the host is touched.
+sub _control_plane_version {
+  my ($kubeconfig) = @_;
+  return unless defined $kubeconfig && length $kubeconfig;
+  my $version = eval { Rex::Rancher::K8s::control_plane_version(kubeconfig => $kubeconfig) };
+  die "Could not read the control plane's version through $kubeconfig ("
+    . ( $@ =~ s/\s+\z//r ) . "); nothing was installed\n" if $@;
+  die "The API behind $kubeconfig reports no control plane version; nothing "
+    . "was installed. Omit kubeconfig to join without the version check\n"
+    unless defined $version;
+  Rex::Logger::info("Control plane runs $version");
+  return $version;
 }
 
 # Same keys on rke2 and k3s agents; node-label as in the server's
@@ -190,7 +239,7 @@ sub _run_installer {
 }
 
 sub _enable_service {
-  my ($dist, $server) = @_;
+  my ($dist, $server, $version) = @_;
 
   my $service = $dist->service;
   # k3s: restart, as the install script did before INSTALL_K3S_SKIP_START,
@@ -198,7 +247,7 @@ sub _enable_service {
   # installer never started the agent: start, or restart for a stale
   # containerd config or a change since it started (see
   # Rex::Rancher::Distribution's start_verb).
-  my $verb = $dist->start_verb;
+  my $verb = $dist->start_verb(pinned => ( defined $version && length $version ));
   Rex::Logger::info("Enabling and starting $service");
   run "systemctl enable $service", auto_die => 1;
   # --no-block, same as the server: a start that fails or outlasts systemd's
@@ -274,7 +323,8 @@ alone, unless its C<config.yaml>, C<registries.yaml>,
 C</etc/default/rke2-agent>, containerd drop-ins, NVIDIA runtime or binary
 changed since it started, or its containerd config is still the output of
 L<Rex::GPU> 0.001's template: then it is restarted, as described under
-"Re-runs" and "RKE2 installation" in L<Rex::Rancher::Server>. For both distributions the
+"Re-runs" and "RKE2 installation" in L<Rex::Rancher::Server>, which also
+describes the version skew rules that apply to agents as to servers. For both distributions the
 token is read from C<config.yaml> and never passed on the installer command
 line, where C<ps> would show it. C<config.yaml> and C<registries.yaml> are
 written C<0600 root:root>.

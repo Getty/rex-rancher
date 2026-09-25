@@ -91,6 +91,13 @@ C</etc/rancher/rke2> / C</etc/rancher/k3s>, without a trailing slash.
 
 The official install script: C<https://get.rke2.io> / C<https://get.k3s.io>.
 
+=method channel_url
+
+The release channel the install script resolves an unpinned install
+through: C<https://update.rke2.io/v1-release/channels/stable> /
+C<https://update.k3s.io/v1-release/channels/stable>. It redirects to the
+GitHub release tag of the version it would install.
+
 =method kubeconfig
 
 The kubeconfig the server writes (C<rke2.yaml> / C<k3s.yaml>).
@@ -148,7 +155,9 @@ NVIDIA runtime lookup, or C<undef> where none is needed (K3s).
 How the service is started when its containerd config is not stale:
 C<start> (RKE2: a running service is restarted only for
 L</restart_reasons>) or C<restart> (K3s, on every run, as its install
-script did).
+script did). Either way L</start_verb> checks the version skew first, and
+an unpinned new minor version leaves a running service of either
+distribution alone.
 
 =method asset_name
 
@@ -546,16 +555,268 @@ sub verify_installed_version {
 }
 
 #
+# Version skew: what may be installed over a running service, and when it
+# may be restarted onto it. Kubernetes' version skew policy: a control plane
+# moves one minor version at a time and never back, servers before agents,
+# and a kubelet is never newer than the API server.
+#
+
+=method parse_release
+
+  my @v = $dist->parse_release('v1.30.4+rke2r1');   # (1, 30, 4, 1)
+
+Pure: major, minor, patch and the distribution revision (C<rke2rN> /
+C<k3sN>; C<0> without one) of a version, or nothing for anything not shaped
+C<vMAJOR.MINOR.PATCH>.
+
+=cut
+
+sub parse_release {
+  my ( $self, $version ) = @_;
+  return unless defined $version
+    && $version =~ /\Av?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+(?:rke2r|k3s)(\d+))?\z/;
+  return ( $1, $2, $3, $4 // 0 );
+}
+
+=method compare_versions
+
+  $dist->compare_versions($x, $y)   # -1, 0 or 1
+
+Pure: C<< <=> >> over L</parse_release>, C<undef> when either does not
+parse.
+
+=cut
+
+sub compare_versions {
+  my ( $self, $x, $y ) = @_;
+  my @a = $self->parse_release($x);
+  my @b = $self->parse_release($y);
+  return unless @a && @b;
+  for my $i (0 .. 3) {
+    my $cmp = $a[$i] <=> $b[$i];
+    return $cmp if $cmp;
+  }
+  return 0;
+}
+
+=method version_skew
+
+  $dist->version_skew($running, $new)
+
+Pure: what moving from C<$running> to C<$new> is. C<same>; C<patch> (same
+minor, newer, or only a pre-release tag differs); C<minor> (exactly the next
+minor); C<jump> (more than one minor, or another major); C<downgrade>
+(older, patch or revision included). C<undef> when either does not parse.
+
+=cut
+
+sub version_skew {
+  my ( $self, $from, $to ) = @_;
+  my $cmp = $self->compare_versions($to, $from);
+  return unless defined $cmp;
+  return 'downgrade' if $cmp < 0;
+  my @f = $self->parse_release($from);
+  my @t = $self->parse_release($to);
+  if ( $t[0] == $f[0] && $t[1] == $f[1] ) {
+    return $self->same_version($from, $to) ? 'same' : 'patch';
+  }
+  return ( $t[0] == $f[0] && $t[1] == $f[1] + 1 ) ? 'minor' : 'jump';
+}
+
+=method parse_channel_redirect
+
+Pure: the version at the end of the release tag URL L</channel_url>
+redirects to (C<.../releases/tag/v1.36.4+rke2r1>, C<%2B> decoded), or
+nothing.
+
+=cut
+
+sub parse_channel_redirect {
+  my ( $self, $url ) = @_;
+  return unless ($url // '') =~ m{/releases/tag/([^/\s]+)\s*\z};
+  (my $version = $1) =~ s/%2B/+/gi;
+  my @parts = $self->parse_release($version);
+  return @parts ? $version : ();
+}
+
+=method channel_version
+
+The version an unpinned install would get: L</channel_url> resolved on the
+host with C<curl>, as the install script resolves it there. Nothing when
+that fails.
+
+=cut
+
+sub channel_version {
+  my ( $self ) = @_;
+  my $out = Rex::Commands::Run::run("curl -fsSL -o /dev/null -w '%{url_effective}' '"
+    . $self->channel_url . "' 2>/dev/null", auto_die => 0);
+  return unless $? == 0;
+  return $self->parse_channel_redirect($out);
+}
+
+=method main_pid
+
+The main PID of the L</service>, or nothing when it is not running. Reads
+the host (C<systemctl show -p MainPID>).
+
+=cut
+
+sub main_pid {
+  my ( $self ) = @_;
+  return $self->parse_main_pid(Rex::Commands::Run::run(
+    "systemctl show -p MainPID " . $self->service . " 2>/dev/null", auto_die => 0));
+}
+
+=method running_version
+
+  $dist->running_version($pid)
+
+The version the process C<$pid> runs (C</proc/PID/exe --version>: the
+binary it was started from, even when the installer has replaced it on
+disk since), or nothing.
+
+=method installed_version
+
+The version the installed L</binary> reports, or nothing.
+
+=cut
+
+sub running_version {
+  my ( $self, $pid ) = @_;
+  return $self->parse_version_output(
+    Rex::Commands::Run::run("/proc/$pid/exe --version 2>&1", auto_die => 0));
+}
+
+sub installed_version {
+  my ( $self ) = @_;
+  return $self->parse_version_output(
+    Rex::Commands::Run::run($self->binary . " --version 2>&1", auto_die => 0));
+}
+
+=method check_version_skew
+
+  $dist->check_version_skew(version => $pinned, server_version => $cp);
+
+Before anything is installed: die when what would be installed breaks the
+version skew policy, with nothing on the host changed.
+
+The version to install is C<version>, or without one L</channel_version>.
+Against a running L</service> (its L</running_version>), a L</version_skew>
+of C<jump> or C<downgrade> dies. With C<server_version> (the control plane's
+version, for an agent), a version of a newer minor than it dies too.
+
+Nothing running and no C<server_version>: nothing to check, nothing asked
+beyond L</main_pid>. A channel that cannot be resolved, or a running
+version that cannot be read, is a warning, not a die: L</start_verb> checks
+the installed binary against the running one again before it restarts
+anything.
+
+=cut
+
+sub check_version_skew {
+  my ( $self, %args ) = @_;
+  my $pinned  = $args{version};
+  my $server  = $args{server_version};
+  my $service = $self->service;
+
+  my $pid     = $self->main_pid;
+  my $running = $pid ? $self->running_version($pid) : undef;
+  Rex::Logger::info("Could not ask the running $service (/proc/$pid/exe --version) "
+    . "for its version: the version skew is checked only after the install, "
+    . "before $service is restarted", 'warn')
+    if $pid && !defined $running;
+  return unless defined $running || defined $server;
+
+  my $target = $pinned;
+  unless (defined $target && length $target) {
+    $target = $self->channel_version;
+    unless (defined $target) {
+      Rex::Logger::info("Could not resolve the version " . $self->channel_url
+        . " would install: the version skew is checked only after the install, "
+        . "before $service is (re)started", 'warn');
+      return;
+    }
+    Rex::Logger::info("version not pinned: the stable channel installs $target");
+  }
+
+  if (defined $running) {
+    my $skew = $self->version_skew($running, $target) // '';
+    die "Refusing to install " . $self->name . " $target"
+      . ( $pinned ? '' : " (the stable channel's version; version is not pinned)" )
+      . ": $service runs $running, and " . $self->_skew_rule($skew, $running)
+      . " Nothing was installed; $service keeps running $running.\n"
+      if $skew eq 'jump' || $skew eq 'downgrade';
+  }
+
+  $self->check_agent_version($target, $server) if defined $server;
+  return $target;
+}
+
+sub _skew_rule {
+  my ( $self, $skew, $running ) = @_;
+  my @r = $self->parse_release($running);
+  return $skew eq 'downgrade'
+    ? "that is a downgrade, which Kubernetes' version skew policy does not "
+      . "allow. Pin version to $running or newer."
+    : "that skips a minor version: Kubernetes' version skew policy moves a "
+      . "node one minor version at a time. Upgrade to a v$r[0]." . ($r[1] + 1)
+      . " release first (pin version).";
+}
+
+=method check_agent_version
+
+  $dist->check_agent_version($agent_version, $control_plane_version);
+  $dist->check_agent_version($agent_version, $control_plane_version, 1);
+
+Die when the agent version is of a newer minor (or major) than the control
+plane's: a kubelet must never be newer than the API server. A newer patch of
+the same minor is fine. The message says nothing was installed, or with a
+true third argument that the binary is installed but the L</service> was not
+(re)started. Two versions that do not parse only warn.
+
+=cut
+
+sub check_agent_version {
+  my ( $self, $agent, $server, $installed ) = @_;
+  my @a = $self->parse_release($agent);
+  my @s = $self->parse_release($server);
+  unless (@a && @s) {
+    Rex::Logger::info("Could not compare " . $self->name . " $agent with the control "
+      . "plane's " . ( $server // 'unknown' ) . ": the agent is not checked against it",
+      'warn');
+    return;
+  }
+  return 1 if $a[0] < $s[0] || ( $a[0] == $s[0] && $a[1] <= $s[1] );
+  die "Refusing the " . $self->name . " agent $agent: the control plane runs $server, "
+    . "and a kubelet must never be of a newer minor version than the API server "
+    . "(Kubernetes' version skew policy: servers first, then agents). "
+    . ( $installed
+        ? $self->binary . " $agent is installed, but " . $self->service . " was not (re)started."
+        : "Nothing was installed." )
+    . " Upgrade the servers first, or pin version to a v$s[0].$s[1] release.\n";
+}
+
+#
 # Service start and wait
 #
 
 =method start_verb
 
+  $dist->start_verb(pinned => defined $version);
+
 C<start> or C<restart> for the L</service>. Reads the host.
 
-C<restart> when a running service's containerd C<config.toml> is still the
-output of L<Rex::GPU> 0.001's bare C<config.toml.tmpl> and the template is
-gone, with a warning, so it regenerates that config; a template still in
+First the installed L</binary> against the running one (L</version_skew>),
+for both distributions: C<jump> or C<downgrade> dies, and the service is
+not touched. C<minor> without C<pinned> is C<start>, which leaves a running
+service on its old binary, with a warning that says so and how to restart
+it; nothing else below is asked. C<patch>, or C<minor> with C<pinned>,
+restarts as any other change does.
+
+Then C<restart> when a running service's containerd C<config.toml> is still
+the output of L<Rex::GPU> 0.001's bare C<config.toml.tmpl> and the template
+is gone, with a warning, so it regenerates that config; a template still in
 place only warns with the command to run. Otherwise L</default_start_verb>,
 and where that is C<start> (RKE2), C<restart> when L</restart_reasons> has
 any, logging them: a running service reads its configuration only when it
@@ -564,19 +825,52 @@ starts.
 =cut
 
 sub start_verb {
-  my ( $self ) = @_;
+  my ( $self, %args ) = @_;
+  my $pid = $self->main_pid;
+  return 'start' if $pid && $self->_hold_new_binary($pid, $args{pinned});
   return 'restart' if $self->_stale_containerd_restart;
 
   # k3s restarts anyway. A `start` of a running rke2 is a no-op, so it is
   # turned into a restart exactly when the service runs on something older
   # than what is on disk now.
   my $default = $self->default_start_verb;
-  return $default unless $default eq 'start';
-  my @reasons = $self->restart_reasons;
+  return $default unless $default eq 'start' && $pid;
+  my @reasons = $self->_restart_reasons_for($pid);
   return $default unless @reasons;
   Rex::Logger::info("Restarting " . $self->service . ", which reads these only when "
     . "it starts: " . join('; ', @reasons));
   return 'restart';
+}
+
+# A restart onto the installed binary, checked against the running one.
+# Rejected upgrades die here too: check_version_skew could not see them
+# before the install when the channel did not resolve or moved in between.
+# An unpinned new minor stays installed but not running (maintainer
+# decision, k56): an unpinned re-run must not silently upgrade a running
+# control plane. KillMode=process keeps pods up across a restart either way.
+sub _hold_new_binary {
+  my ( $self, $pid, $pinned ) = @_;
+  my $running   = $self->running_version($pid);
+  my $installed = $self->installed_version;
+  return 0 unless defined $running && defined $installed;
+  my $skew    = $self->version_skew($running, $installed) // return 0;
+  my $service = $self->service;
+  my $binary  = $self->binary;
+
+  die "$binary $installed is installed, but $service runs $running, and "
+    . $self->_skew_rule($skew, $running) . " $service was not restarted and "
+    . "keeps running $running; its next start (a reboot) runs $installed. "
+    . "Install $running again (pin version) or a release the policy allows.\n"
+    if $skew eq 'jump' || $skew eq 'downgrade';
+  return 0 unless $skew eq 'minor' && !$pinned;
+
+  Rex::Logger::info("$service was NOT restarted: it runs $running, and $installed "
+    . "is now installed, a new minor version from the stable channel since "
+    . "version is not pinned. It keeps running $running, and anything else "
+    . "changed for it waits too, until its next start (a reboot starts "
+    . "$installed). Pin version => '$installed' to have it restarted, or run: "
+    . "systemctl restart $service", 'warn');
+  return 1;
 }
 
 # Rex::GPU 0.001 wrote agent/etc/containerd/config.toml.tmpl as a bare
@@ -663,7 +957,8 @@ C<nvidia-container-runtime> binary alone is no reason: containerd runs it
 anew for every container it creates.
 
 =item * the running binary (C</proc/PID/exe --version>) reports another
-version than the installed L</binary>.
+version than the installed L</binary>. Whether it may be restarted onto
+that version is L</start_verb>'s decision, which asks first.
 
 =back
 
@@ -674,10 +969,14 @@ C<--version>) counts as unchanged, with a warning that names it.
 
 sub restart_reasons {
   my ( $self ) = @_;
-  my $service = $self->service;
-  my $pid = $self->parse_main_pid(Rex::Commands::Run::run(
-    "systemctl show -p MainPID $service 2>/dev/null", auto_die => 0));
+  my $pid = $self->main_pid;
   return unless $pid;
+  return $self->_restart_reasons_for($pid);
+}
+
+sub _restart_reasons_for {
+  my ( $self, $pid ) = @_;
+  my $service = $self->service;
 
   my @reasons;
 
@@ -700,10 +999,8 @@ sub restart_reasons {
   }
 
   # /proc/PID/exe still runs a binary the installer replaced (unlinked).
-  my $running   = $self->parse_version_output(
-    Rex::Commands::Run::run("/proc/$pid/exe --version 2>&1", auto_die => 0));
-  my $installed = $self->parse_version_output(
-    Rex::Commands::Run::run($self->binary . " --version 2>&1", auto_die => 0));
+  my $running   = $self->running_version($pid);
+  my $installed = $self->installed_version;
   if (defined $running && defined $installed) {
     push @reasons, "it runs $running, $installed is installed"
       unless $self->same_version($running, $installed);

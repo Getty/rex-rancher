@@ -16,6 +16,7 @@ sub name                 { 'rke2' }
 sub label                { 'RKE2' }
 sub config_dir           { '/etc/rancher/rke2' }
 sub install_url          { 'https://get.rke2.io' }
+sub channel_url          { 'https://update.rke2.io/v1-release/channels/stable' }
 sub kubeconfig           { '/etc/rancher/rke2/rke2.yaml' }
 sub token_file           { '/var/lib/rancher/rke2/server/node-token' }
 sub server_token         { '/var/lib/rancher/rke2/server/token' }
@@ -109,7 +110,9 @@ L<https://get.rke2.io> (agents with C<INSTALL_RKE2_TYPE=agent>), release
 tarballs C<rke2.linux-ARCH.tar.gz>. A running service is left running on a
 re-run unless it has to take something new: a changed C<config.yaml>,
 C<registries.yaml>, C</etc/default> file or containerd drop-in, or a new
-binary restart it (see L<Rex::Rancher::Distribution/restart_reasons>).
+binary restart it (see L<Rex::Rancher::Distribution/restart_reasons>) --
+a new binary only as the version skew rules allow (see
+L<Rex::Rancher::Distribution/start_verb>).
 
 On a server the install script's exit status is ignored, because it prints
 GPG key import noise that ends non-zero on some hosts (Rocky 10);
