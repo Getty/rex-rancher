@@ -48,7 +48,9 @@ Write the agent configuration, optionally write C<registries.yaml>, run the
 distribution installer, enable and start the agent service, and wait until
 C<systemctl is-active> reports it active (up to 10 minutes). A service that
 ends up C<failed> or never gets active dies with the last 50 lines of its
-journal in the message.
+journal in the message, after the line "It joins the cluster via SERVER --
+check that this node can reach that address": an unreachable C<server> is
+the most common cause.
 
 Required options:
 
@@ -147,7 +149,7 @@ sub install_agent {
   Rex::Rancher::Server::_nvidia_runtime_path($paths) if $opts{nvidia_runtime_path};
   _run_installer($distribution, $version, $server, $method);
   Rex::Rancher::Server::_verify_installed_version($distribution, $version);
-  _enable_service($paths, $distribution);
+  _enable_service($paths, $distribution, $server);
 
   Rex::Logger::info("$distribution agent installed and running");
 }
@@ -238,7 +240,7 @@ sub _installer_cmd {
 }
 
 sub _enable_service {
-  my ($paths, $distribution) = @_;
+  my ($paths, $distribution, $server) = @_;
 
   my $service = $paths->{service};
   # k3s: restart, as the install script did before INSTALL_K3S_SKIP_START,
@@ -252,7 +254,10 @@ sub _enable_service {
   # instead of a bare systemctl error (or, for an agent that cannot reach
   # its server, a Type=notify start that never returns).
   run "systemctl $verb --no-block $service", auto_die => 1;
-  Rex::Rancher::Server::_wait_for_service($service);
+  # An unreachable server address (a wrong or private IP) is the usual
+  # reason an agent never gets active: name it next to the journal.
+  Rex::Rancher::Server::_wait_for_service($service,
+    hint => "It joins the cluster via $server -- check that this node can reach that address");
 }
 
 1;

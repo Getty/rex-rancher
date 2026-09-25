@@ -19,6 +19,9 @@ Revision history for Rex-Rancher
     rancher_deploy_server) as Cilium's cluster-pool unless helm_values sets
     one. Without it nothing changes: k3s keeps 10.42.0.0/16, rke2 writes
     none.
+  - install_agent's error for an agent that never gets active names the
+    server it joins through ("It joins the cluster via ... -- check that
+    this node can reach that address") above the journal tail.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

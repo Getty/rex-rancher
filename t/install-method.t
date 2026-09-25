@@ -336,4 +336,17 @@ subtest '_wait_for_service: empty journal still reported' => sub {
     qr/\(no journal output\)/, 'placeholder instead of silence';
 };
 
+subtest '_wait_for_service: hint under the reason (k44)' => sub {
+  my $hint = 'It joins the cluster via https://cp1:9345 -- check that this node can reach that address';
+  reset_remote( [ qr/^systemctl is-active/, "failed\n", 3 ], [ qr/^journalctl/, $JOURNAL ] );
+  dies_like { Rex::Rancher::Server::_wait_for_service( 'rke2-agent.service', attempts => 2, interval => 0,
+    hint => $hint ) }
+    qr/rke2-agent\.service is failed\n\Q$hint\E\n--- journalctl -u rke2-agent\.service -n 50 ---\n.*bootstrap/s,
+    'failed: reason, hint, journal';
+  reset_remote( [ qr/^systemctl is-active/, "activating\n", 3 ], [ qr/^journalctl/, $JOURNAL ] );
+  dies_like { Rex::Rancher::Server::_wait_for_service( 'k3s-agent.service', attempts => 2, interval => 0,
+    hint => $hint ) }
+    qr/\(last state: activating\)\n\Q$hint\E\n--- journalctl/s, 'timeout: reason, hint, journal';
+};
+
 done_testing;

@@ -938,11 +938,13 @@ sub _verify_installed_version {
 
 # Poll `systemctl is-active` until active. 'failed' dies at once; any other
 # state (activating, inactive right after --no-block, auto-restart loops)
-# is polled until the timeout. Either failure carries the journal tail.
+# is polled until the timeout. Either failure carries the journal tail, and
+# the caller's hint (the agent's join address) right under the reason.
 sub _wait_for_service {
   my ($service, %args) = @_;
   my $attempts = $args{attempts} // 60;
   my $interval = $args{interval} // 10;
+  my $hint     = $args{hint};
 
   Rex::Logger::info("Waiting for $service to become active...");
 
@@ -955,22 +957,23 @@ sub _wait_for_service {
       Rex::Logger::info("  $service is active");
       return 1;
     }
-    die _service_failure($service, "is failed") if $state eq 'failed';
+    die _service_failure($service, "is failed", $hint) if $state eq 'failed';
     Rex::Logger::info("  $service is " . ($state || 'unknown') . " ($i/$attempts)");
     sleep $interval if $i < $attempts;
   }
 
   die _service_failure($service,
     "did not become active within " . ($attempts * $interval) . "s (last state: "
-      . ($state || 'unknown') . ")");
+      . ($state || 'unknown') . ")", $hint);
 }
 
 sub _service_failure {
-  my ($service, $reason) = @_;
+  my ($service, $reason, $hint) = @_;
   my $journal = run "journalctl -u $service -n 50 --no-pager 2>&1", auto_die => 0;
   $journal = '' unless defined $journal;
   $journal =~ s/\s+\z//;
   return "$service $reason\n"
+    . ( defined $hint ? "$hint\n" : '' )
     . "--- journalctl -u $service -n 50 ---\n"
     . ($journal eq '' ? '(no journal output)' : $journal) . "\n";
 }
