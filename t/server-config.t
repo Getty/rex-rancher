@@ -49,7 +49,8 @@ subtest 'k3s + cilium: Flannel, network policy and kube-proxy off' => sub {
     'disable-kube-proxy is a real true boolean — Cilium replaces it');
   is($c->{'cluster-cidr'}, '10.42.0.0/16', 'cluster-cidr spelled out');
   is($c->{'cluster-cidr'},
-    Rex::Rancher::Cilium::_paths_for('k3s')->{cluster_cidr},
+    Rex::Rancher::Cilium::_resolve_opts(distribution => 'k3s', k8s_service_host => 'cp')
+      ->{values}{ipam}{operator}{clusterPoolIPv4PodCIDRList}[0],
     'cluster-cidr is the range Cilium\'s pool gets');
   ok(!exists $c->{cni},     'no rke2 cni key on k3s');
   is_deeply($c->{disable}, ['traefik', 'servicelb'],

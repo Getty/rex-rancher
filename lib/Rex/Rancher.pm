@@ -354,10 +354,9 @@ sub rancher_deploy_server {
   # not at step 7. cluster_cidr is install_server's too, cilium or not.
   Rex::Rancher::Distribution->check_cluster_cidr($opts{cluster_cidr});
   if ($cilium) {
-    my $o = Rex::Rancher::Cilium::_resolve_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
     # install_cilium could read k8sServiceHost from a running Cilium, but a
     # first deploy has none: the address must come from the options here.
-    Rex::Rancher::Cilium::_require_k8s_service_host($o);
+    Rex::Rancher::Cilium::validate_cilium_opts(%cilium_opts, kubeconfig => $kubeconfig_file);
   }
   else {
     my @set = (

@@ -461,6 +461,25 @@ sub ensure_gateway_api_crds {
   return $applied;
 }
 
+=method validate_cilium_opts(%opts)
+
+Check the options of L</install_cilium> without touching anything: dies
+with the same message C<install_cilium> would for an unknown distribution,
+bad C<helm_values>, C<cluster_cidr> or C<gateway_api> settings, and -- also
+with C<kubeconfig>, where C<install_cilium> could still read it from a
+running Cilium -- a K3s cluster without a usable C<k8s_service_host>.
+Returns C<1>. Not exported; L<Rex::Rancher/rancher_deploy_server> calls it
+as C<Rex::Rancher::Cilium::validate_cilium_opts> before the node is
+prepared.
+
+=cut
+
+sub validate_cilium_opts {
+  my (%opts) = @_;
+  _require_k8s_service_host(_resolve_opts(%opts));
+  return 1;
+}
+
 #
 # Option resolution (pure — dies before anything touches the host)
 #
@@ -469,7 +488,7 @@ sub _resolve_opts {
   my (%opts) = @_;
 
   my $distribution = $opts{distribution} // 'rke2';
-  my $paths        = _paths_for($distribution);
+  my $dist         = Rex::Rancher::Distribution->new_for($distribution);
   my $helm_values  = $opts{helm_values} // {};
   my $gateway_api  = $opts{gateway_api} ? 1 : 0;
   my $wait         = $opts{wait} ? 1 : 0;
@@ -497,12 +516,12 @@ sub _resolve_opts {
       unless $duration =~ /\A[1-9][0-9]*\z/;
   }
 
-  my $values = _helm_values($distribution, $paths, $gateway_api, $helm_values,
+  my $values = _helm_values($dist, $gateway_api, $helm_values,
     $opts{k8s_service_host}, $cluster_cidr);
 
   my $o = {
     distribution        => $distribution,
-    paths               => $paths,
+    dist                => $dist,
     version             => $opts{version}     // CILIUM_VERSION,
     cli_version         => $opts{cli_version} // CILIUM_CLI_VERSION,
     api_server          => $opts{api_server},
@@ -613,7 +632,7 @@ sub _cilium_command {
   push @cmd, "--set kubeProxyReplacement=true";
   push @cmd, "--api-server $o->{api_server}" if $o->{api_server};
 
-  return "KUBECONFIG=$o->{paths}{kubeconfig} " . join(" ", @cmd);
+  return "KUBECONFIG=" . $o->{dist}->kubeconfig . " " . join(" ", @cmd);
 }
 
 sub _run_cilium {
@@ -1013,7 +1032,7 @@ sub _purge_release {
 
   # auto_die => 0: on a half-installed release some of what uninstall
   # removes was never created, and it reports that as an error.
-  run "KUBECONFIG=$o->{paths}{kubeconfig} cilium uninstall --wait=false 2>&1", auto_die => 0;
+  run "KUBECONFIG=" . $o->{dist}->kubeconfig . " cilium uninstall --wait=false 2>&1", auto_die => 0;
 
   for my $name (@{ $release->{secrets} }) {
     eval { $api->delete('Secret', $name, namespace => RELEASE_NAMESPACE); 1 }
@@ -1135,47 +1154,18 @@ sub _wait_crd_established {
 }
 
 #
-# Distribution-specific paths
-#
-
-sub _paths_for {
-  my ($distribution) = @_;
-
-  if ($distribution eq 'rke2') {
-    return {
-      kubeconfig  => '/etc/rancher/rke2/rke2.yaml',
-      cni_bin     => '/opt/cni/bin',
-      cni_conf    => '/etc/cni/net.d',
-      socket_path => '/run/k3s/containerd/containerd.sock',
-    };
-  }
-  elsif ($distribution eq 'k3s') {
-    return {
-      kubeconfig  => '/etc/rancher/k3s/k3s.yaml',
-      cni_bin     => '/opt/cni/bin',
-      cni_conf    => '/etc/cni/net.d',
-      socket_path => '/run/k3s/containerd/containerd.sock',
-      # Rex::Rancher::Server's k3s cluster-cidr; the pool must match it.
-      cluster_cidr => '10.42.0.0/16',
-    };
-  }
-  else {
-    die "Unknown distribution: $distribution (expected 'rke2' or 'k3s')\n";
-  }
-}
-
-#
 # Helm values generation
 #
 
 # Defaults per distribution, then gatewayAPI, then the caller's values on top.
 sub _helm_values {
-  my ($distribution, $paths, $gateway_api, $extra, $k8s_service_host, $cluster_cidr) = @_;
+  my ($dist, $gateway_api, $extra, $k8s_service_host, $cluster_cidr) = @_;
+  my $distribution = $dist->name;
 
   my %values = (
     cni => {
-      binPath   => $paths->{cni_bin},
-      confPath  => $paths->{cni_conf},
+      binPath   => $dist->cni_bin_dir,
+      confPath  => $dist->cni_conf_dir,
       exclusive => $distribution eq 'rke2' ? JSON()->false : JSON()->true,
     },
     ipam     => { mode => 'kubernetes' },
@@ -1198,7 +1188,7 @@ sub _helm_values {
     $values{k8sServiceHost} = $k8s_service_host if defined $k8s_service_host;
     $values{ipam} = {
       mode     => 'cluster-pool',
-      operator => { clusterPoolIPv4PodCIDRList => [ $cluster_cidr // $paths->{cluster_cidr} ] },
+      operator => { clusterPoolIPv4PodCIDRList => [ $cluster_cidr // $dist->default_cluster_cidr ] },
     };
   }
 

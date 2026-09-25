@@ -47,7 +47,9 @@ Revision history for Rex-Rancher
     artifacts) and the host steps server and agent share moved into the new
     Rex::Rancher::Distribution with ::RKE2 and ::K3s (new dependencies Moo
     and namespace::autoclean). The commands run on the host, their order and
-    the error messages are unchanged.
+    the error messages are unchanged. New, not exported:
+    Rex::Rancher::Cilium::validate_cilium_opts checks install_cilium's
+    options without touching anything.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
