@@ -1,0 +1,19 @@
+---
+claimed_at: 2026-09-25T17:46:06Z
+claimed_by: worker-fixes
+class: standard
+created: 2026-09-25T17:36:23Z
+id: 55
+priority: medium
+started: 2026-09-25T17:36:53Z
+status: review
+title: Review-Fixes prepare_node (#42)
+updated: 2026-09-25T17:46:06Z
+---
+
+Aus Code-Review 2026-09-25:
+1. _enable_locale_cmd: $line ungequotet in '...', Regex maskiert nur '.'; de_DE.utf8 haengt 'de_DE.utf8 utf8' an statt die UTF-8-Zeile zu aktivieren -> Charset normalisieren (utf8->UTF-8) wie locale.gen es schreibt, sauber quoten/validieren.
+2. Ticket #42 sagt: chrony-Fehler 'nicht fatal', OCP best-effort. Library stirbt, wenn auch timesyncd nicht aktiv (Rocky: gibt es meist nicht) -> laut warnen statt sterben, wie spezifiziert.
+3. POD verspricht timesyncd-Fallback, den es auf RHEL-Familie nicht gibt -> praezisieren.
+
+Commit cdc069a. Charset normalized as locale.gen spells it, malformed locale rejected before host touched, NTP failure = loud warning, POD timesyncd Debian/Ubuntu only.
