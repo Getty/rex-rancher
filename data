@@ -1,0 +1,16 @@
+---
+claimed_at: 2026-09-25T17:52:36Z
+claimed_by: worker-fixes2
+class: standard
+created: 2026-09-25T17:46:20Z
+id: 60
+priority: low
+started: 2026-09-25T17:46:38Z
+status: review
+title: 'prepare_node: timezone ungequotet/ungeprueft in Shell'
+updated: 2026-09-25T17:52:36Z
+---
+
+Aus #55-Nachlauf: timezone geht ungequotet und ungeprueft in Shell-Kommandos (wie vorher locale). Vor dem Host-Zugriff validieren (Area/City-Muster bzw. gegen /usr/share/zoneinfo), sauber quoten.
+
+Commit 10ef178. Shape check before host, single-quoted. Zone existence not checked (timedatectl auto_die 0), documented.
