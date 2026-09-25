@@ -1,0 +1,18 @@
+---
+claimed_at: 2026-09-25T22:36:15Z
+claimed_by: worker-lan
+class: standard
+created: 2026-09-25T04:55:10Z
+id: 53
+priority: medium
+started: 2026-09-25T22:18:46Z
+status: in-progress
+title: 'LAN-Testmaschine (GTX) als Live-Rig: eg-Rexfile reaktivieren'
+updated: 2026-09-25T22:36:15Z
+---
+
+Maintainer (2026-09-25): kein Hetzner-Server mehr, aber eine von zwei Maschinen mit Grafikkarte (GTX-Klasse) koennte Linux im LAN werden. Dann eg/hetzner-gpu.Rexfile pruefen und wiederverwenden bzw. zu einem generischen eg-Rexfile machen (LAN-IP als tls_san, kein Hetzner-Spezifisches). Abdeckbar: komplette Pipeline Single-Node rke2 UND k3s (k3s nie live gelaufen), prepare_node (#42), Re-Run-Idempotenz/Restart-Logik (#46 #49), Cilium install/upgrade inkl. IPAM-Erhalt und Abbruch ohne kubeconfig (#43 #51), cluster_cidr (#41), Agent-Join-Fehler (#44, zweite Maschine oder falsche Adresse), Distribution-Refactor (#48), GPU Single-Card: Rex::GPU-Klassifizierung Consumer-Karte, Treiber, containerd-Drop-in, Device-Plugin, nvidia.com/gpu. Nicht abdeckbar: Multi-GPU, HGX/NVSwitch/Fabric Manager, vGPU. Treiber-Branch haengt von der GTX-Generation ab (Maxwell/Pascal nur noch bis Branch 580). LibSSH ohne SFTP nachstellen (SFTP-Subsystem aus).
+
+Prep done: eg/lan.Rexfile, commit 1c220cb on worktree branch (cherry-pick pending). LAN_DIST rke2|k3s, LAN_GPU, tasks deploy/rerun/cilium_upgrade/join_agent/check; LAN_JOIN_URL provokes #44 hint. Live run still open (no machine yet). Machine prep: fresh Debian/Ubuntu/Rocky, root SSH key, comment out 'Subsystem sftp', port 6443 reachable (+9345 rke2 agent).
+
+eg/lan.Rexfile on main as f3862d6, pushed. Waiting for the LAN machine.
