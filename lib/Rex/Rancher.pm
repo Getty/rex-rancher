@@ -143,7 +143,9 @@ still set but no hosts entry is written.
 
 =item C<timezone>
 
-Timezone string, e.g. C<Europe/Berlin>. Default: C<UTC>.
+Timezone, a zoneinfo name such as C<Europe/Berlin>, C<UTC> or
+C<Etc/GMT+5>. Default: C<UTC>. Anything else dies before the host is
+touched; see L<Rex::Rancher::Node/prepare_node>.
 
 =item C<locale>
 

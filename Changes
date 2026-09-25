@@ -48,6 +48,10 @@ Revision history for Rex-Rancher
     (charset as locale.gen spells it: de_DE.utf8 enables de_DE.UTF-8 UTF-8)
     and runs locale-gen before setting it. A locale that is not shaped like
     en_US.UTF-8 dies before the host is touched.
+  - prepare_node (and rancher_deploy_server/_agent) dies before the host is
+    touched on a timezone that is not a zoneinfo-shaped name (Europe/Berlin,
+    UTC, Etc/GMT+5); timedatectl and the /etc/localtime symlink get it
+    single-quoted.
   - Recommend Rex::GPU 0.002 for gpu => 1. "GPU hardware support" now
     describes it: Fabric Manager on HGX A100/H100/H200, Fabric Manager plus
     nvlsm and ib_umad on HGX B200/B300 (not only a warning), and the dies

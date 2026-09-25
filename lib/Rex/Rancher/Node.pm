@@ -41,7 +41,12 @@ timers bring them back on schedule, C<unattended-upgrades> at the next boot.
 C<FQDN hostname> with a C<domain>, C<hostname> alone without one (then only
 if no line in C</etc/hosts> names the host yet)
 
-=item * Set timezone via C<timedatectl> or symlink (default: C<UTC>)
+=item * Set timezone via C<timedatectl> or symlink (default: C<UTC>). A
+timezone that is not shaped like a zoneinfo name (C<Area/City> such as
+C<Europe/Berlin> or C<America/Argentina/Buenos_Aires>, C<UTC>,
+C<Etc/GMT+5>: parts of letters, digits, C<_>, C<+> and C<->, each starting
+with a letter, separated by C</>) dies before the host is touched. Whether
+the zone exists is left to the host.
 
 =item * Set locale via C<localectl> or C</etc/default/locale> (default: C<en_US.UTF-8>).
 On Debian/Ubuntu the locale is first enabled in C</etc/locale.gen> and
@@ -94,10 +99,15 @@ sub prepare_node {
 
   my $fqdn = ($hostname && $domain) ? "$hostname.$domain" : undef;
 
-  # Before anything runs: the locale ends up in shell commands.
+  # Before anything runs: the locale and the timezone end up in shell
+  # commands (and the timezone in a path under /usr/share/zoneinfo).
   die "locale must look like en_US.UTF-8 (language_TERRITORY.charset\@modifier: "
     . "letters, digits, _ and -), got '$locale'\n"
     unless $locale =~ /\A[A-Za-z0-9_]+(?:\.[A-Za-z0-9-]+)?(?:\@[A-Za-z0-9]+)?\z/;
+  die "timezone must look like Europe/Berlin, UTC or Etc/GMT+5 (a zoneinfo "
+    . "name: parts of letters, digits, _, + and -, each starting with a "
+    . "letter, separated by /), got '$timezone'\n"
+    unless $timezone =~ m{\A[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z][A-Za-z0-9_+-]*)*\z};
 
   Rex::Logger::info("Preparing node " . ($fqdn // "(unnamed)") . " for Kubernetes");
 
@@ -165,14 +175,16 @@ sub _set_hosts_entry {
     ip     => "127.0.1.1";
 }
 
+# The timezone is validated in prepare_node: no quote can end the single
+# quotes, and no part can be . or .. to leave /usr/share/zoneinfo.
 sub _set_timezone {
   my ($timezone) = @_;
   Rex::Logger::info("Setting timezone to $timezone");
   if (can_run("timedatectl")) {
-    run "timedatectl set-timezone $timezone", auto_die => 0;
+    run "timedatectl set-timezone '".$timezone."'", auto_die => 0;
   }
   else {
-    run "ln -sf /usr/share/zoneinfo/$timezone /etc/localtime", auto_die => 0;
+    run "ln -sf '/usr/share/zoneinfo/".$timezone."' /etc/localtime", auto_die => 0;
     file "/etc/timezone", content => "$timezone\n";
   }
 }

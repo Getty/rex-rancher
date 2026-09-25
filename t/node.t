@@ -14,6 +14,8 @@ use Test::More;
 #    the charset spelled as locale.gen spells it, and generated before
 #    localectl sets it; a locale that is not locale-shaped dies before any
 #    command runs (k55.1).
+# 4. Timezone: a zoneinfo-shaped name reaches timedatectl or the symlink
+#    single-quoted; anything else dies before any command runs (k60).
 #
 # run, pkg, can_run, is_debian, host_entry, get_host and file are replaced in
 # Rex::Rancher::Node, so no remote host is involved. This proves the decision
@@ -205,6 +207,48 @@ subtest 'locale: anything not locale-shaped dies before the host (k55.1)' => sub
     %have = ( 'locale-gen' => 1, localectl => 1 );
     ok( !eval { Rex::Rancher::Node::prepare_node( locale => $bad, ntp => 0 ); 1 }, "'$bad': dies" );
     like( $@, qr/^locale must look like en_US\.UTF-8 .*got '\Q$bad\E'\n\z/s, "'$bad': names it" );
+    is_deeply( [ @cmds, @pkgs ], [], "'$bad': nothing ran" );
+  }
+};
+
+# --- Timezone (k60) ------------------------------------------------------------
+
+subtest 'timezone: zoneinfo names pass, quoted in both commands' => sub {
+  for my $tz ( 'UTC', 'Europe/Berlin', 'America/Argentina/Buenos_Aires', 'America/Port-au-Prince',
+    'Etc/GMT+5', 'Etc/GMT-14', 'EST5EDT' ) {
+    reset_fakes();
+    %have = ( timedatectl => 1 );
+    Rex::Rancher::Node::_set_timezone($tz);
+    is_deeply( \@cmds, ["timedatectl set-timezone '$tz'"], "$tz: timedatectl, quoted" );
+
+    reset_fakes();
+    Rex::Rancher::Node::_set_timezone($tz);
+    is_deeply( \@cmds, [ "ln -sf '/usr/share/zoneinfo/$tz' /etc/localtime", 'file /etc/timezone' ],
+      "$tz: symlink fallback, quoted" );
+  }
+
+  reset_fakes();
+  my @tz;
+  no warnings 'redefine';
+  local *Rex::Rancher::Node::_install_base_packages = sub { };
+  local *Rex::Rancher::Node::_set_timezone          = sub { push @tz, $_[0] };
+  local *Rex::Rancher::Node::_set_locale            = sub { };
+  local *Rex::Rancher::Node::_disable_swap          = sub { };
+  local *Rex::Rancher::Node::_load_kernel_modules   = sub { };
+  local *Rex::Rancher::Node::_configure_sysctl      = sub { };
+  use warnings 'redefine';
+  Rex::Rancher::Node::prepare_node( ntp => 0 );
+  Rex::Rancher::Node::prepare_node( timezone => 'Etc/GMT+5', ntp => 0 );
+  is_deeply( \@tz, [ 'UTC', 'Etc/GMT+5' ], 'prepare_node: default UTC and Etc/GMT+N get through' );
+};
+
+subtest 'timezone: anything not zoneinfo-shaped dies before the host' => sub {
+  for my $bad ( q{UTC'; rm -rf /; '}, 'Europe/Berlin; reboot', '$(id)', '../../../etc/shadow',
+    'Europe/../../etc/passwd', '/etc/shadow', 'Europe/', 'Europe Berlin', '' ) {
+    reset_fakes();
+    %have = ( timedatectl => 1 );
+    ok( !eval { Rex::Rancher::Node::prepare_node( timezone => $bad, ntp => 0 ); 1 }, "'$bad': dies" );
+    like( $@, qr/^timezone must look like Europe\/Berlin, UTC or Etc\/GMT\+5 .*got '\Q$bad\E'\n\z/s, "'$bad': names it" );
     is_deeply( [ @cmds, @pkgs ], [], "'$bad': nothing ran" );
   }
 };
