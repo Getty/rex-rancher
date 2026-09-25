@@ -149,5 +149,6 @@ parts (config builders, installer command strings, release decisions) with `run`
 replaced by fakes (pattern: `t/token.t`). None of it says anything about a deploy. There is no integration test and no way to exercise a real install without a
 throwaway host. A green suite here is not evidence that a pipeline change works; a change
 to install ordering, the kubeconfig patch, or the K8s API objects can only be trusted
-after a live deploy against a real node (see `eg/hetzner-gpu.Rexfile`). Say plainly that
+after a real deploy — in practice through `kubernetes-ocp`, which provisions via
+Rex::Rancher (GPU only on citilan; `eg/hetzner-gpu.Rexfile` is an example, not a test rig). Say plainly that
 the suite proves compilation, not behaviour.

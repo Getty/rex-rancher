@@ -28,6 +28,8 @@ dzil build
 dzil test
 ```
 
-There is no integration test; a pipeline change is only trustworthy after a live run
-against a real node (`eg/hetzner-gpu.Rexfile`). `dzil release` is maintainer-only — see
+There is no integration test; a pipeline change is only trustworthy after a real deploy —
+in practice through `kubernetes-ocp` (~/dev/kubernetes-ocp), which provisions via
+Rex::Rancher; GPU only on the citilan machine. There is no Hetzner test host any more
+(`eg/hetzner-gpu.Rexfile` is an example, not a test rig). `dzil release` is maintainer-only — see
 the rules file.

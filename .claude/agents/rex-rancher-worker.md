@@ -57,7 +57,9 @@ prove -lr t/        # compile check + offline unit tests with run faked
 State plainly that the suite proves the modules **compile** and the pure logic, and
 nothing about a deploy. There is no integration test; a change to install ordering, the `127.0.0.1`
 kubeconfig patch, the Cilium/`config.yaml` agreement, or a `K8s.pm` API object can only
-be trusted after a live run against a real node (`eg/hetzner-gpu.Rexfile`). Never report
+be trusted after a real deploy — in practice through `kubernetes-ocp` (GPU only on
+citilan; there is no Hetzner test host, `eg/hetzner-gpu.Rexfile` is only an example).
+Name what stays unverified live instead of telling anyone to run the eg Rexfile. Never report
 green as evidence for a pipeline change.
 
 A change that alters what a Rexfile author sees — a new option, a changed default, a

@@ -59,8 +59,10 @@ skill `rex-rancher-core`.
 `t/` holds a compile check (`t/00-load.t`) and offline unit tests with `run` faked.
 There is no integration test and no way to exercise a real install without a throwaway host. Never
 report green as evidence for a pipeline change; a change to install ordering, the
-`127.0.0.1` kubeconfig patch, or a `K8s.pm` object is only trustworthy after a live run
-against a real node (`eg/hetzner-gpu.Rexfile`).
+`127.0.0.1` kubeconfig patch, or a `K8s.pm` object is only trustworthy after a real
+deploy — in practice through `kubernetes-ocp`, which provisions via Rex::Rancher (GPU only
+on citilan). There is no Hetzner test host; `eg/hetzner-gpu.Rexfile` is an example, not a
+test rig. Flag "unverified live" once per change; don't nag for a run every turn.
 
 ```bash
 prove -lr t/

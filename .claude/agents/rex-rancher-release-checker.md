@@ -54,11 +54,12 @@ releases. **Never** run `dzil release` or upload to CPAN.
    git ls-files .claude
    ```
 
-6. **No integration proof exists — say so.** `t/` holds only `t/00-load.t`, a compile
-   check. A release of this distribution claims a full RKE2/K3s deploy works, and the
+6. **No integration proof exists — say so.** `t/` holds a compile check and offline unit
+   tests with `run` faked. A release of this distribution claims a full RKE2/K3s deploy works, and the
    suite cannot show that. Report the readiness of the *code and metadata*; state
    explicitly that deploy behaviour is unverified by the test suite and rests on a live
-   run having been done (`eg/hetzner-gpu.Rexfile`) — treat "no live deploy since the last
+   deploy having been done (in practice through `kubernetes-ocp`; GPU only on citilan —
+   there is no Hetzner test host) — treat "no live deploy since the last
    pipeline change" as a caution, not a silent pass.
 
 7. **POD** — each module carries `# ABSTRACT:` and a DESCRIPTION; `=method` blocks match
