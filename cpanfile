@@ -4,6 +4,8 @@ requires 'IO::K8s', '1.108';
 requires 'IO::Socket::SSL';
 requires 'JSON::MaybeXS';
 requires 'Kubernetes::REST', '1.108';
+requires 'Moo';
+requires 'namespace::autoclean';
 requires 'Rex', '1.14.0';
 recommends 'Rex::GPU', '0.002';
 recommends 'Rex::LibSSH', '0.004';
