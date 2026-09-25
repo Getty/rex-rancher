@@ -1,0 +1,17 @@
+---
+claimed_at: 2026-09-25T04:53:16Z
+claimed_by: main
+class: standard
+completed: 2026-09-25T04:53:16Z
+created: 2026-09-25T04:52:13Z
+id: 52
+priority: medium
+started: 2026-09-25T04:52:33Z
+status: done
+title: 'Live-Nachweis: kubernetes-ocp statt eg/hetzner-gpu.Rexfile'
+updated: 2026-09-25T04:53:16Z
+---
+
+Maintainer (2026-09-25): eg/hetzner-gpu.Rexfile ist tot, es gibt keinen Hetzner-Host mehr zum Testen. Der reale Live-Nachweis fuer die Pipeline kommt aus kubernetes-ocp (ocp #155 stellt auf Rex::Rancher um), GPU nur auf citilan. Verweise in CLAUDE.md, .claude/rules, Skill rex-rancher-core, Agents, README 'Verifying a deploy' umstellen. Offen: eg-Datei selbst loeschen oder als Beispiel behalten (README:94, Rancher.pm:506 verweisen als Beispiel).
+
+Done in 2cde963. eg/hetzner-gpu.Rexfile kept as example (README, Rancher.pm POD, Changes reference it) — deletion is maintainer's call.
