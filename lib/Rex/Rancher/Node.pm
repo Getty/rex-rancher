@@ -46,13 +46,17 @@ if no line in C</etc/hosts> names the host yet)
 =item * Set locale via C<localectl> or C</etc/default/locale> (default: C<en_US.UTF-8>).
 On Debian/Ubuntu the locale is first enabled in C</etc/locale.gen> and
 generated with C<locale-gen> (skipped for C<C>/C<POSIX> and when
-C<locale-gen> is not installed)
+C<locale-gen> is not installed). The charset is written the way
+C<locale.gen> spells it, so C<de_DE.utf8> enables C<de_DE.UTF-8 UTF-8>.
+A locale that is not C<language_TERRITORY.charset@modifier> shaped (letters,
+digits, C<_>, C<->) dies before the host is touched.
 
 =item * NTP (default: enabled): nothing is installed when C<timedatectl>
 already reports the clock as NTP-synchronized; otherwise C<chrony> is
 installed and started. If the C<chrony> install fails, C<systemd-timesyncd>
-is started instead, and C<prepare_node> dies only when that is not active
-either
+is started instead where the host has it (Debian/Ubuntu; the RHEL family
+does not ship it). When that is not active either, C<prepare_node> goes on
+with a warning that no time synchronization is active
 
 =item * Disable and remove swap entries from C</etc/fstab>
 
@@ -89,6 +93,11 @@ sub prepare_node {
   my $ntp      = exists $opts{ntp} ? $opts{ntp} : 1;
 
   my $fqdn = ($hostname && $domain) ? "$hostname.$domain" : undef;
+
+  # Before anything runs: the locale ends up in shell commands.
+  die "locale must look like en_US.UTF-8 (language_TERRITORY.charset\@modifier: "
+    . "letters, digits, _ and -), got '$locale'\n"
+    unless $locale =~ /\A[A-Za-z0-9_]+(?:\.[A-Za-z0-9-]+)?(?:\@[A-Za-z0-9]+)?\z/;
 
   Rex::Logger::info("Preparing node " . ($fqdn // "(unnamed)") . " for Kubernetes");
 
@@ -191,17 +200,33 @@ sub _generate_locale {
     Rex::Logger::info("locale-gen not installed, $locale is not generated", 'warn');
     return;
   }
-  my ($charset) = $locale =~ /\.([^.@]+)/;
-  run _enable_locale_cmd($locale.' '.$charset, '/etc/locale.gen'), auto_die => 0
+  my ($name, $charset) = _locale_gen_name($locale);
+  run _enable_locale_cmd($name.' '.$charset, '/etc/locale.gen'), auto_die => 0
     if $charset;
-  run "locale-gen $locale", auto_die => 0;
-  Rex::Logger::info("locale-gen $locale failed", 'warn') if $? != 0;
+  run "locale-gen $name", auto_die => 0;
+  Rex::Logger::info("locale-gen $name failed", 'warn') if $? != 0;
 }
 
-# Uncomment "<locale> <charset>" in locale.gen, append it when absent.
+# The locale as locale.gen spells it, and its charset there (undef without
+# one): glibc accepts de_DE.utf8 for de_DE.UTF-8, but locale.gen lists only
+# "de_DE.UTF-8 UTF-8", and enabling "de_DE.utf8 utf8" builds nothing.
+sub _locale_gen_name {
+  my ($locale) = @_;
+  my ($base, $charset, $modifier) = $locale =~ /\A([^.@]+)(?:\.([^@]+))?(\@.+)?\z/;
+  return ($locale) unless defined $charset;
+  $charset = uc $charset;
+  $charset = $charset =~ /\AUTF-?8\z/           ? 'UTF-8'
+           : $charset =~ /\AISO-?8859-?(\d+)\z/ ? "ISO-8859-$1"
+           :                                      $charset;
+  return ($base.'.'.$charset.($modifier // ''), $charset);
+}
+
+# Uncomment "<locale> <charset>" in locale.gen, append it when absent. The
+# line is a validated locale (see prepare_node): no quote can end the
+# shell's single quotes, and every ERE metacharacter is escaped.
 sub _enable_locale_cmd {
   my ($line, $file) = @_;
-  (my $re = $line) =~ s/\./\\./g;
+  (my $re = $line) =~ s/([.\[\]()*+?{}|^\$\\])/\\$1/g;
   return 'if [ -f '.$file.' ]; then '
     .q{sed -i -E 's/^#\s*(}.$re.q{)\s*$/\1/' }.$file.'; '
     .q{grep -qE '^}.$re.q{\s*$' }.$file.q{ || echo '}.$line.q{' >> }.$file.'; fi';
@@ -226,9 +251,16 @@ sub _setup_ntp {
 
   run "systemctl enable --now systemd-timesyncd 2>/dev/null", auto_die => 0;
   my $active = run "systemctl is-active systemd-timesyncd 2>/dev/null", auto_die => 0;
-  die "No NTP: chrony install failed ($err) and systemd-timesyncd is not active\n"
-    unless defined $active && $active =~ /^\s*active\s*$/;
-  Rex::Logger::info("Using systemd-timesyncd for NTP");
+  if (defined $active && $active =~ /^\s*active\s*$/) {
+    Rex::Logger::info("Using systemd-timesyncd for NTP");
+    return;
+  }
+  # Not fatal (k42): the node works, only its clock may drift. Loud, because
+  # the skew shows up later as TLS and etcd errors far from this step.
+  Rex::Logger::info("NO TIME SYNCHRONIZATION IS ACTIVE on this node: chrony install "
+    . "failed ($err) and systemd-timesyncd is not active (the RHEL family does not "
+    . "ship it). Clock skew between nodes breaks certificate validation and etcd; "
+    . "set up NTP on this host yourself", 'warn');
 }
 
 sub _disable_swap {
@@ -304,7 +336,9 @@ required by Kubernetes networking and CNI plugins.
 =item * B<NTP> — Time skew between nodes causes certificate validation
 failures and etcd instability. An already synchronized clock is left as it
 is; otherwise C<chrony> is installed and started, with C<systemd-timesyncd>
-as the fallback when that install fails.
+as the fallback when that install fails on a host that has it
+(Debian/Ubuntu). Without either, preparation goes on with a warning that no
+time synchronization is active.
 
 =back
 

@@ -32,11 +32,15 @@ Revision history for Rex-Rancher
     this node can reach that address") above the journal tail.
   - prepare_node leaves an already NTP-synchronized clock alone instead of
     installing chrony; a failed chrony install falls back to
-    systemd-timesyncd and dies only when that is not active either.
+    systemd-timesyncd where the host has it (Debian/Ubuntu, not the RHEL
+    family) and, when that is not active either, goes on with a warning
+    that no time synchronization is active.
   - prepare_node with hostname but no domain writes 127.0.1.1 hostname to
     /etc/hosts, unless a line already names the host.
-  - prepare_node on Debian/Ubuntu enables the locale in /etc/locale.gen and
-    runs locale-gen before setting it.
+  - prepare_node on Debian/Ubuntu enables the locale in /etc/locale.gen
+    (charset as locale.gen spells it: de_DE.utf8 enables de_DE.UTF-8 UTF-8)
+    and runs locale-gen before setting it. A locale that is not shaped like
+    en_US.UTF-8 dies before the host is touched.
   - Recommend Rex::GPU 0.002 for gpu => 1. "GPU hardware support" now
     describes it: Fabric Manager on HGX A100/H100/H200, Fabric Manager plus
     nvlsm and ib_umad on HGX B200/B300 (not only a warning), and the dies

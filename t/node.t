@@ -6,12 +6,14 @@ use Test::More;
 # Offline tests for prepare_node's NTP, /etc/hosts and locale steps (k42).
 #
 # 1. NTP: an already NTP-synchronized clock installs nothing; a failed chrony
-#    install falls back to systemd-timesyncd and dies only when that is not
-#    active either.
+#    install falls back to systemd-timesyncd and warns loudly, not dies, when
+#    that is not active either (k55.2).
 # 2. /etc/hosts: a hostname without domain still gets 127.0.1.1, unless a
 #    line already names it.
-# 3. Locale: on Debian/Ubuntu the locale is enabled in /etc/locale.gen and
-#    generated before localectl sets it.
+# 3. Locale: on Debian/Ubuntu the locale is enabled in /etc/locale.gen, with
+#    the charset spelled as locale.gen spells it, and generated before
+#    localectl sets it; a locale that is not locale-shaped dies before any
+#    command runs (k55.1).
 #
 # run, pkg, can_run, is_debian, host_entry, get_host and file are replaced in
 # Rex::Rancher::Node, so no remote host is involved. This proves the decision
@@ -20,7 +22,7 @@ use Test::More;
 
 use Rex::Rancher::Node;
 
-my ( @cmds, @pkgs, @hosts, %answer, %have, $debian, $pkg_fails, @existing );
+my ( @cmds, @pkgs, @hosts, @warn, %answer, %have, $debian, $pkg_fails, @existing );
 {
   no warnings 'redefine';
   *Rex::Rancher::Node::run = sub {
@@ -44,10 +46,11 @@ my ( @cmds, @pkgs, @hosts, %answer, %have, $debian, $pkg_fails, @existing );
   *Rex::Rancher::Node::host_entry = sub { my ( $name, %o ) = @_; push @hosts, [ $name, \%o ] };
   *Rex::Rancher::Node::get_host   = sub { @existing };
   *Rex::Rancher::Node::file       = sub { push @cmds, 'file '.$_[0] };
+  *Rex::Logger::info              = sub { push @warn, $_[0] if ( $_[1] // '' ) eq 'warn' };
 }
 
 sub reset_fakes {
-  @cmds = @pkgs = @hosts = @existing = ();
+  @cmds = @pkgs = @hosts = @existing = @warn = ();
   %answer    = ();
   %have      = ();
   $debian    = 0;
@@ -90,14 +93,15 @@ subtest 'ntp: chrony fails, timesyncd active' => sub {
   ok( !grep( /chronyd/, @cmds ), 'chrony service not touched' );
 };
 
-subtest 'ntp: chrony fails, timesyncd not active dies' => sub {
+subtest 'ntp: chrony fails, no timesyncd (RHEL family) warns, does not die (k55.2)' => sub {
   reset_fakes();
   $answer{qr/NTPSynchronized/}  = [ "no\n", 0 ];
   $answer{qr/is-active systemd-timesyncd/} = [ "inactive\n", 3 ];
   $pkg_fails = 1;
-  ok( !eval { Rex::Rancher::Node::_setup_ntp(); 1 }, 'dies' );
-  like( $@, qr/^No NTP: chrony install failed \(Error installing chrony\) and systemd-timesyncd is not active\n\z/,
-    'names both failures, no line number' );
+  ok( eval { Rex::Rancher::Node::_setup_ntp(); 1 }, 'does not die, as k42 specifies' ) or diag $@;
+  is( scalar @warn, 2, 'the chrony fallback, then the outcome' );
+  like( $warn[1] // '', qr/^NO TIME SYNCHRONIZATION IS ACTIVE on this node: chrony install failed \(Error installing chrony\) and systemd-timesyncd is not active/,
+    'says plainly that nothing syncs the clock, and why' );
 };
 
 # --- /etc/hosts --------------------------------------------------------------
@@ -170,6 +174,39 @@ subtest 'locale: debian without locale-gen only sets' => sub {
   %have = ( localectl => 1 );
   Rex::Rancher::Node::_set_locale('de_DE.UTF-8');
   is_deeply( \@cmds, ['localectl set-locale LANG=de_DE.UTF-8'], 'no generation attempted' );
+};
+
+subtest 'locale: the charset is spelled as locale.gen spells it (k55.1)' => sub {
+  for my $case (
+    [ 'de_DE.utf8',        'de_DE.UTF-8 UTF-8',                'de_DE.UTF-8' ],
+    [ 'de_DE.UTF8',        'de_DE.UTF-8 UTF-8',                'de_DE.UTF-8' ],
+    [ 'en_GB.utf-8',       'en_GB.UTF-8 UTF-8',                'en_GB.UTF-8' ],
+    [ 'de_DE.iso88591',    'de_DE.ISO-8859-1 ISO-8859-1',      'de_DE.ISO-8859-1' ],
+    [ 'en_US.ISO-8859-15', 'en_US.ISO-8859-15 ISO-8859-15',    'en_US.ISO-8859-15' ],
+  ) {
+    my ( $locale, $line, $name ) = @$case;
+    reset_fakes();
+    $debian = 1;
+    %have = ( 'locale-gen' => 1, localectl => 1 );
+    Rex::Rancher::Node::_set_locale($locale);
+    ( my $re = $line ) =~ s/\./\\./g;
+    ok( index( $cmds[0], q{sed -i -E 's/^#\s*(}.$re.q{)\s*$/\1/'} ) >= 0, "$locale: uncomments '$line'" )
+      or diag $cmds[0];
+    like( $cmds[0], qr{\|\| echo '\Q$line\E' >> /etc/locale\.gen; fi$}, "$locale: appends '$line'" );
+    is( $cmds[1], "locale-gen $name", "$locale: generates $name" );
+    is( $cmds[2], "localectl set-locale LANG=$locale", "$locale: sets it as given" );
+  }
+};
+
+subtest 'locale: anything not locale-shaped dies before the host (k55.1)' => sub {
+  for my $bad ( q{en_US.UTF-8'; rm -rf /; '}, 'en_US.UTF-8 UTF-8', 'de_DE.(utf8)', '$(id)', '' ) {
+    reset_fakes();
+    $debian = 1;
+    %have = ( 'locale-gen' => 1, localectl => 1 );
+    ok( !eval { Rex::Rancher::Node::prepare_node( locale => $bad, ntp => 0 ); 1 }, "'$bad': dies" );
+    like( $@, qr/^locale must look like en_US\.UTF-8 .*got '\Q$bad\E'\n\z/s, "'$bad': names it" );
+    is_deeply( [ @cmds, @pkgs ], [], "'$bad': nothing ran" );
+  }
 };
 
 subtest 'locale: C.UTF-8 is built in' => sub {
