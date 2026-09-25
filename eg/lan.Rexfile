@@ -13,7 +13,7 @@
 #   LAN_GPU=1    rex -f eg/lan.Rexfile -H 192.0.2.10 deploy    # + GPU (reboots once)
 #   rex -f eg/lan.Rexfile -H 192.0.2.10 rerun                  # idempotency run
 #   rex -f eg/lan.Rexfile -H 192.0.2.10 check                  # control points
-#   LAN_CILIUM_UPGRADE_TO=1.17.6 \
+#   LAN_CILIUM_UPGRADE_TO=1.20.2 \
 #     rex -f eg/lan.Rexfile -H 192.0.2.10 cilium_upgrade       # upgrade w/ kubeconfig
 #   LAN_SERVER=192.0.2.10 rex -f eg/lan.Rexfile -H 192.0.2.11 join_agent  # agent join
 #
@@ -33,7 +33,7 @@
 #                         one and reuses it on every re-run, `join_agent` reads it
 #                         from the server
 #   LAN_VERSION           pinned rke2/k3s version (e.g. v1.33.4+rke2r1)
-#   LAN_CILIUM_VERSION    Cilium version for deploy/rerun (library default 1.17.0)
+#   LAN_CILIUM_VERSION    Cilium version for deploy/rerun (library default 1.20.0)
 #   LAN_CILIUM_CLI_VERSION Cilium CLI version (for a newer Cilium)
 #   LAN_CILIUM_UPGRADE_TO Cilium version for `cilium_upgrade` (REQUIRED there)
 #   LAN_CLUSTER_CIDR      cluster_cidr (pod network), e.g. 10.44.0.0/16
