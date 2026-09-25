@@ -1,0 +1,16 @@
+---
+claimed_at: 2026-09-25T22:35:49Z
+claimed_by: worker-backlog
+class: standard
+created: 2026-09-25T19:49:11Z
+id: 63
+priority: low
+started: 2026-09-25T22:18:19Z
+status: review
+title: Skew-Check auch gegen gestoppten Dienst / alte Binary
+updated: 2026-09-25T22:35:49Z
+---
+
+Aus #56: Skew-Regeln vergleichen nur gegen den laufenden Prozess. Ein gestoppter Dienst mit alter Binary auf der Platte wird nicht geprueft (z.B. Node nach Crash, dann Re-Run mit >1 Minor-Sprung). Installierte Binary-Version als Fallback-Referenz nutzen.
+
+Commit d336335. Stopped service: installed binary is the reference; no binary = fresh.
