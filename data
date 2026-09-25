@@ -1,0 +1,16 @@
+---
+claimed_at: 2026-09-25T04:07:55Z
+claimed_by: worker-followup
+class: standard
+created: 2026-09-25T03:25:23Z
+id: 46
+priority: medium
+started: 2026-09-25T03:55:51Z
+status: review
+title: 'rke2: Re-Run heilt mit Rex::GPU 0.001 eingerichteten Node nicht (kein Restart)'
+updated: 2026-09-25T04:07:55Z
+---
+
+Aus #40: Rex::GPU 0.002 entfernt das alte config.toml.tmpl, startet aber den Dienst bewusst nicht neu (NVIDIA.pm:1260-1283). k3s heilt (Server.pm:615 restart), rke2 nicht (Server.pm:573 systemctl start --no-block = no-op bei laufender Unit). Node behaelt kaputte containerd-Config (ohne SystemdCgroup) bis manueller Restart. Entscheiden: restart wenn Config geaendert, oder laut warnen. Nur live verifizierbar.
+
+Commit c86c9ec. Rex::GPU 0.002 gives no signal; Server::_start_verb reads containerd config.toml: bare 0.001 shape + template gone + service active -> one restart --no-block with warn; template still present -> warn with manual command; else unchanged (rke2 start, k3s restart). t/containerd-stale.t. Live-only: needs a node really set up with 0.001.
