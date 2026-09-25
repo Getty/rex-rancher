@@ -18,7 +18,9 @@ and k3s differ in is one Moo object, `Rex::Rancher::Distribution`:
 | `Rex::Rancher::Agent` | `install_agent` | worker join |
 | `Rex::Rancher::Cilium` | `install_cilium`, `upgrade_cilium`, `ensure_gateway_api_crds` | Cilium CLI + Helm values |
 | `Rex::Rancher::K8s` | `wait_for_api`, `deploy_nvidia_device_plugin`, `untaint_node` | local K8s API ops |
-| `Rex::Rancher::Distribution` (+ `::RKE2`, `::K3s`) | — (Moo, `new_for($name, role => 'server'\|'agent')`) | per-distribution paths, service, installer lines, start verb, the host steps server and agent share |
+| `Rex::Rancher::Distribution` (+ `::RKE2`, `::K3s`) | — (Moo, `new_for($name, role => 'server'\|'agent')`, class loaded via `use_module`) | per-distribution paths, service, installer lines, start verb, version skew, the host steps server and agent share; `cilium_helm_defaults`, `needs_k8s_service_host`, `gateway_api_crd_chart`, `live_verified`, `unknown_distribution` |
+| `Rex::Rancher::Options` | — | pure option checks: `resolve_install_method`, `check_cluster_cidr` |
+| `Rex::Rancher::Checksum` | — | `expected_sha256`, `sha256_of`, `verify_sha256` for the artifact install |
 
 The distribution just wires these steps; the domain knowledge behind each step lives in
 dedicated skills — RKE2/K3s config and joining: `kubernetes-rke2`; Cilium/eBPF/kube-proxy
@@ -51,10 +53,12 @@ kubeconfig, no Cilium, no device plugin — the worker joins an existing cluster
 
 ## rke2 is the default; k3s is the parallel path
 
-Every module that installs anything branches on `distribution` (`'rke2'` default,
-`'k3s'`) through a private `_paths`/`_paths_for` table and `die`s on anything else. When
-you touch one distribution's paths, service name, install URL, or ports, find the k3s
-counterpart in the same file — they are meant to stay in lockstep. Server join port
+Every module that installs anything asks a `Rex::Rancher::Distribution` object
+(`new_for($distribution)`, `'rke2'` default, `'k3s'`; anything else dies via
+`unknown_distribution`). A difference between the two is a method overridden in both
+`Distribution/RKE2.pm` and `Distribution/K3s.pm` — never an `eq 'k3s'` in a caller. When
+you touch one distribution's paths, service name, install URL, or ports, change the other
+class in the same edit — they are meant to stay in lockstep. Server join port
 differs (RKE2 `:9345`, K3s `:6443`); the API is `:6443` for both.
 
 ## No kubectl — the K8s API is spoken from the local machine
@@ -90,10 +94,10 @@ version broke a real deploy:
   `auto_die => 0` and swallow `/cannot re-use a name/i` as success — removing that makes
   every re-run without `kubeconfig_file` fail. `rancher_deploy_server` passes the
   kubeconfig only once `wait_for_api` answered.
-- **RKE2 installer** (`_install_rke2`, `install_method => 'script'`): `curl … | sh -` runs
+- **RKE2 installer** (`run_server_install_script` on `Distribution::RKE2`, `install_method => 'script'`): `curl … | sh -` runs
   with `auto_die => 0` because the script prints GPG key-import noise to STDERR (seen on
   Rocky 10); success is confirmed with `command -v rke2` and, when `version` is pinned,
-  `_verify_installed_version` (a failed pinned upgrade leaves the old binary). The
+  `verify_installed_version` (a failed pinned upgrade leaves the old binary). The
   `artifact` method uses the tarball path (no GPG import) and runs with `auto_die => 1`.
 - **Secrets on disk**: `config.yaml` (join token) and `registries.yaml` go through
   `_write_secret_file` (0600 root:root, pre-created Rex tmp file). The token never goes
@@ -117,7 +121,16 @@ disabling the bundled CNI without installing Cilium leaves the cluster with no n
   it on a live control plane kills the next restart ("encrypted with different token").
   A worker join needs the *same* token, fetched with `get_token`.
 - `version` — the RKE2/K3s version. Cilium's is `cilium_version` on
-  `rancher_deploy_server`; never reuse `version` for it.
+  `rancher_deploy_server`; never reuse `version` for it. A re-run follows the Kubernetes
+  version skew policy against the running (or, if stopped, installed) version, rke2 and
+  k3s alike: patch → restart; +1 minor → restart only when `version` is pinned, else warn
+  and keep the old one running; >1 minor or any downgrade → die before installing. Unpinned,
+  the target is resolved from the stable channel first. An agent is never taken to a newer
+  minor than the control plane (checkable only with `kubeconfig`).
+- Re-run restarts — rke2 gets `start` (a running control plane is left alone) unless
+  `restart_reasons` finds something it must re-read (config/registries/env file/containerd
+  drop-in newer than the main PID, new binary within the skew rules, a Rex::GPU 0.001
+  containerd config). k3s restarts every run (its installer rewrites the unit).
 - `tls_san` — accepts a string, comma-separated list, or arrayref; **the first entry
   doubles as the kubeconfig server address** in step 5. A missing/oddly-ordered `tls_san`
   produces a kubeconfig still pointing at `127.0.0.1`.
