@@ -541,6 +541,10 @@ sub _install {
   # The binary being there is not enough when a version is pinned: a failed
   # pinned upgrade leaves the old one in place.
   $dist->verify_installed_version($version);
+  # Before the start decision: this start would render Rex::GPU 0.001's bare
+  # containerd template again (start_verb restarts a running service whose
+  # config.toml is still its output).
+  $dist->remove_bare_containerd_template;
 
   # Enable and start the service. --no-block: return immediately; RKE2 first
   # start pulls many images and exceeds systemctl's default 90s activation
@@ -638,14 +642,18 @@ systemd's 90-second activation timeout (RKE2's first start pulls many
 container images), then polled with C<systemctl is-active> for up to 10
 minutes; a C<failed> or never-active service dies with its journal tail.
 A running C<rke2-server> is left running on a re-run (C<systemctl start>)
-unless it has to take something new (see L</Re-runs>). It is also restarted
-if C<agent/etc/containerd/config.toml> is still the output of the C<config.toml.tmpl> that L<Rex::GPU> 0.001 wrote (only
-C<imports> and C<version = 2>, no C<SystemdCgroup>, sandbox image or registry
-mirrors) and that template is gone (L<Rex::GPU> 0.002's C<gpu_setup> removes
-it), the service is restarted once, with a warning, so rke2 regenerates its
-containerd config. If the template is still there, nothing is restarted and a
-warning names what to remove and the restart command. K3s is restarted on
-every run anyway (below), so it regenerates its config either way.
+unless it has to take something new (see L</Re-runs>). Before the service
+is (re)started, an C<agent/etc/containerd/config.toml.tmpl> that holds only
+C<imports> and C<version = 2>, as L<Rex::GPU> 0.001 wrote it, is removed with
+a warning: rke2 renders it instead of its own containerd config, so no
+C<SystemdCgroup>, sandbox image or registry mirrors. The content decides,
+never the path: any other template stays, with a log line. If the removal
+fails, C<install_server> dies before the start. While
+C<agent/etc/containerd/config.toml> is still that template's output, a
+running service is then restarted once, with a warning, so rke2 renders its
+own containerd config (see
+L<Rex::Rancher::Distribution/remove_bare_containerd_template>). K3s is
+restarted on every run anyway (below), so it renders its config either way.
 After that the function waits until the kubeconfig file appears at
 C</etc/rancher/rke2/rke2.yaml>; API readiness is confirmed separately by the
 caller using L<Rex::Rancher::K8s/wait_for_api>.
@@ -700,7 +708,9 @@ script runs with C<INSTALL_K3S_SKIP_START>: instead of its own blocking
 restart, C<k3s.service> is restarted with C<--no-block>, then the same
 C<systemctl is-active> wait (at most 10 minutes, journal tail on failure) as
 for RKE2 follows, so a joining server that cannot reach the first one dies
-instead of hanging the deploy. Then the kubeconfig wait. The token is read from
+instead of hanging the deploy. A bare C<config.toml.tmpl> in
+C</var/lib/rancher/k3s/agent/etc/containerd> is removed before that
+restart, as on RKE2. Then the kubeconfig wait. The token is read from
 C<config.yaml> and never passed on the command line. Traefik and
 ServiceLB are disabled by default (C<disable> in C<config.yaml>, see
 L</install_server>) to leave room for Cilium and external load balancers.

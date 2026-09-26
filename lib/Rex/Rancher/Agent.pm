@@ -243,6 +243,9 @@ sub _enable_service {
   my ($dist, $server, $version) = @_;
 
   my $service = $dist->service;
+  # Before the start decision, as on the server: this start would render
+  # Rex::GPU 0.001's bare containerd template again.
+  $dist->remove_bare_containerd_template;
   # k3s: restart, as the install script did before INSTALL_K3S_SKIP_START,
   # so a re-run still picks up a new binary and config.yaml. rke2's
   # installer never started the agent: start, or restart for a stale
@@ -325,7 +328,10 @@ C</etc/default/rke2-agent>, containerd drop-ins, NVIDIA runtime or binary
 changed since it started, or its containerd config is still the output of
 L<Rex::GPU> 0.001's template: then it is restarted, as described under
 "Re-runs" and "RKE2 installation" in L<Rex::Rancher::Server>, which also
-describes the version skew rules that apply to agents as to servers. For both distributions the
+describes the version skew rules that apply to agents as to servers. That
+bare template (only C<imports> and C<version = 2>) is removed before the
+agent is (re)started, on RKE2 and K3s, as there; any other template stays.
+For both distributions the
 token is read from C<config.yaml> and never passed on the installer command
 line, where C<ps> would show it. C<config.yaml> and C<registries.yaml> are
 written C<0600 root:root>.

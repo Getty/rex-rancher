@@ -1062,8 +1062,11 @@ restarts as any other change does.
 
 Then C<restart> when a running service's containerd C<config.toml> is still
 the output of L<Rex::GPU> 0.001's bare C<config.toml.tmpl> and the template
-is gone, with a warning, so it regenerates that config; a template still in
-place only warns with the command to run. Otherwise L</default_start_verb>,
+is gone (L</remove_bare_containerd_template>, which
+L<Rex::Rancher::Server/install_server> and
+L<Rex::Rancher::Agent/install_agent> run first) or replaced by another one,
+with a warning, so it renders that config anew; the bare template still in
+place only warns with what to do. Otherwise L</default_start_verb>,
 and where that is C<start> (RKE2), C<restart> when L</restart_reasons> has
 any, logging them: a running service reads its configuration only when it
 starts.
@@ -1122,12 +1125,15 @@ sub _hold_new_binary {
 # Rex::GPU 0.001 wrote agent/etc/containerd/config.toml.tmpl as a bare
 # `imports = [...]` + `version = 2`. rke2 renders a template instead of its
 # own config, so config.toml became exactly that: no SystemdCgroup, sandbox
-# image or registry mirrors. Rex::GPU 0.002's gpu_setup removes the template
-# but deliberately restarts nothing, and config.toml is rewritten only when
-# the service starts. So: config.toml still in that shape and the template
-# gone -> restart a running service once; the regenerated config no longer
-# matches, so the next re-run starts (a no-op) again. Template still there
-# -> a restart would render the same file: warn with what to do.
+# image or registry mirrors. remove_bare_containerd_template (which
+# install_server and install_agent run before this) and Rex::GPU 0.002's
+# gpu_setup remove the template, but restart nothing, and config.toml is
+# rewritten only when the service starts. So: config.toml still in that
+# shape and the template gone, or replaced by another one since -> restart a
+# running service once; the rendered config no longer matches, so the next
+# re-run starts (a no-op) again. The bare template still there (start_verb
+# asked without removing it first) -> a restart would render the same file:
+# warn with what to do.
 sub _stale_containerd_restart {
   my ( $self ) = @_;
   my $distribution = $self->name;
@@ -1137,21 +1143,76 @@ sub _stale_containerd_restart {
   my $config = Rex::Commands::Run::run("cat $dir/config.toml 2>/dev/null", auto_die => 0);
   return 0 unless $self->is_bare_template_output($config);
 
-  Rex::Commands::Run::run("test -e $dir/config.toml.tmpl", auto_die => 0);
-  if ($? == 0) {
+  my $tmpl     = Rex::Commands::Run::run("cat $dir/config.toml.tmpl 2>/dev/null", auto_die => 0);
+  my $has_tmpl = $? == 0;
+  if ($has_tmpl && $self->is_bare_template_output($tmpl)) {
     Rex::Logger::info("$dir/config.toml.tmpl holds only imports and version = 2 (as "
       . "Rex::GPU 0.001 wrote it) and replaces ${distribution}'s own containerd config: "
-      . "no SystemdCgroup, sandbox image or registry mirrors. Remove it (Rex::GPU "
-      . "0.002's gpu_setup does) and run: systemctl restart $service", 'warn');
+      . "no SystemdCgroup, sandbox image or registry mirrors. Remove it "
+      . "(remove_bare_containerd_template, as install_server and install_agent do) "
+      . "and run: systemctl restart $service", 'warn');
     return 0;
   }
 
   Rex::Commands::Run::run("systemctl is-active --quiet $service", auto_die => 0);
   # Not running: the start renders a fresh config.toml anyway.
   return 0 unless $? == 0;
-  Rex::Logger::info("$dir/config.toml was rendered from a config.toml.tmpl that is "
-    . "gone (Rex::GPU 0.001's); restarting $service so it regenerates its "
-    . "containerd config", 'warn');
+  Rex::Logger::info( $has_tmpl
+    ? "$dir/config.toml was rendered from Rex::GPU 0.001's bare config.toml.tmpl, "
+      . "which another template has replaced since; restarting $service so it "
+      . "renders that one"
+    : "$dir/config.toml was rendered from a config.toml.tmpl that is gone "
+      . "(Rex::GPU 0.001's); restarting $service so it regenerates its "
+      . "containerd config", 'warn');
+  return 1;
+}
+
+=method remove_bare_containerd_template
+
+  $dist->remove_bare_containerd_template;
+
+Before the L</service> is (re)started: remove C<config.toml.tmpl> in
+L</containerd_dir> when it is L<Rex::GPU> 0.001's bare template
+(L</is_bare_template_output>: only C<imports> and C<version = 2>), which the
+distribution would render instead of its own containerd config. Decided by
+content, never by path: any other template is somebody's configuration and
+stays, with a log line. No template: nothing. Reads with C<cat> and removes
+with C<rm -f> (no SFTP); dies when the removal fails. Restarts nothing
+itself: L</start_verb> then restarts a running service whose C<config.toml>
+is still that template's output. C<1> when it removed the template, else
+C<0>.
+
+=cut
+
+# kubernetes-ocp before its k23 wrote the same two lines (its
+# cleanup_legacy_containerd_template). Same narrow match as Rex::GPU 0.002's
+# heal on gpu_setup; this covers a node re-run without Rex::GPU, or set up by
+# kubernetes-ocp. `{{ template "base" . }}` or any further line keeps it.
+sub remove_bare_containerd_template {
+  my ( $self ) = @_;
+  my $tmpl    = $self->containerd_dir.'/config.toml.tmpl';
+  my $content = Rex::Commands::Run::run("cat $tmpl 2>/dev/null", auto_die => 0);
+  # No template: nothing to do.
+  return 0 unless $? == 0;
+
+  unless ($self->is_bare_template_output($content)) {
+    Rex::Logger::info("Keeping $tmpl: it is not Rex::GPU 0.001's bare template "
+      . "(only imports and version = 2) but somebody's containerd configuration");
+    return 0;
+  }
+
+  my $label   = $self->label;
+  my $service = $self->service;
+  Rex::Logger::info("Removing $tmpl: it holds only imports and version = 2 (Rex::GPU "
+    . "0.001's bare template), which $label renders instead of its own containerd "
+    . "config: no SystemdCgroup, sandbox image or registry mirrors", 'warn');
+  # auto_die => 0 only to die naming the file: a template left in place would
+  # be rendered again by the start that follows.
+  my $out = Rex::Commands::Run::run("rm -f $tmpl 2>&1", auto_die => 0);
+  die "Could not remove $tmpl, the bare containerd template that replaces "
+    . "${label}'s own containerd config: " . ( ( $out // '' ) =~ s/\s+\z//r ) . "\n"
+    . "$service was not (re)started.\n"
+    unless $? == 0;
   return 1;
 }
 
