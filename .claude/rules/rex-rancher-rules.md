@@ -28,14 +28,14 @@ Depends on whether the Agent/Task tool is available to you.
 
 - **You can spawn subagents** (orchestrating main agent): Do NOT touch behavior-relevant
   code yourself — delegate. Your lane: coordinate, inspect, plan, review diffs, run tests,
-  manage git, edit non-behavioral docs. Why: only the `rex-rancher-*` agents get their
+  edit non-behavioral docs. Why: only the `rex-rancher-*` agents get their
   skills force-loaded via `briefing.skills`; you get no briefing and would touch code that
   provisions production clusters over SSH with too little context.
 
   | Task | Agent |
   |---|---|
   | Implement / refactor / debug anything under `lib/` | `rex-rancher-worker` (default) |
-  | Pre-release audit | `rex-rancher-release-checker` |
+  | Commits, `Changes`, card → done, pre-release audit | `rex-rancher-release-manager` |
 
 - **You cannot spawn subagents** (you ARE a `rex-rancher-*` agent): The delegation lock
   does not apply — implement, refactor, debug and test per these rules.
@@ -43,6 +43,9 @@ Depends on whether the Agent/Task tool is available to you.
 Behavior-relevant = anything under `lib/`, the tests, and any change to the pipeline step
 order, an install command, an `auto_die` decision, the kubeconfig patch, a `config.yaml`
 key, or a `K8s.pm` API object. `README.md` and `Changes` wording are not.
+
+**Only `rex-rancher-release-manager` commits.** A worker leaves a commit-ready tree and hands its card
+to `review`; you then dispatch `rex-rancher-release-manager` to cut the commit and close the card.
 
 ## The blast radius is a remote root shell driving a cluster
 
@@ -85,7 +88,7 @@ invoke the skill first, just use it. Board state lives in `refs/karr/*`.
 - `karr edit ID -a "note"` · `karr move ID in-progress --claim NAME` · `karr handoff ID --claim NAME --note "…"`
 
 Serialize board mutations when fanning out: keep implementation parallel, then loop the
-`karr move`/`handoff`/`sync` calls sequentially. Full command surface: skill `kanban-issues-karr-cli`.
+`karr move`/`handoff`/`sync` calls sequentially. Full command surface: skill `kanban-issues-karr-coordination`.
 
 ## GitHub issues — never act without instruction
 

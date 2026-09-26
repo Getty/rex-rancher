@@ -13,7 +13,7 @@ principle and lane are in `.claude/rules/rex-rancher-rules.md`.
 | Task | Agent |
 |---|---|
 | Implement / refactor / debug anything under `lib/` | `rex-rancher-worker` (default) |
-| Pre-release audit | `rex-rancher-release-checker` |
+| Commits, `Changes`, card → done, pre-release audit | `rex-rancher-release-manager` |
 
 The agents carry their skills via `briefing.skills` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
