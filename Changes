@@ -158,6 +158,12 @@ Revision history for Rex-Rancher
     Destructive, and only run when called. uninstall_cmd and
     uninstall_failure give the same line and message to callers with their
     own channel; check_cilium_residue is the install guard.
+  - update_registries now removes a containerd config.toml.tmpl that holds
+    only imports and version = 2, as Rex::GPU 0.001 wrote it, before it
+    restarts rke2 or k3s: that restart would render it again instead of the
+    distribution's own containerd config, and the new registry mirrors would
+    never take effect. Any other template is kept. A removal that fails dies
+    before the restart (registries.yaml is written by then).
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

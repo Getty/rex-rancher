@@ -345,6 +345,16 @@ Use this to add or change registry mirrors after the cluster is up — for
 example, after deploying an in-cluster registry that you want every node
 to use as a pull-through cache.
 
+Before the restart, an C<agent/etc/containerd/config.toml.tmpl> that holds
+only C<imports> and C<version = 2>, as L<Rex::GPU> 0.001 wrote it, is
+removed with a warning, for RKE2 and K3s alike: the restart would render it
+instead of the distribution's own containerd config, which carries the
+registry mirrors, so the new ones would not take effect. Any other template
+stays, with a log line; no template changes nothing (see
+L<Rex::Rancher::Distribution/remove_bare_containerd_template>). If the
+removal fails, C<update_registries> dies after writing C<registries.yaml>
+and before the restart, so nothing is restarted.
+
 Required options:
 
 =over
@@ -388,6 +398,10 @@ sub update_registries {
   Rex::Logger::info("Updating registries.yaml for $distribution");
 
   $dist->write_registries($registries);
+
+  # Before the restart: it would render Rex::GPU 0.001's bare containerd
+  # template again, which carries no registry mirrors. Dies if it cannot.
+  $dist->remove_bare_containerd_template;
 
   # Restart containerd to pick up new config: whichever unit this node runs.
   run $dist->restart_services_cmd, auto_die => 0;
