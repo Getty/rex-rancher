@@ -1,0 +1,18 @@
+---
+class: standard
+created: 2026-09-26T04:46:01Z
+id: 67
+priority: low
+status: backlog
+tags:
+- rke2
+- k3s
+- network
+- escalated-from:kubernetes-ocp#191
+title: 'install_server: cluster_cidr verweigern, das vom laufenden Server abweicht'
+updated: 2026-09-26T04:46:01Z
+---
+
+Aus kubernetes-ocp k191 (Review des 0.003-Umbaus). install_server schreibt ein gegebenes cluster_cidr immer nach config.yaml (Server.pm ~469-472) und startet rke2 seit 0.003 bei Konfigurationsänderung sofort neu (start_verb). Ändert ein Aufrufer (OCP: network.pod_cidr in ocp.yaml nach dem Bootstrap) den Wert, bekommt ein laufender Cluster einen anderen cluster-cidr; Pods behalten ihre alten Adressen, Cilium-Pool und Node-PodCIDRs laufen auseinander. Vorher wirkte OCPs Drop-in erst beim nächsten Reboot, jetzt sofort.
+
+Done: läuft der Dienst bereits (oder existiert eine config.yaml mit cluster-cidr), stirbt install_server vor jedem Schreiben, wenn cluster_cidr davon abweicht, mit beiden Werten in der Meldung; gleicher Wert ist ein No-op; Test.
