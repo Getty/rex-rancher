@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-09-26T23:47:51Z
+id: 81
+priority: low
+status: backlog
+tags:
+- kubeconfig
+- escalated-from:kubernetes-ocp#196
+title: 'fetch_kubeconfig: Zieladresse mit Port (host:port)'
+updated: 2026-09-26T23:47:51Z
+---
+
+Maintainer-Entscheidung 2026-09-27: nach 0.003. patch_kubeconfig_server/fetch_kubeconfig (k73) nehmen server ohne Port; cp:7443 ergibt eine kaputte URL (wie vorher schon). server bleibt optional, kein Re-Export aus Rex::Rancher.
