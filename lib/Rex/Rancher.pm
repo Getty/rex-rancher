@@ -249,7 +249,12 @@ C<kubernetes> mode takes the node C<podCIDR>s cut from C<cluster-cidr>. An inval
 dies before the node is touched. Default: as without it (K3s with Cilium
 C<10.42.0.0/16>, RKE2 its own default). An additional server joining with
 C<server> needs the same value. On a cluster whose Cilium already runs
-C<cluster-pool> with another pool, that pool is kept, with a warning.
+C<cluster-pool> with another pool, that pool is kept, with a warning. A
+server already set up on the node keeps its C<cluster-cidr>: a value other
+than the one it runs with (C<10.42.0.0/16> when none is configured), given
+or defaulted, makes L<Rex::Rancher::Server/install_server> die before it
+writes or installs anything; node preparation and GPU setup have run by
+then.
 
 =item C<ipam_mode>
 

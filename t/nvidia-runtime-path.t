@@ -36,6 +36,8 @@ my $run = sub {
     $? = 1 << 8;
     return '';
   }
+  # Only what %files holds exists (server/token too: no server set up, k67).
+  if ( $cmd =~ m{^test -[ed] '?([^' ]+)'?\z} ) { $? = exists $files{$1} ? 0 : 1 << 8; return '' }
   if ( $cmd =~ m{^systemctl is-active --quiet} ) { $? = ( $service_running ? 0 : 3 ) << 8; return '' }
   if ( $cmd =~ m{^systemctl is-active} ) { $? = 0; return "active\n" }
   if ( $cmd =~ m{^command -v rke2} ) { $? = 0; return "/usr/local/bin/rke2\n" }

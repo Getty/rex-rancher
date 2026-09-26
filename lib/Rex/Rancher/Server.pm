@@ -37,10 +37,12 @@ is-active> reports it active, and then wait until the kubeconfig file is
 written to disk by the server process.
 
 Returns C<1> on success. Dies if installation fails, the distribution is
-unknown, the installed version differs from a pinned C<version>, or the
-service does not become active within 10 minutes. A service that ends up
-C<failed> or never gets active makes the C<die> message carry the last 50
-lines of its journal (C<journalctl -u SERVICE -n 50 --no-pager>).
+unknown, the installed version differs from a pinned C<version>, a server
+already set up on the host would get another C<cluster-cidr> (see
+L</cluster_cidr>), or the service does not become active within 10
+minutes. A service that ends up C<failed> or never gets active makes the
+C<die> message carry the last 50 lines of its journal (C<journalctl -u
+SERVICE -n 50 --no-pager>).
 
 Options:
 
@@ -170,6 +172,17 @@ pool, used in C<cluster-pool> mode (see there). Default: nothing written on
 RKE2 (RKE2's own default, C<10.42.0.0/16>, applies); on K3s with C<cilium>
 C<10.42.0.0/16> is written, without it nothing.
 
+On a server already set up on the host (its service active, or
+C<server/token> there), RKE2 and K3s alike, the value it runs with is read
+first: C<cluster-cidr> from C<config.yaml> and its C<config.yaml.d/> drop-ins,
+merged as the distribution merges them (the last one wins), or without one
+the built-in C<10.42.0.0/16>. When this run would give it another one
+(C<cluster_cidr>, or without it the default above), C<install_server> dies
+with both values before anything is written or installed; that includes a
+re-run that leaves C<cluster_cidr> out against a server set up with
+another. Pass the value it runs with. A file there that cannot be read or
+parsed dies too, with its name. A server not set up yet is not checked.
+
 =item C<node_labels>
 
 Node labels applied at join time, as an arrayref of C<key=value> strings.
@@ -262,12 +275,15 @@ sub install_server {
   # Before anything is written or installed: a rejected upgrade leaves the
   # host as it was.
   $dist->check_version_skew(version => $opts{version});
+  my $cilium       = exists $opts{cilium} ? $opts{cilium} : 1;
+  # Nor another pod network for a server already set up here: config.yaml
+  # would carry it and the service be restarted onto it (k67).
+  $dist->check_established_cluster_cidr(cluster_cidr => $cluster_cidr, cilium => $cilium);
   my $token        = _resolve_token($dist, $opts{token});
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
   my $node_labels  = $opts{node_labels};
   my $registries   = $opts{registries};
-  my $cilium       = exists $opts{cilium} ? $opts{cilium} : 1;
   my $version      = $opts{version};
   my $node_name    = $opts{node_name};
   my $disable      = $opts{disable};

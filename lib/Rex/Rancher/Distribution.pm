@@ -11,6 +11,7 @@ use Rex::Logger ();
 use Rex::Rancher::Checksum;
 use Rex::Rancher::Options;
 use YAML::PP;
+use YAML::PP::Common qw( PRESERVE_ORDER );
 use namespace::autoclean;
 
 # No `use utf8` here, on purpose: the die messages carry UTF-8 em dashes as
@@ -871,6 +872,175 @@ sub check_agent_version {
         ? $self->binary . " $agent is installed, but " . $self->service . " was not (re)started."
         : "Nothing was installed." )
     . " Upgrade the servers first, or pin version to a v$s[0].$s[1] release.\n";
+}
+
+#
+# Cluster CIDR: a server that is set up keeps the pod network it was set up
+# with. Another cluster-cidr in config.yaml restarts it onto that range while
+# its pods keep their addresses and the node podCIDRs and Cilium's pool stay
+# on the old one (k67).
+#
+
+=method builtin_cluster_cidr
+
+C<10.42.0.0/16>: the C<cluster-cidr> RKE2 and K3s run with when none is
+configured. Unlike L</default_cluster_cidr> it says nothing about what is
+written.
+
+=cut
+
+sub builtin_cluster_cidr { '10.42.0.0/16' }
+
+=method is_established
+
+True when a server of the distribution is set up on the host: its
+L</server_service> is active, or L</server_token> is there (a server that
+bootstrapped and is stopped starts on its configuration again). Reads the
+host.
+
+=cut
+
+sub is_established {
+  my ( $self ) = @_;
+  Rex::Commands::Run::run('systemctl is-active --quiet '.$self->server_service, auto_die => 0);
+  return 1 if $? == 0;
+  # Written once the control plane has bootstrapped its datastore.
+  Rex::Commands::Run::run('test -e '.$self->_shell_quote($self->server_token), auto_die => 0);
+  return $? == 0 ? 1 : 0;
+}
+
+=method established_cluster_cidr
+
+  my ( $cidr, $from ) = $dist->established_cluster_cidr;
+
+The C<cluster-cidr> of the server set up on the host (L</is_established>)
+and the file it comes from (in scalar context the C<cluster-cidr> alone);
+nothing when none is set up. Read over the exec channel (C<cat>, no SFTP)
+from L</config_file> and its C<config.yaml.d> drop-ins, merged as RKE2 and
+K3s merge them: C<config.yaml> first, then the drop-ins named C<*.yaml> or
+C<*.yml> (any case) sorted by name; the last value wins, and
+C<cluster-cidr+> appends to an earlier one. A list comes back
+comma-separated. Set in none of them: L</builtin_cluster_cidr>, and no
+file.
+
+A file that is not there is skipped. One that cannot be read or parsed, is
+not a YAML mapping, or holds anything but a string or a list of strings as
+C<cluster-cidr> dies with its name (never its content: C<config.yaml> holds
+the join token), since the value is then unknown.
+
+=cut
+
+sub established_cluster_cidr {
+  my ( $self ) = @_;
+  return unless $self->is_established;
+  my ( @cidr, $from );
+  for my $file ($self->_server_config_files) {
+    my $config = $self->_read_server_config($file);
+    # In the order of the file, as the distributions read it.
+    for my $key (keys %{$config}) {
+      next unless $key =~ /\Acluster-cidr(\+?)\z/;
+      my $append = $1;
+      my @value  = ref $config->{$key} eq 'ARRAY' ? @{ $config->{$key} } : ( $config->{$key} );
+      die $self->_cluster_cidr_unknown(
+        "$file: cluster-cidr is neither a string nor a list of strings")
+        if grep { !defined || ref } @value;
+      @cidr = ( ( $append ? @cidr : () ), @value );
+      $from = $file;
+    }
+  }
+  my $cidr = @cidr ? join(',', @cidr) : $self->builtin_cluster_cidr;
+  $from = undef unless @cidr;
+  return wantarray ? ( $cidr, $from ) : $cidr;
+}
+
+=method check_established_cluster_cidr
+
+  $dist->check_established_cluster_cidr(cluster_cidr => $cidr, cilium => $cilium);
+
+Before anything is written: die when a server is set up on the host and
+the L</established_cluster_cidr> is not the C<cluster-cidr> this run gives
+it -- C<cluster_cidr>, else what L</cilium_config> writes when C<cilium> is
+true, else L</builtin_cluster_cidr> -- compared as strings, trimmed. The
+message names both and says to pass the established one. Returns that,
+or nothing when no server is set up.
+
+=cut
+
+sub check_established_cluster_cidr {
+  my ( $self, %args ) = @_;
+  my ( $running, $from ) = $self->established_cluster_cidr;
+  return unless defined $running;
+
+  my $given = $args{cluster_cidr};
+  my $want  = $given // ( $args{cilium} ? $self->cilium_config->{'cluster-cidr'} : undef )
+    // $self->builtin_cluster_cidr;
+  s/\A\s+//, s/\s+\z// for $running, $want;
+  return $running if $running eq $want;
+
+  my $name   = $self->name;
+  my $config = $self->config_file;
+  die "Refusing to install $name with cluster-cidr $want"
+    . ( defined $given ? ' (cluster_cidr)' : ' (cluster_cidr not given: the default)' )
+    . ": the $name server on this host was set up with $running ("
+    . ( defined $from
+        ? "from $from"
+        : "${name}'s built-in default: no cluster-cidr in $config or $config.d" )
+    . "), and the cluster-cidr of a running cluster cannot be changed. Pass "
+    . "cluster_cidr => '$running'. config.yaml is unchanged and nothing was installed.\n";
+}
+
+# config.yaml if there, then the drop-ins k3s' configfilearg (RKE2 uses it
+# too) takes: no directories, .yaml/.yml in any case, in os.ReadDir order.
+sub _server_config_files {
+  my ( $self ) = @_;
+  my $config  = $self->config_file;
+  my $dropins = $config.'.d';
+  my @files;
+  Rex::Commands::Run::run('test -e '.$self->_shell_quote($config), auto_die => 0);
+  push @files, $config if $? == 0;
+  Rex::Commands::Run::run('test -d '.$self->_shell_quote($dropins), auto_die => 0);
+  return @files unless $? == 0;
+  my $out = Rex::Commands::Run::run('find '.$self->_shell_quote($dropins)
+    .' -mindepth 1 -maxdepth 1 ! -type d', auto_die => 0);
+  die $self->_cluster_cidr_unknown("Could not list $dropins (find exited ".($? >> 8).")")
+    unless $? == 0;
+  push @files, sort grep { /\.ya?ml\z/i } split /\n/, $out // '';
+  return @files;
+}
+
+sub _read_server_config {
+  my ( $self, $file ) = @_;
+  my $content = Rex::Commands::Run::run('cat '.$self->_shell_quote($file), auto_die => 0);
+  die $self->_cluster_cidr_unknown("Could not read $file (cat exited ".($? >> 8).")")
+    unless $? == 0;
+  # Repeated keys are allowed, the last one wins, as in the distributions.
+  # Never the parser's message: it quotes the line, which may be the token's.
+  my @docs;
+  unless (eval {
+    @docs = YAML::PP->new(duplicate_keys => 1, preserve => PRESERVE_ORDER)
+      ->load_string($content // '');
+    1;
+  }) {
+    my ($line) = ($@ // '') =~ /^Line\s*:\s*(\d+)/m;
+    die $self->_cluster_cidr_unknown("Could not parse $file as YAML"
+      . ( defined $line ? " (line $line)" : '' ));
+  }
+  my $config = $docs[0] // {};
+  die $self->_cluster_cidr_unknown("$file is not a YAML mapping") unless ref $config eq 'HASH';
+  return $config;
+}
+
+sub _cluster_cidr_unknown {
+  my ( $self, $what ) = @_;
+  return "$what, so the cluster-cidr the ".$self->name." server on this host was set up "
+    . "with is unknown. config.yaml is unchanged and nothing was installed.\n";
+}
+
+# One shell word, whatever the name: the drop-in names come from the host.
+sub _shell_quote {
+  my ( $self, $word ) = @_;
+  $word =~ s/'/'\\''/g;
+  return "'$word'";
 }
 
 #

@@ -45,7 +45,7 @@ sub default_disable { [ 'traefik', 'servicelb' ] }
 
 # k3s' built-in default, written out with cilium because Cilium's
 # cluster-pool IPAM has to hand out the same range (Rex::Rancher::Cilium).
-sub default_cluster_cidr { '10.42.0.0/16' }
+sub default_cluster_cidr { $_[0]->builtin_cluster_cidr }
 
 # None: k3s' agent code finds a host NVIDIA toolkit and wires it plus the
 # nvidia RuntimeClass without help (kubernetes-ocp).

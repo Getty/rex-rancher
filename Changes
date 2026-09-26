@@ -121,6 +121,14 @@ Revision history for Rex-Rancher
     from install_agent's for an agent that never gets active (above). New,
     not exported: Rex::Rancher::Cilium::validate_cilium_opts checks
     install_cilium's options without touching anything.
+  - install_server and rancher_deploy_server die before writing or
+    installing anything when a server already set up on the host (its
+    service active, or server/token there) would get another
+    cluster-cidr than the one it runs with, rke2 and k3s alike. The
+    running value is read from config.yaml and its config.yaml.d
+    drop-ins, or without one the built-in 10.42.0.0/16; the die names
+    both values. A re-run that leaves cluster_cidr out against a server
+    set up with another one dies the same way. Requires YAML::PP 0.027.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
