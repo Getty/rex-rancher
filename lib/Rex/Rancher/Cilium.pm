@@ -946,8 +946,10 @@ sub _get_optional {
 sub _read_running {
   my ($api, $release) = @_;
 
+  # Guarded: without a release the deref would autovivify one, and its
+  # missing status would warn below.
   my %running = (
-    operator_replicas => eval { $release->{config}{operator}{replicas} },
+    operator_replicas => $release ? eval { $release->{config}{operator}{replicas} } : undef,
   );
 
   if (my $op = _get_optional($api, 'Deployment', 'cilium-operator')) {

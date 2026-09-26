@@ -516,7 +516,7 @@ subtest 'read the running Cilium' => sub {
     'ConfigMap/cilium-config' => configmap( ipam => 'cluster-pool', 'cluster-pool-ipv4-cidr' => '10.0.0.0/16 10.1.0.0/16' ),
     'DaemonSet/cilium'        => daemonset( env => { KUBERNETES_SERVICE_HOST => '203.0.113.7' } ),
   } );
-  is_deeply( $C->can('_read_running')->( $api, { config => { operator => { replicas => 2 } } } ), {
+  is_deeply( $C->can('_read_running')->( $api, { status => 'deployed', config => { operator => { replicas => 2 } } } ), {
     ipam_mode => 'cluster-pool', pool => [ '10.0.0.0/16', '10.1.0.0/16' ],
     k8s_service_host => '203.0.113.7', operator_replicas => 2, present => 1,
   }, 'mode, pool list, host, replicas, present' );
@@ -548,13 +548,35 @@ subtest 'read the running Cilium' => sub {
   # k54.3: operator.replicas from the Deployment, which runs the chart's
   # default when the release never set one.
   $api = FakeAPI->new( objects => { 'Deployment/cilium-operator' => operator_deployment( replicas => 2 ) } );
-  is( $C->can('_read_running')->( $api, { config => {} } )->{operator_replicas}, 2,
+  is( $C->can('_read_running')->( $api, { status => 'deployed', config => {} } )->{operator_replicas}, 2,
     'replicas from the Deployment, release without operator.replicas' );
-  is( $C->can('_read_running')->( $api, { config => { operator => { replicas => 3 } } } )->{operator_replicas}, 2,
+  is( $C->can('_read_running')->( $api, { status => 'deployed', config => { operator => { replicas => 3 } } } )->{operator_replicas}, 2,
     'the Deployment wins over the release values' );
   $api = FakeAPI->new;
-  is( $C->can('_read_running')->( $api, { config => { operator => { replicas => 3 } } } )->{operator_replicas}, 3,
+  is( $C->can('_read_running')->( $api, { status => 'deployed', config => { operator => { replicas => 3 } } } )->{operator_replicas}, 3,
     'no Deployment: the release values' );
+};
+
+# k69: without a release, reading operator.replicas from it must not
+# autovivify one -- a status-less hash then warned "uninitialized" on every
+# install_cilium with kubeconfig against a fresh cluster.
+subtest 'a fresh cluster reads without warnings (k69)' => sub {
+  my @warned;
+  local $SIG{__WARN__} = sub { push @warned, @_ };
+
+  $api = FakeAPI->new( secrets => [] );
+  is_deeply( $C->can('_read_running')->( $api, undef ), { operator_replicas => undef },
+    '_read_running: nothing running' );
+  is_deeply( \@warned, [], '_read_running: no warning' );
+
+  @warned = (); @cmds = ();
+  no warnings 'redefine';
+  local *Rex::Rancher::Cilium::_verify_daemonset = sub { };
+  use warnings 'redefine';
+  ok( eval { install_cilium( distribution => 'rke2', kubeconfig => '/kc' ); 1 }, 'install_cilium: installs' )
+    or diag $@;
+  is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['install'], 'install_cilium: one install' );
+  is_deeply( \@warned, [], 'install_cilium: no warning' );
 };
 
 subtest 'install_cilium: operator.replicas of a running operator is kept (k54.3)' => sub {
