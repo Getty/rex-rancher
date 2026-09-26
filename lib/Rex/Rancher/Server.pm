@@ -12,6 +12,7 @@ use Rex::Commands::Run;
 use Rex::Logger;
 use Rex::Rancher::Distribution;
 use Rex::Rancher::Options;
+use Rex::Rancher::Uninstall ();
 use Socket qw( AF_INET6 inet_pton );
 use YAML::PP;
 
@@ -41,12 +42,26 @@ is-active> reports it active, and then wait until the kubeconfig file is
 written to disk by the server process.
 
 Returns C<1> on success. Dies if installation fails, the distribution is
-unknown, the installed version differs from a pinned C<version>, a server
-already set up on the host would get another C<cluster-cidr> (see
-L</cluster_cidr>), or the service does not become active within 10
-minutes. A service that ends up C<failed> or never gets active makes the
-C<die> message carry the last 50 lines of its journal (C<journalctl -u
-SERVICE -n 50 --no-pager>).
+unknown, the host carries Cilium datapath state from an earlier cluster but
+no RKE2 or K3s (see below), the installed version differs from a pinned
+C<version>, a server already set up on the host would get another
+C<cluster-cidr> (see L</cluster_cidr>), or the service does not become
+active within 10 minutes. A service that ends up C<failed> or never gets
+active makes the C<die> message carry the last 50 lines of its journal
+(C<journalctl -u SERVICE -n 50 --no-pager>).
+
+The first thing read from the host, before anything is written or
+installed, is whether an earlier cluster left Cilium's datapath behind:
+the pins in C</sys/fs/bpf/cilium>, the C</run/cilium/cgroupv2> mount or the
+C<cilium_host> device, on a host with neither RKE2 nor K3s (no C<rke2> or
+C<k3s> on C<PATH>, none of their server and agent units active). The vendor
+uninstall scripts leave that state until a reboot, and its socket load
+balancer makes connections to the old cluster's service addresses hang, so
+every image pull of the new install stalls on a registry mirror among them.
+Such a host dies naming what was found and asking for a reboot; see
+L<Rex::Rancher::Uninstall/check_cilium_residue>. With RKE2 or K3s on the
+host the state is its running cluster's (a re-run, an upgrade) and is not
+checked.
 
 Options:
 
@@ -276,6 +291,9 @@ sub install_server {
   # Validated before anything touches the host (the token lookup reads it).
   my $method       = Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version});
   my $cluster_cidr = Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr});
+  # The first read of the host: Cilium state an earlier cluster left on a host
+  # without RKE2/K3s would hang every image pull of this install (k71).
+  Rex::Rancher::Uninstall->check_cilium_residue;
   # Before anything is written or installed: a rejected upgrade leaves the
   # host as it was.
   $dist->check_version_skew(version => $opts{version});

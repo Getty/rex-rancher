@@ -11,6 +11,7 @@ use Rex::Logger;
 use Rex::Rancher::Distribution;
 use Rex::Rancher::Options;
 use Rex::Rancher::K8s ();
+use Rex::Rancher::Uninstall ();
 use YAML::PP;
 
 require Rex::Exporter;
@@ -31,6 +32,17 @@ ends up C<failed> or never gets active dies with the last 50 lines of its
 journal in the message, after the line "It joins the cluster via SERVER --
 check that this node can reach that address": an unreachable C<server> is
 the most common cause.
+
+Dies before anything is written or installed if the host carries Cilium
+datapath state from an earlier cluster (the pins in C</sys/fs/bpf/cilium>,
+the C</run/cilium/cgroupv2> mount or the C<cilium_host> device) but neither
+RKE2 nor K3s: until a reboot, that state makes every image pull of the new
+agent stall. The message names what was found and asks for a reboot. With
+RKE2 or K3s on the host it is not checked. Same check as
+L<Rex::Rancher::Server/install_server>'s, see
+L<Rex::Rancher::Uninstall/check_cilium_residue>. It comes after the
+C<kubeconfig> check (below) and before the version skew rules, which die
+before anything is written or installed as well.
 
 Required options:
 
@@ -148,6 +160,10 @@ sub install_agent {
   # Before anything is written or installed: an agent never goes to a newer
   # minor than the control plane, nor skips or goes back a minor itself.
   my $server_version = _control_plane_version($opts{kubeconfig});
+  # Nor onto Cilium state an earlier cluster left on a host without RKE2/K3s,
+  # which would hang every image pull of this agent (k71). The first read of
+  # the host; the control plane above is asked through the API.
+  Rex::Rancher::Uninstall->check_cilium_residue;
   $dist->check_version_skew(version => $version, server_version => $server_version);
 
   Rex::Logger::info("Installing $distribution agent to join $server");

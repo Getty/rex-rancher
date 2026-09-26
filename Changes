@@ -139,6 +139,22 @@ Revision history for Rex-Rancher
     an existing file; an IPv6 kubeconfig_server or tls_san address is now
     bracketed (the URL was invalid before), and a https://[::1] server URL
     is patched too.
+  - install_server and install_agent, RKE2 and K3s alike, die before
+    anything is written or installed on a host that carries Cilium datapath
+    state from an earlier cluster (/sys/fs/bpf/cilium, the
+    /run/cilium/cgroupv2 mount or the cilium_host device) but no RKE2/K3s:
+    until a reboot, its socket load balancer makes every image pull of the
+    new install hang. The message names what was found and asks for a
+    reboot. A host with RKE2 or K3s on it is not checked.
+  - New Rex::Rancher::Uninstall. uninstall_node runs the RKE2/K3s uninstall
+    scripts that are on the host, removes the Cilium CLI, /opt/cni and
+    /run/k3s, clears Cilium's datapath (tc attachments, bpffs pins,
+    cilium_* devices, CILIUM_* iptables chains in every backend, the
+    cgroup2 mount, /run/cilium, Cilium's ip rules), and dies when RKE2/K3s
+    is still installed or Cilium state survived (then: reboot).
+    Destructive, and only run when called. uninstall_cmd and
+    uninstall_failure give the same line and message to callers with their
+    own channel; check_cilium_residue is the install guard.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

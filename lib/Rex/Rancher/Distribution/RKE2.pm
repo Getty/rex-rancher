@@ -29,6 +29,9 @@ sub agent_service        { 'rke2-agent.service' }
 sub default_start_verb   { 'start' }
 sub live_verified        { 1 }
 
+# The install script puts it next to rke2, for server and agent alike.
+sub uninstall_scripts    { ( 'rke2-uninstall.sh' ) }
+
 # Every rke2 node serves the API on 127.0.0.1:6443.
 sub needs_k8s_service_host { 0 }
 

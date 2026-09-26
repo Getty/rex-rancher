@@ -165,6 +165,14 @@ C<undef> on RKE2, which keeps its own default unwritten.
 
 The distribution binary (C<rke2> / C<k3s>), asked for C<--version>.
 
+=method uninstall_scripts
+
+The uninstall scripts the distribution's installer puts on C<PATH>, for
+either L</role>: C<rke2-uninstall.sh> (RKE2, server and agent) /
+C<k3s-uninstall.sh> and C<k3s-agent-uninstall.sh> (K3s names it after the
+service it set up). L<Rex::Rancher::Uninstall/uninstall_node> runs every one
+that is there.
+
 =method release_url
 
 The GitHub release download base the artifacts come from.

@@ -32,6 +32,10 @@ sub agent_service        { 'k3s-agent.service' }
 sub default_start_verb   { 'restart' }
 sub live_verified        { 0 }
 
+# Named after the service the install script set up: k3s-uninstall.sh on a
+# server, k3s-agent-uninstall.sh on an agent (a worker has only the latter).
+sub uninstall_scripts    { qw( k3s-uninstall.sh k3s-agent-uninstall.sh ) }
+
 # k3s agents serve the API on 127.0.0.1:6444, not 6443: Cilium's kube-proxy
 # replacement needs the control plane's address.
 sub needs_k8s_service_host { 1 }

@@ -904,6 +904,8 @@ For fine-grained control, use the individual modules directly:
 
 =item L<Rex::Rancher::K8s> — Kubernetes API operations (device plugin, readiness, untaint)
 
+=item L<Rex::Rancher::Uninstall> — Uninstall RKE2/K3s and clear Cilium's datapath (C<uninstall_node>)
+
 =back
 
 =head2 GPU hardware support
