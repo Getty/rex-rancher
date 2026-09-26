@@ -58,10 +58,13 @@ my ( @log, @info, @warn, %host );
   *Rex::Logger::info = sub { push @{ ( $_[1] // '' ) eq 'warn' ? \@warn : \@info }, $_[0] };
 }
 
+# Installed: `rke2 --version`. Running: `/proc/PID/exe --version`, where the
+# binary answers as "exe" (k68).
 my $V1 = "rke2 version v1.30.4+rke2r1 (abc)\ngo version go1.22.5\n";
 my $V2 = "rke2 version v1.31.1+rke2r1 (def)\ngo version go1.22.5\n";
 my $V1P = "rke2 version v1.30.5+rke2r1 (fed)\ngo version go1.22.5\n";
-my %QUIET = ( pid => 4242, since => 1790000000, running => $V1, installed => $V1 );
+my $R1 = "exe version v1.30.4+rke2r1 (abc)\ngo version go1.22.5\n";
+my %QUIET = ( pid => 4242, since => 1790000000, running => $R1, installed => $V1 );
 
 sub reset_host { %host = @_; ( @log, @info, @warn ) = () }
 
@@ -186,7 +189,8 @@ subtest 'rke2 agent: same checks on its own unit' => sub {
 
 subtest 'k3s: restart on every run, only the version skew asked' => sub {
   for my $role (qw( server agent )) {
-    reset_host(%QUIET);
+    reset_host( %QUIET, running => "exe version v1.30.4+k3s1 (4dedb15b)\ngo version go1.22.5\n",
+      installed => "k3s version v1.30.4+k3s1 (4dedb15b)\ngo version go1.22.5\n" );
     is( $D->new_for( 'k3s', role => $role )->start_verb, 'restart', $role.': verb' );
     ok( !( grep { /-newermt|etimes/ } @log ), $role.': no change detection' );
     is_deeply( [ @info, @warn ], [], $role.': nothing logged' );

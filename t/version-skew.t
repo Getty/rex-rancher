@@ -53,8 +53,9 @@ my ( @log, @info, @warn, %host );
       return '';
     }
     return "1790000000\n" if $cmd =~ /ps -o etimes=/;
+    # Through /proc/PID/exe the binary answers as "exe", rke2 and k3s alike (k68).
     if ( $cmd =~ m{^/proc/\d+/exe --version} ) {
-      return defined $host{running} ? "rke2 version $host{running} (abc)\n" : "exec failed\n";
+      return defined $host{running} ? "exe version $host{running} (abc)\ngo version go1.22.5\n" : "exec failed\n";
     }
     if ( $cmd =~ /^(rke2|k3s) --version/ ) {
       return defined $host{installed} ? "$1 version $host{installed} (def)\n" : '';

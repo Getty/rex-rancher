@@ -531,14 +531,20 @@ sub install_server_package {
 
 =method parse_version_output
 
-The version in C<rke2 --version> / C<k3s --version> output, or nothing.
+The version in C<--version> output of rke2 or k3s, or nothing. Its first
+word is the name the binary was called by: C<rke2 version ...> /
+C<k3s version ...> for L</binary>, C<exe version ...> through
+C</proc/PID/exe> (L</running_version>). The C<go version ...> line never
+counts.
 
 =cut
 
-# "rke2 version v1.30.4+rke2r1 (abc)" / "k3s version v1.30.4+k3s1 (abc)"
+# "rke2 version v1.30.4+rke2r1 (abc)" / "k3s version v1.30.4+k3s1 (abc)";
+# the first word is argv[0]'s basename, so through /proc/PID/exe it is
+# "exe version v1.36.4+rke2r1 (7479a59c)" (k68). Not "go version go1.26.7".
 sub parse_version_output {
   my ( $self, $out ) = @_;
-  return $1 if ($out // '') =~ /^(?:rke2|k3s) version (\S+)/m;
+  return $1 if ($out // '') =~ /^(?!go )\S+ version (\S+)/m;
   return;
 }
 
@@ -704,7 +710,7 @@ sub main_pid {
 
 The version the process C<$pid> runs (C</proc/PID/exe --version>: the
 binary it was started from, even when the installer has replaced it on
-disk since), or nothing.
+disk since; called that way it answers C<exe version ...>), or nothing.
 
 =method installed_version
 

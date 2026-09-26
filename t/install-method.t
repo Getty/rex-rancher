@@ -270,7 +270,16 @@ subtest 'parse_version_output / same_version' => sub {
   is( $p->("rke2 version v1.30.4+rke2r1 (abc123)\ngo version go1.22.5 X:boringcrypto\n"),
     'v1.30.4+rke2r1', 'rke2' );
   is( $p->("k3s version v1.30.4+k3s1 (98262b5d)\ngo version go1.22.5\n"), 'v1.30.4+k3s1', 'k3s' );
+  # k68: the first word is the name it was called by; through /proc/PID/exe
+  # that is "exe". Measured on the v1.36.4 release binaries.
+  is( $p->("exe version v1.36.4+rke2r1 (7479a59cdd2c8ce0b8871699a24daa4b7c28cc64)\n"
+    . "go version go1.26.7-X:boringcrypto\n"), 'v1.36.4+rke2r1', 'rke2 through /proc/PID/exe' );
+  is( $p->("exe version v1.36.4+k3s1 (4dedb15b)\ngo version go1.26.7\n"), 'v1.36.4+k3s1',
+    'k3s through /proc/PID/exe' );
+  is( $p->("go version go1.26.7\n"), undef, 'the go line alone: undef' );
   is( $p->("bash: rke2: command not found\n"), undef, 'not installed: undef' );
+  is( $p->("sh: 1: /proc/123/exe: not found\n"), undef, 'no such process: undef' );
+  is( $p->("sh: 1: /proc/123/exe: Permission denied\n"), undef, 'permission denied: undef' );
   my $s = sub { $D->same_version(@_) };
   ok( $s->( 'v1.30.4+rke2r1', 'v1.30.4+rke2r1' ), 'equal' );
   ok( $s->( '1.30.4+rke2r1', 'v1.30.4+rke2r1' ), 'leading v optional' );
