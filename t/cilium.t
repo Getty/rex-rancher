@@ -518,8 +518,8 @@ subtest 'read the running Cilium' => sub {
   } );
   is_deeply( $C->can('_read_running')->( $api, { config => { operator => { replicas => 2 } } } ), {
     ipam_mode => 'cluster-pool', pool => [ '10.0.0.0/16', '10.1.0.0/16' ],
-    k8s_service_host => '203.0.113.7', operator_replicas => 2,
-  }, 'mode, pool list, host, replicas' );
+    k8s_service_host => '203.0.113.7', operator_replicas => 2, present => 1,
+  }, 'mode, pool list, host, replicas, present' );
 
   $api = FakeAPI->new( objects => { 'ConfigMap/cilium-config' => configmap() } );
   is( $C->can('_read_running')->( $api, undef )->{ipam_mode}, 'cluster-pool',
@@ -633,10 +633,11 @@ subtest 'upgrade_cilium: k3s keeps the running k8sServiceHost' => sub {
   like( $files{'/tmp/cilium-values-k3s.yaml'}, qr/^k8sServiceHost: 203\.0\.113\.7$/m, 'host from the DaemonSet' );
   is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'upgraded' );
 
+  # No DaemonSet to read a host from (no Cilium at all: k66 below).
   @cmds = ();
-  $api = FakeAPI->new;
+  $api = FakeAPI->new( secrets => [ helm_secret( revision => 1, status => 'deployed', chart_version => '1.20.0' ) ] );
   eval { upgrade_cilium( distribution => 'k3s', kubeconfig => '/kc' ) };
-  like( $@, qr/k3s needs k8s_service_host/, 'no running Cilium and no host: dies' );
+  like( $@, qr/k3s needs k8s_service_host/, 'no running host and none given: dies' );
   is_deeply( \@cmds, [], 'before anything ran on the host' );
 };
 
@@ -655,6 +656,73 @@ subtest 'upgrade_cilium without kubeconfig dies before the host (k51)' => sub {
       $name.': dies naming why and what to pass' );
     is_deeply( \@cmds, [], $name.': nothing ran on the host' );
     is_deeply( \%files, {}, $name.': no values file written' );
+  }
+};
+
+# -----------------------------------------------------------------------------
+# k66: upgrade_cilium needs a Cilium to upgrade. With neither cilium-config,
+# nor the cilium DaemonSet, nor a deployed revision of the Helm release it
+# dies before the CLI, the Gateway API CRDs or the values file reach host or
+# cluster; any one of the three is enough to go on as before.
+# -----------------------------------------------------------------------------
+
+subtest 'upgrade_cilium without a running Cilium dies before the host (k66)' => sub {
+  my @crds;
+  no warnings 'redefine';
+  local *Rex::Rancher::Cilium::_ensure_gateway_api_crds = sub { push @crds, $_[1]; 1 };
+  use warnings 'redefine';
+
+  my %o = ( distribution => 'rke2', kubeconfig => '/kc', gateway_api => 1, gateway_api_version => 'v1.6.1' );
+  my $none = qr{^upgrade_cilium found no Cilium on the cluster: no ConfigMap kube-system/cilium-config, no DaemonSet kube-system/cilium};
+
+  for my $case (
+    [ 'nothing at all',              [],          qr/no Helm release cilium\. .*install_cilium/s ],
+    [ 'a failed first install only', ['failed'],  qr/Helm release cilium has no deployed revision \(failed\)\. .*install_cilium/s ],
+    [ 'a pending install only',      ['pending-install'], qr/no deployed revision \(pending-install\)/ ],
+    [ 'a pending upgrade only',      ['pending-upgrade'], qr/no deployed revision \(pending-upgrade\)/ ],
+  ) {
+    my ( $name, $status, $says ) = @$case;
+    @cmds = (); %files = (); @crds = ();
+    $api = FakeAPI->new( secrets => [ map { helm_secret( revision => 1, status => $_, chart_version => '1.20.0' ) } @$status ] );
+    eval { upgrade_cilium( %o ) };
+    like( $@, $none, $name.': dies saying no Cilium runs' );
+    like( $@, $says, $name.': names the release state and install_cilium' );
+    is_deeply( \@cmds, [], $name.': nothing ran on the host (no CLI install, no cilium upgrade)' );
+    is_deeply( \@crds, [], $name.': no Gateway API CRDs applied' );
+    is_deeply( \%files, {}, $name.': no values file written' );
+  }
+
+  # k3s without k8s_service_host: the missing Cilium is the message, not the
+  # missing host that follows from it.
+  @cmds = ();
+  $api = FakeAPI->new;
+  eval { upgrade_cilium( distribution => 'k3s', kubeconfig => '/kc' ) };
+  like( $@, $none, 'k3s without a host: no Cilium wins' );
+  is_deeply( \@cmds, [], 'k3s without a host: nothing ran on the host' );
+
+  # Any API error but a 404 still dies as itself, never as "no Cilium".
+  @cmds = ();
+  $api = FakeAPI->new( objects => { 'DaemonSet/cilium' =>
+    sub { die "Kubernetes API error (get DaemonSet): 403 {\"reason\":\"Forbidden\"}\n" } } );
+  eval { upgrade_cilium( %o ) };
+  like( $@, qr{^Cannot read DaemonSet kube-system/cilium: .*403}, 'a 403 dies naming the read' );
+  is_deeply( \@cmds, [], 'a 403: nothing ran on the host' );
+
+  my $deployed = helm_secret( revision => 1, status => 'deployed', chart_version => '1.20.0' );
+  for my $case (
+    [ 'only cilium-config',      objects => { 'ConfigMap/cilium-config' => configmap( ipam => 'kubernetes' ) } ],
+    [ 'only the DaemonSet',      objects => { 'DaemonSet/cilium' => daemonset() } ],
+    [ 'only a deployed release', secrets => [ $deployed ] ],
+    [ 'only a failed upgrade over a deployed revision', secrets => [ $deployed,
+      helm_secret( revision => 2, status => 'failed', chart_version => '1.20.1' ) ] ],
+  ) {
+    my ( $name, @fake ) = @$case;
+    @cmds = (); %files = (); @crds = ();
+    $api = FakeAPI->new( @fake );
+    ok( eval { upgrade_cilium( %o ); 1 }, $name.': upgrades' ) or diag $@;
+    is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], $name.': cilium upgrade ran' );
+    is_deeply( \@crds, ['v1.6.1'], $name.': Gateway API CRDs applied' );
+    ok( $files{'/tmp/cilium-values-rke2.yaml'}, $name.': values file written' );
   }
 };
 

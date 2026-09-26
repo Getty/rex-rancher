@@ -20,6 +20,13 @@ Revision history for Rex-Rancher
     404 while reading them dies instead of falling back to the defaults.
     upgrade_cilium requires kubeconfig and dies without it before the host
     is touched: the running IPAM mode and pool cannot be checked otherwise.
+  - upgrade_cilium dies before installing the Cilium CLI, applying the
+    Gateway API CRDs or writing the values file when the cluster runs no
+    Cilium (no ConfigMap kube-system/cilium-config, no cilium DaemonSet, no
+    deployed revision of the Helm release), pointing to install_cilium
+    instead; before, cilium upgrade failed only after all of that ran. On
+    k3s without k8s_service_host this is now the message instead of the
+    k8s_service_host one.
   - New wait and wait_duration (seconds, default 600) options for
     install_cilium/upgrade_cilium: wait until the cilium DaemonSet and
     cilium-operator are ready, or die naming their state; an API error

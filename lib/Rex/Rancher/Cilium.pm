@@ -429,7 +429,10 @@ and C<gateway_api> applies the CRDs the same way (restarting a running
 C<cilium-operator> when they were applied).
 
 C<kubeconfig> is required: without it the function dies before anything
-touches the host. The running configuration is read and kept exactly as in
+touches the host. It does the same, pointing to L</install_cilium>, when
+no Cilium runs: no ConfigMap C<kube-system/cilium-config>, no C<cilium>
+DaemonSet and no C<deployed> revision of the Helm release. The running
+configuration is read and kept exactly as in
 L</install_cilium> (IPAM mode and pool from C<kube-system/cilium-config>,
 K3s C<k8sServiceHost> from the DaemonSet, C<operator.replicas> from the
 C<cilium-operator> Deployment), so an upgrade needs no values the caller has
@@ -469,8 +472,10 @@ sub upgrade_cilium {
 
   Rex::Logger::info("Upgrading Cilium to $o->{version} on " . $o->{dist}->name . " cluster");
 
-  my $api = _api($o->{kubeconfig});
-  my $running = _read_running($api, _read_release($api));
+  my $api     = _api($o->{kubeconfig});
+  my $release = _read_release($api);
+  my $running = _read_running($api, $release);
+  _require_running($running, $release);
   _adopt_running($o, $running);
   _settle_version($o, $running->{version});
   _require_k8s_service_host($o);
@@ -937,6 +942,7 @@ sub _get_optional {
 # k8sServiceHost from the agent's KUBERNETES_SERVICE_HOST, operator.replicas
 # from the cilium-operator Deployment (a release that never set it runs the
 # chart's default, which the values do not record), else the release values.
+# present is 1 when the ConfigMap or the cilium DaemonSet exists.
 sub _read_running {
   my ($api, $release) = @_;
 
@@ -950,6 +956,7 @@ sub _read_running {
   }
 
   if (my $cm = _get_optional($api, 'ConfigMap', CILIUM_CONFIGMAP)) {
+    $running{present} = 1;
     my $data = $cm->data // {};
     # No ipam key: the agent's own default, cluster-pool.
     $running{ipam_mode} = $data->{ipam} // 'cluster-pool';
@@ -964,12 +971,31 @@ sub _read_running {
     if $release && $release->{status} eq 'deployed' && defined $release->{chart_version};
 
   if (my $ds = _get_optional($api, 'DaemonSet', RELEASE_NAME)) {
+    $running{present} = 1;
     $running{k8s_service_host} = _daemonset_env($ds, 'KUBERNETES_SERVICE_HOST');
     my $image = _daemonset_version($ds);
     $running{version} = $image if defined $image;
   }
 
   return \%running;
+}
+
+# upgrade_cilium upgrades a Cilium that is there: cilium-config, the cilium
+# DaemonSet or a deployed revision of the release. Without any of them
+# `cilium upgrade` fails only after the CLI, the Gateway API CRDs and the
+# values file are in place, so this dies before the host is touched -- and
+# before a k3s k8sServiceHost check that would only report a consequence.
+sub _require_running {
+  my ($running, $release) = @_;
+  return if $running->{present} || ( $release && $release->{has_deployed} );
+
+  die "upgrade_cilium found no Cilium on the cluster: no ConfigMap "
+    . RELEASE_NAMESPACE . "/" . CILIUM_CONFIGMAP . ", no DaemonSet "
+    . RELEASE_NAMESPACE . "/" . RELEASE_NAME . ", and "
+    . ( $release
+      ? "Helm release " . RELEASE_NAME . " has no deployed revision ($release->{status})"
+      : "no Helm release " . RELEASE_NAME )
+    . ". Nothing to upgrade: install it with install_cilium\n";
 }
 
 # The cilium-agent image tag as a version (quay.io/cilium/cilium:v1.20.0@sha256:...
