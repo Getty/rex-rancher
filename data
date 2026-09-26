@@ -1,0 +1,46 @@
+---
+claimed_at: 2026-09-26T06:32:04Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-09-26T06:32:04Z
+created: 2026-09-26T05:42:01Z
+id: 68
+priority: high
+started: 2026-09-26T06:22:25Z
+status: done
+tags:
+- rke2
+- k3s
+- version
+- live-bug
+- escalated-from:kubernetes-ocp#191
+title: 'running_version erkennt laufendes rke2 nie: /proc/PID/exe --version meldet
+  ''exe version'''
+updated: 2026-09-26T06:32:04Z
+---
+
+Live gefunden 2026-09-26 (kubernetes-ocp k191, Live-Test auf ocpt-cp, rke2 v1.36.4+rke2r1, Rex::Rancher aus main d6196b2):
+
+  WARN - Could not ask the running rke2-server (/proc/1314/exe --version) for its version: the version skew is checked only after the install, before rke2-server is restarted
+  WARN - Could not compare the running rke2-server (/proc/1314/exe --version) with the installed rke2 --version: a new binary is not detected; restart rke2-server yourself after an upgrade
+
+Ursache: rke2 gibt seinen Aufrufnamen aus. Über /proc/PID/exe ist das "exe":
+
+  # /proc/11380/exe --version
+  exe version v1.36.4+rke2r1 (7479a59cdd2c8ce0b8871699a24daa4b7c28cc64)
+
+Distribution.pm parse_version_output matcht nur /^(?:rke2|k3s) version (\S+)/m -> running_version() ist auf echten Hosts IMMER undef. Folgen: check_version_skew gegen den laufenden Server findet nie statt (3cdd6d2/d336335 greifen live nicht), start_verb erkennt ein neues Binary nie (Upgrade läuft nicht an, nur Warnung). Die Tests mocken die Ausgabe als "rke2 version ..." und sehen es deshalb nicht.
+
+k3s ungeprüft: k3s ist ein Multi-Call-Binary, das nach argv[0] dispatcht -- /proc/PID/exe --version kann dort etwas ganz anderes tun. Live prüfen.
+
+Done: running_version liefert live die Version (z. B. Muster /^\S+ version (v\S+)/m oder exec mit argv[0] = Distributionsname, etwa via `bash -c "exec -a rke2 /proc/PID/exe --version"`), für rke2 UND k3s; Test mit realistischer Ausgabe ("exe version ..."). Vor dem 0.003-Release.
+
+2026-09-26 06:23 Orchestrator: argv0-Verhalten lokal an echten v1.36.4-Binaries geprüft, Details folgen.
+
+rke2 v1.36.4+rke2r1 mit argv0=exe: „exe version v1.36.4+rke2r1 (7479a59cdd2c8ce0b8871699a24daa4b7c28cc64)“ + „go version go1.26.7-X:boringcrypto“. k3s v1.36.4+k3s1: /proc/PID/exe eines laufenden k3s-Prozesses zeigt aufs innere Binary data/HASH/bin/k3s (der Wrapper startet es mit argv0 kubectl bzw. k3s-server); gemessen per k3s kubectl proxy + /proc/PID/exe --version: „exe version v1.36.4+k3s1 (4dedb15b)“ + „go version go1.26.7“, rc=0. exe ist kein Multi-Call-Name, der argv0-Dispatch greift nicht; inneres und äußeres k3s melden dieselbe Version. Entscheidung: toleranter Parser statt argv0 setzen (dash kann das nicht, bräuchte bash -c). Übergabe an rex-rancher-worker.
+
+2026-09-26 06:25 Tests zuerst auf realistische Ausgabe umgestellt (install-method.t: exe version rke2/k3s wörtlich, go-Zeile allein, sh-Fehlerzeilen; restart-reasons.t und version-skew.t: /proc/PID/exe-Mock liefert exe version ... + go-Zeile, installiertes Binary bleibt rke2/k3s version). Ohne Fix rot: install-method.t 1/20 (parse_version_output / same_version), restart-reasons.t 5/16, version-skew.t 4/13, 48 Einzel-Assertions. Baseline vorher 26 Dateien / 473 Tests grün. Fix folgt in parse_version_output.
+
+2026-09-26 06:27 Ursache: parse_version_output akzeptierte nur rke2/k3s als erstes Wort, das Binary druckt aber den Basisnamen seines argv0, über /proc/PID/exe also exe version ... Damit war running_version live immer undef (check_version_skew gegen den laufenden Dienst, _hold_new_binary und die Binary-Erkennung in _restart_reasons_for griffen nie). Fix (nur lib/Rex/Rancher/Distribution.pm): Regex jetzt /^(?!go )\S+ version (\S+)/m, jedes erste Wort ausser go; die go-Zeile kommt nie heraus, auch allein oder vor der exe-Zeile nicht; Fehlerzeilen (command not found, sh: 1: /proc/123/exe: not found, Permission denied, glibc-Linkerfehler) liefern weiter nichts. POD/Kommentar von parse_version_output und POD von running_version nennen den Aufrufnamen (exe). Keine Änderung an Befehlen, Reihenfolge, auto_die oder Meldungen; rke2 und k3s teilen den Parser. Tests: install-method.t (gemessene exe-Ausgaben rke2 v1.36.4+rke2r1 und k3s v1.36.4+k3s1 wörtlich, go-Zeile allein, sh-Fehler), restart-reasons.t und version-skew.t (/proc-Mock liefert exe version ... + go-Zeile, auch für k3s; installiertes Binary bleibt rke2/k3s version). Ohne Fix rot: install-method.t 1/20, restart-reasons.t 5/16, version-skew.t 4/13 (48 Einzel-Assertions). Mit Fix: prove -lr t/ 26 Dateien, 473 Tests, PASS. Das beweist Kompilation und Parserlogik, keinen Deploy. Unverified live: echte Binary-Ausgabe lokal gemessen (k3s über einen k3s kubectl proxy-Prozess, nicht die MainPID von k3s.service), Deploy-Nachweis über kubernetes-ocp steht aus. Live-Effekt dort: ein Re-Run gegen laufendes rke2/k3s prüft jetzt wirklich den Skew (kann mit Refusing to install sterben, hält eine unpinned neue Minor zurück, startet rke2 bei neuem Patch-Binary neu). Laufende Version wurde nach 0.002 eingeführt, also unreleased; Changes-Zeile optional.
+
+2026-09-26 06:31 Committed 4398f44 on branch worktree-k68-running-version (not yet on main, not pushed). Unverified live — deploy through kubernetes-ocp pending.
