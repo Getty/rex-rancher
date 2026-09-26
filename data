@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-09-26T23:47:46Z
+id: 80
+priority: low
+status: backlog
+tags:
+- uninstall
+- cilium
+- ipv6
+- escalated-from:kubernetes-ocp#196
+title: 'Uninstall: Cilium-IPv6-ip-rules aufräumen'
+updated: 2026-09-26T23:47:46Z
+---
+
+Maintainer-Entscheidung 2026-09-27: nur Backlog. uninstall_cmd (k71) räumt nur IPv4-ip-rules (Tabellen 2004/2005, local-Lookup-Verlegung); Rex::Rancher-Cilium ist IPv4-only.
