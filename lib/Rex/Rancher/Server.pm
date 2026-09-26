@@ -5,12 +5,14 @@ our $VERSION = '0.003';
 use v5.14.4;
 use warnings;
 
+use Fcntl qw( O_CREAT O_TRUNC O_WRONLY );
 use Rex::Commands::File;
 use Rex::Commands::Fs;
 use Rex::Commands::Run;
 use Rex::Logger;
 use Rex::Rancher::Distribution;
 use Rex::Rancher::Options;
+use Socket qw( AF_INET6 inet_pton );
 use YAML::PP;
 
 require Rex::Exporter;
@@ -22,6 +24,8 @@ use vars qw(@EXPORT);
   install_server
   update_registries
   get_kubeconfig
+  fetch_kubeconfig
+  patch_kubeconfig_server
   get_token
 );
 
@@ -380,10 +384,11 @@ a string. The file is read directly via C<cat> over SSH; no SFTP is used.
 
 C<$distribution> defaults to C<rke2>.
 
-Note: RKE2 and K3s both write C<https://127.0.0.1> as the server address.
-The caller is responsible for substituting the real server address before
-saving the kubeconfig for external use. L<Rex::Rancher/rancher_deploy_server>
-performs this substitution automatically.
+Note: RKE2 and K3s both write a loopback server address
+(C<https://127.0.0.1>, see L</patch_kubeconfig_server>). The content comes
+back as the node has it; L</fetch_kubeconfig> points it at an address that
+works from elsewhere and saves it, as
+L<Rex::Rancher/rancher_deploy_server> does.
 
 Dies if the file cannot be read.
 
@@ -397,6 +402,166 @@ sub get_kubeconfig {
 
   my $content = run "cat " . $dist->kubeconfig, auto_die => 1;
   return $content;
+}
+
+=method fetch_kubeconfig(%opts)
+
+  my $kubeconfig = fetch_kubeconfig(
+    distribution => 'rke2',
+    server       => 'cp.example.com',
+    file         => "$ENV{HOME}/.kube/cluster.yaml",
+  );
+
+The server's kubeconfig for use from this machine: read from the host Rex is
+connected to (L</get_kubeconfig>, over the exec channel, no SFTP), pointed at
+C<server> (L</patch_kubeconfig_server>), passed through C<filter> if given,
+written to C<file> if given, and returned. The CA and the admin client
+certificate and key are kept.
+
+Options:
+
+=over
+
+=item C<distribution>
+
+C<rke2> (default) or C<k3s>. Anything else dies before the host is read.
+
+=item C<server>
+
+The address the kubeconfig will reach the Kubernetes API at: a host name or
+an IPv4/IPv6 address, without scheme or port. It must be a name the API
+server certificate is made for (the node's own IPs and host name, or a
+C<tls_san>), since the CA stays. Omitted, the kubeconfig keeps the loopback
+address the node wrote, which works only on the node itself (a C<Local>
+connection) or through a tunnel to its port 6443.
+
+There is no fallback to the host Rex is connected to: the SSH address need
+not be one the API is reached at or certified for (an F<ssh_config> alias, a
+jump host, a NAT address). Where it is, pass it:
+C<server =E<gt> connection-E<gt>server>.
+
+=item C<filter>
+
+A code reference. It gets the patched kubeconfig and returns the one to
+write and return: the place for a caller's own policy, which this module
+does not bring (see the example below). If it returns nothing (C<undef> or an
+empty string), C<fetch_kubeconfig> dies and writes nothing. A C<filter> that
+is not a code reference dies before the host is read.
+
+=item C<file>
+
+Local path the result is written to, mode C<0600> from the moment it exists:
+the kubeconfig carries the cluster admin's client certificate and key. An
+existing file is set to C<0600> before its content is replaced, in place, so
+a symlink keeps pointing where it did. The directory must exist. Without
+C<file> nothing is written.
+
+=back
+
+Dies naming the cause if the kubeconfig cannot be read from the host, is
+empty, or cannot be written.
+
+A caller that wants the CA dropped and certificate verification off, for
+instance because it reaches the API at a name the certificate does not
+carry, says so in C<filter>; this module keeps the CA itself:
+
+  my $kubeconfig = fetch_kubeconfig(
+    distribution => 'k3s',
+    server       => connection->server,
+    file         => "$ENV{HOME}/.kube/k3s.yaml",
+    filter       => sub {
+      my ( $kc ) = @_;
+      $kc =~ s/^[ \t]*certificate-authority-data:.*\n//mg;
+      $kc =~ s/^([ \t]*)(server: https:\/\/\S+)\n/$1$2\n$1insecure-skip-tls-verify: true\n/mg;
+      return $kc;
+    },
+  );
+
+=cut
+
+sub fetch_kubeconfig {
+  my (%opts) = @_;
+  my $server = $opts{server};
+  my $filter = $opts{filter};
+  my $file   = $opts{file};
+
+  die "fetch_kubeconfig: filter must be a code reference\n"
+    if defined $filter && ref $filter ne 'CODE';
+  my $dist = Rex::Rancher::Distribution->new_for($opts{distribution});
+
+  my $content = eval { get_kubeconfig($dist->name) };
+  unless ($content) {
+    my $err = $@ ? $@ =~ s/\s+\z//r : 'empty file';
+    die "Could not fetch the kubeconfig from the " . $dist->name
+      . " server ($err)\n";
+  }
+
+  $content = patch_kubeconfig_server($content, $server)
+    if defined $server && length $server;
+
+  if ($filter) {
+    $content = $filter->($content);
+    die "fetch_kubeconfig: filter returned no kubeconfig, nothing was written\n"
+      unless defined $content && length $content;
+  }
+
+  if (defined $file && length $file) {
+    _write_kubeconfig($file, $content);
+    Rex::Logger::info("Kubeconfig saved to $file");
+  }
+
+  return $content;
+}
+
+=method patch_kubeconfig_server($content, $server)
+
+  my $kubeconfig = patch_kubeconfig_server($content, '2001:db8::10');
+  # server: https://[2001:db8::10]:6443
+
+Return C<$content>, a kubeconfig as RKE2 or K3s wrote it, with its server
+URL pointed at C<$server>. Pure: no host, no connection, so it serves a
+kubeconfig read over any channel, not only through L</get_kubeconfig>.
+
+RKE2 and K3s write C<https://127.0.0.1:PORT>, or C<https://[::1]:PORT> when
+the cluster's (first) service CIDR is IPv6; both become
+C<https://SERVER:PORT>, the port kept. Nothing else changes: the CA
+(C<certificate-authority-data>) and the client certificate and key stay, so
+C<$server> must be a name the API server certificate is made for. A server
+URL that is not loopback (a configured C<bind-address>) is left alone.
+
+C<$server> is a host name or an IPv4/IPv6 address, without scheme or port;
+an IPv6 address is put in brackets (C<https://[2001:db8::10]:6443>), one
+already in brackets is taken as it is. Dies without C<$content> or
+C<$server>.
+
+=cut
+
+sub patch_kubeconfig_server {
+  my ( $content, $server ) = @_;
+  die "patch_kubeconfig_server: no kubeconfig given\n" unless defined $content;
+  die "patch_kubeconfig_server: no server address given\n"
+    unless defined $server && length $server;
+
+  $server = '' . $server;    # a Rex server object names its host when stringified
+  $server = '[' . $server . ']' if defined inet_pton(AF_INET6, $server);
+  $content =~ s{https://(?:127\.0\.0\.1|\[::1\]):(\d+)}{https://$server:$1}g;
+  return $content;
+}
+
+# The admin client certificate and key are in there: created 0600, and an
+# existing file (older versions wrote it umask-mode) narrowed before the
+# content goes in. In place, not rename, so a symlinked path keeps its link.
+# A local file: CORE::chmod, because the chmod Rex::Commands::Fs exports into
+# this package runs on the remote host.
+sub _write_kubeconfig {
+  my ( $file, $content ) = @_;
+  my $fail = sub { die "Could not write the kubeconfig to $file: $!\n" };
+
+  sysopen(my $fh, $file, O_WRONLY | O_CREAT | O_TRUNC, 0600) or $fail->();
+  CORE::chmod(0600, $file) or $fail->();
+  print {$fh} $content or $fail->();
+  close $fh or $fail->();
+  return;
 }
 
 =method get_token($distribution)
@@ -617,6 +782,13 @@ sub _wait_for_kubeconfig {
   # Retrieve kubeconfig and join token from a running server
   my $kubeconfig = get_kubeconfig('rke2');
   my $token      = get_token('rke2');
+
+  # The kubeconfig for this machine: pointed at the server's address, saved 0600
+  fetch_kubeconfig(
+    distribution => 'rke2',
+    server       => 'lb.example.com',
+    file         => "$ENV{HOME}/.kube/cluster.yaml",
+  );
 
   # Update registry mirrors on an already-running node
   update_registries(

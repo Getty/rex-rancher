@@ -191,11 +191,16 @@ even when C<gpu =E<gt> 1>.
 
 RKE2 and K3s write C<https://127.0.0.1> into the kubeconfig. The first
 C<tls_san> entry (or C<kubeconfig_server> if provided) is substituted for
-C<127.0.0.1> so the saved file connects to the real server address. If no
+C<127.0.0.1> so the saved file connects to the real server address; an IPv6
+address goes in brackets. If no
 address can be derived (neither C<tls_san> nor C<kubeconfig_server> given), or
 the derived address is itself loopback (C<127.0.0.1>, C<localhost>, C<::1>),
 the file is still saved but a warning is logged: it will keep pointing at
 C<https://127.0.0.1> and cannot reach the cluster from the operator's machine.
+The CA is kept. The file holds the cluster admin's client certificate and
+key and is written C<0600>, an existing file included. This is
+L<Rex::Rancher::Server/fetch_kubeconfig>, which also fetches the kubeconfig
+again later without a deploy.
 
 If the kubeconfig cannot be fetched from the host or written to
 C<kubeconfig_file>, the deploy dies naming the cause, like the API timeout
@@ -725,29 +730,25 @@ sub _save_kubeconfig_locally {
     . "did not run. Fix the cause and re-run, or omit kubeconfig_file to "
     . "install Cilium through the remote host only\n";
 
-  my $content = eval { get_kubeconfig($distribution) };
-  unless ($content) {
-    my $err = $@ ? $@ =~ s/\s+\z//r : 'empty file';
-    die "Could not fetch the kubeconfig from the $distribution server "
-      . "($err)$stopped";
-  }
-
-  # RKE2/K3s writes 127.0.0.1 in the kubeconfig; patch to the real address
+  # RKE2/K3s writes 127.0.0.1 in the kubeconfig; fetch_kubeconfig patches it
+  # to the real address, or, without one, leaves it as it is.
   my $server_addr = _kubeconfig_server_addr(%opts);
   my %loopback = map { $_ => 1 } qw(127.0.0.1 localhost ::1);
 
-  if (!defined $server_addr || !length $server_addr) {
-    # No tls_san / kubeconfig_server given: nothing to patch to, so the saved
-    # file keeps pointing at 127.0.0.1 and cannot reach the cluster remotely.
-    # Still save it (a local-only operator may want it) but make it loud.
-    Rex::Logger::info(
-      "Kubeconfig saved to $output_file but no server address could be "
-        . "derived — it still points at https://127.0.0.1 and will not reach "
-        . "the cluster from this machine; pass tls_san or kubeconfig_server",
-      "warn");
-  }
-  else {
-    if ($loopback{lc $server_addr}) {
+  # The address warnings run as the filter: after the fetch, before the
+  # write, where they always stood. A failed fetch says nothing about them.
+  my $warn_address = sub {
+    if (!defined $server_addr || !length $server_addr) {
+      # No tls_san / kubeconfig_server given: nothing to patch to, so the saved
+      # file keeps pointing at 127.0.0.1 and cannot reach the cluster remotely.
+      # Still save it (a local-only operator may want it) but make it loud.
+      Rex::Logger::info(
+        "Kubeconfig saved to $output_file but no server address could be "
+          . "derived — it still points at https://127.0.0.1 and will not reach "
+          . "the cluster from this machine; pass tls_san or kubeconfig_server",
+        "warn");
+    }
+    elsif ($loopback{lc $server_addr}) {
       # A loopback address patches 127.0.0.1 to itself (or another loopback):
       # still unreachable from the operator's machine.
       Rex::Logger::info(
@@ -756,16 +757,19 @@ sub _save_kubeconfig_locally {
           . "interface and will not reach the cluster from this machine; pass "
           . "a routable tls_san or kubeconfig_server", "warn");
     }
-    $content =~ s{https://127\.0\.0\.1:(\d+)}{https://$server_addr:$1}g;
-  }
+    return $_[0];
+  };
 
-  open(my $fh, '>', $output_file)
-    or die "Could not write the kubeconfig to $output_file: $!$stopped";
-  print $fh $content;
-  close $fh
-    or die "Could not write the kubeconfig to $output_file: $!$stopped";
+  eval {
+    fetch_kubeconfig(
+      distribution => $distribution,
+      server       => $server_addr,
+      filter       => $warn_address,
+      file         => $output_file,
+    );
+    1;
+  } or die $@ =~ s/\s+\z//r . $stopped;
 
-  Rex::Logger::info("Kubeconfig saved to $output_file");
   return $output_file;
 }
 

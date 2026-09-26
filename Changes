@@ -131,6 +131,14 @@ Revision history for Rex-Rancher
     drop-ins, or without one the built-in 10.42.0.0/16; the die names
     both values. A re-run that leaves cluster_cidr out against a server
     set up with another one dies the same way. Requires YAML::PP 0.027.
+  - New fetch_kubeconfig and patch_kubeconfig_server in
+    Rex::Rancher::Server: fetch the kubeconfig from the node, point it at
+    an address reachable from here (IPv6 in brackets, CA kept), apply your
+    own policy through filter, save it 0600.
+  - rancher_deploy_server saves kubeconfig_file with mode 0600, also over
+    an existing file; an IPv6 kubeconfig_server or tls_san address is now
+    bracketed (the URL was invalid before), and a https://[::1] server URL
+    is patched too.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
