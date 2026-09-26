@@ -1,0 +1,18 @@
+---
+class: standard
+created: 2026-09-26T04:45:57Z
+id: 66
+priority: low
+status: backlog
+tags:
+- cilium
+- upgrade
+- escalated-from:kubernetes-ocp#191
+title: 'upgrade_cilium: sterben, bevor der Host angefasst wird, wenn gar kein Cilium
+  läuft'
+updated: 2026-09-26T04:45:57Z
+---
+
+Aus kubernetes-ocp k191 (Review des 0.003-Umbaus). upgrade_cilium (Cilium.pm ~460-486) installiert die CLI auf dem Node, wendet die Gateway-API-CRDs clusterweit an (_ensure_gateway_api_crds) und schreibt die Values-Datei, und erst dann scheitert `cilium upgrade`, wenn kein Cilium läuft. OCP hatte bis 0.002 einen eigenen Guard (_live_cilium ... or die "no Cilium") samt Test und hat ihn mit dem Umbau auf die Lib fallen lassen. Erreichbar in OCP über `ocp update --component cilium`.
+
+Done: upgrade_cilium stirbt mit klarer Meldung, bevor irgendetwas geschrieben oder angewendet wird, wenn weder kube-system/cilium-config noch das DaemonSet noch ein deployter Helm-Release existiert; Test.
