@@ -16,6 +16,9 @@ use Test::More;
 #    command runs (k55.1).
 # 4. Timezone: a zoneinfo-shaped name reaches timedatectl or the symlink
 #    single-quoted; anything else dies before any command runs (k60).
+# 5. Hostname: a static hostname (/etc/hostname) whose first label is the
+#    requested name -- or that is the name -- is left standing, with and
+#    without hostnamectl; anything else, or nothing readable, is set (k86).
 #
 # run, pkg, can_run, is_debian, host_entry, get_host and file are replaced in
 # Rex::Rancher::Node, so no remote host is involved. This proves the decision
@@ -24,7 +27,7 @@ use Test::More;
 
 use Rex::Rancher::Node;
 
-my ( @cmds, @pkgs, @hosts, @warn, %answer, %have, $debian, $pkg_fails, @existing );
+my ( @cmds, @pkgs, @hosts, @warn, @info, %answer, %have, $debian, $pkg_fails, @existing );
 {
   no warnings 'redefine';
   *Rex::Rancher::Node::run = sub {
@@ -48,11 +51,14 @@ my ( @cmds, @pkgs, @hosts, @warn, %answer, %have, $debian, $pkg_fails, @existing
   *Rex::Rancher::Node::host_entry = sub { my ( $name, %o ) = @_; push @hosts, [ $name, \%o ] };
   *Rex::Rancher::Node::get_host   = sub { @existing };
   *Rex::Rancher::Node::file       = sub { push @cmds, 'file '.$_[0] };
-  *Rex::Logger::info              = sub { push @warn, $_[0] if ( $_[1] // '' ) eq 'warn' };
+  *Rex::Logger::info              = sub {
+    push @info, $_[0];
+    push @warn, $_[0] if ( $_[1] // '' ) eq 'warn';
+  };
 }
 
 sub reset_fakes {
-  @cmds = @pkgs = @hosts = @existing = @warn = ();
+  @cmds = @pkgs = @hosts = @existing = @warn = @info = ();
   %answer    = ();
   %have      = ();
   $debian    = 0;
@@ -146,6 +152,90 @@ subtest 'prepare_node: hostname without domain reaches /etc/hosts' => sub {
   use warnings 'redefine';
   Rex::Rancher::Node::prepare_node( hostname => 'worker-01' );
   is_deeply( \@hosts_calls, [ [ 'worker-01', undef ] ], 'hosts step runs without domain' );
+};
+
+# --- Hostname (k86) ------------------------------------------------------------
+
+my $READ_STATIC = 'cat /etc/hostname 2>/dev/null';
+
+# The two ways _set_hostname sets a name: [ label, can_run, commands when set ].
+my @BRANCHES = (
+  [ 'hostnamectl',    { hostnamectl => 1 }, [ $READ_STATIC, 'hostnamectl set-hostname otho-lab' ] ],
+  [ 'no hostnamectl', {},                   [ $READ_STATIC, 'file /etc/hostname', 'hostname otho-lab' ] ]
+);
+
+subtest 'hostname: a static FQDN whose first label is the name stays' => sub {
+  for my $branch (@BRANCHES) {
+    my ( $label, $have ) = @$branch;
+    for my $fqdn ( undef, 'otho-lab.k8s.local' ) {
+      my $with = $fqdn ? 'domain k8s.local' : 'no domain';
+      reset_fakes();
+      %have = %$have;
+      $answer{qr{^cat /etc/hostname}} = [ "otho-lab.ai.citilan.de\n", 0 ];
+      Rex::Rancher::Node::_set_hostname( 'otho-lab', $fqdn );
+      is_deeply( \@cmds, [$READ_STATIC], "$label, $with: only read, not set" );
+      is_deeply( \@info,
+        ['Static hostname is already otho-lab.ai.citilan.de, leaving it (first label matches otho-lab)'],
+        "$label, $with: the log names both" );
+    }
+  }
+};
+
+subtest 'hostname: the same name does nothing' => sub {
+  for my $branch (@BRANCHES) {
+    my ( $label, $have ) = @$branch;
+    reset_fakes();
+    %have = %$have;
+    $answer{qr{^cat /etc/hostname}} = [ "otho-lab\n", 0 ];
+    Rex::Rancher::Node::_set_hostname( 'otho-lab', undef );
+    is_deeply( \@cmds, [$READ_STATIC], "$label: only read, not set" );
+    is_deeply( \@info, ['Static hostname is already otho-lab, leaving it'], "$label: says so" );
+  }
+};
+
+subtest 'hostname: case is ignored, the file is read the way systemd reads it' => sub {
+  for my $static ( "Otho-Lab.AI.citilan.de\n", "OTHO-LAB\n", "# installimage\n\n  otho-lab.ai.citilan.de  \n" ) {
+    reset_fakes();
+    %have = ( hostnamectl => 1 );
+    $answer{qr{^cat /etc/hostname}} = [ $static, 0 ];
+    Rex::Rancher::Node::_set_hostname( 'otho-lab', undef );
+    ( my $shown = $static ) =~ s/\n/\\n/g;
+    is_deeply( \@cmds, [$READ_STATIC], "'$shown': left standing" );
+  }
+};
+
+subtest 'hostname: another name is set as before' => sub {
+  for my $branch (@BRANCHES) {
+    my ( $label, $have, $set ) = @$branch;
+    for my $static ( 'other.ai.citilan.de', 'otho-lab2.ai.citilan.de', 'otho-lab-2', 'otho.ai.citilan.de',
+      'lab.otho-lab.de', 'localhost.localdomain' ) {
+      reset_fakes();
+      %have = %$have;
+      $answer{qr{^cat /etc/hostname}} = [ "$static\n", 0 ];
+      Rex::Rancher::Node::_set_hostname( 'otho-lab', undef );
+      is_deeply( \@cmds, $set, "$label, '$static': set to otho-lab" );
+      is_deeply( \@info, ['Setting hostname to otho-lab'], "$label, '$static': logged as before" );
+    }
+  }
+};
+
+subtest 'hostname: nothing readable is set as before' => sub {
+  for my $branch (@BRANCHES) {
+    my ( $label, $have, $set ) = @$branch;
+    for my $case (
+      [ 'missing file',   '',              1 ],
+      [ 'empty file',     '',              0 ],
+      [ 'blank lines',    "\n  \n",        0 ],
+      [ 'only a comment', "# otho-lab\n",  0 ]
+    ) {
+      my ( $what, $out, $rc ) = @$case;
+      reset_fakes();
+      %have = %$have;
+      $answer{qr{^cat /etc/hostname}} = [ $out, $rc ];
+      Rex::Rancher::Node::_set_hostname( 'otho-lab', undef );
+      is_deeply( \@cmds, $set, "$label, $what: set to otho-lab" );
+    }
+  }
 };
 
 # --- Locale ------------------------------------------------------------------

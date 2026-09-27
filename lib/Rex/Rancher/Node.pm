@@ -35,7 +35,13 @@ timers bring them back on schedule, C<unattended-upgrades> at the next boot.
 
 =item * Install C<curl> and C<ca-certificates>
 
-=item * Set hostname via C<hostnamectl> or C</etc/hostname> (optional)
+=item * Set hostname via C<hostnamectl> or C</etc/hostname> (optional).
+A static hostname (C</etc/hostname>) that already is C<hostname> or whose
+first label is C<hostname>, compared case-insensitively, is left as it is,
+whatever C<domain> says: C<hostname =E<gt> 'worker-01'> keeps
+C<worker-01.example.com>. The Kubernetes node name then follows the kernel
+hostname, that FQDN, unless C<node_name> is set
+(L<Rex::Rancher::Server/install_server>, L<Rex::Rancher::Agent/install_agent>).
 
 =item * Add a C<127.0.1.1> entry to C</etc/hosts> when C<hostname> is given:
 C<FQDN hostname> with a C<domain>, C<hostname> alone without one (then only
@@ -140,8 +146,18 @@ sub _install_base_packages {
   pkg ["curl", "ca-certificates"], ensure => "present";
 }
 
+# A re-run must not rename a running node: without node-name in config.yaml
+# rke2/k3s register the kernel hostname, and setting the short name over the
+# FQDN a provider or installer wrote changes it at the next start (k86).
+# Hostnames are case-insensitive, and the kubelet lowercases the node name.
 sub _set_hostname {
   my ($hostname, $fqdn) = @_;
+  my $static = _static_hostname();
+  if (defined $static && lc((split /\./, $static, 2)[0]) eq lc $hostname) {
+    Rex::Logger::info("Static hostname is already $static, leaving it"
+      . (lc $static eq lc $hostname ? "" : " (first label matches $hostname)"));
+    return;
+  }
   Rex::Logger::info("Setting hostname to $hostname");
   if (can_run("hostnamectl")) {
     run "hostnamectl set-hostname $hostname", auto_die => 0;
@@ -150,6 +166,21 @@ sub _set_hostname {
     file "/etc/hostname", content => "$hostname\n";
     run "hostname $hostname", auto_die => 0;
   }
+}
+
+# The static hostname from /etc/hostname: the file hostnamectl persists it in
+# and the fallback above writes, readable over an exec channel without SFTP,
+# D-Bus or a systemd-version-specific hostnamectl flag. The first line that
+# is neither blank nor a # comment, as systemd reads it; undef when the file
+# is missing, unreadable or holds no name.
+sub _static_hostname {
+  my $out = run "cat /etc/hostname 2>/dev/null", auto_die => 0;
+  return if $? != 0 || !defined $out;
+  for my $line (split /\n/, $out) {
+    $line =~ s/\A\s+|\s+\z//g;
+    return $line if length $line && $line !~ /\A#/;
+  }
+  return;
 }
 
 sub _set_hosts_entry {

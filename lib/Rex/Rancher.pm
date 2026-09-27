@@ -149,7 +149,10 @@ loaded. Default: C<0>.
 =item C<hostname>
 
 Short hostname to set on the node (optional). If omitted, the existing
-hostname is left unchanged.
+hostname is left unchanged. A static hostname whose first label already is
+this name (the FQDN C<cp-01.example.com> for C<cp-01>) is kept, and the node
+name is then that FQDN unless C<node_name> is set; see
+L<Rex::Rancher::Node/prepare_node>.
 
 =item C<domain>
 

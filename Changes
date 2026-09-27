@@ -233,6 +233,12 @@ Revision history for Rex-Rancher
     deleted first (the cluster otherwise refuses the new password with
     "Node password rejected"); the K3s uninstall scripts keep the file, so a
     K3s node rejoins with the password it had.
+  - prepare_node (and rancher_deploy_server/_agent) no longer replaces a
+    static hostname whose first label already is the requested hostname,
+    case-insensitively (otho-lab.ai.citilan.de for otho-lab), and sets
+    nothing when it already is that name outright; the node then keeps
+    registering under the FQDN a provider or installer set unless node_name
+    is given.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
