@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-09-27T16:27:24Z
+created: 2026-09-24T21:48:55Z
+id: 41
+priority: medium
+started: 2026-09-25T03:21:05Z
+status: done
+tags:
+- ocp
+- server
+- cilium
+- escalated-from:kubernetes-ocp#155
+title: 'install_server: cluster_cidr-Option (rke2 + k3s), Cilium-Pool daraus'
+updated: 2026-09-27T16:27:24Z
+---
+
+OCP (kubernetes-ocp k182, live verifiziert 2026-09-24) setzt network.pod_cidr aus ocp.yaml als cluster-cidr auf RKE2 UND k3s und gibt denselben Wert als Cilium cluster-pool (ipam.operator.clusterPoolIPv4PodCIDRList). Ein joinender RKE2-Server muss denselben Wert tragen (RKE2 lehnt Abweichung ab).
+
+Rex::Rancher 0.002: k3s schreibt fest 10.42.0.0/16 (%PATHS cluster_cidr), rke2 schreibt gar keine cluster-cidr; install_server hat keine Option dafuer. Cilium kann den Pool nur ueber helm_values bekommen.
+
+Wunsch: install_server/rancher_deploy_server Option cluster_cidr (Default wie heute), auf rke2 und k3s als cluster-cidr geschrieben; install_cilium uebernimmt denselben Wert als cluster-pool, wenn nicht per helm_values anders gesetzt.
+
+OCP-Zwischenloesung (k155): OCP schreibt /etc/rancher/<dist>/config.yaml.d/50-ocp-cluster-cidr.yaml vor install_server (config.yaml.d gewinnt ueber config.yaml) und gibt den Pool per helm_values.
+
+Commit 523e151. cluster_cidr (single IPv4) on install_server/install_cilium/rancher_deploy_server; rke2+k3s cluster-cidr; default unchanged. Passed cluster_cidr counts as requested pool -> dies on mismatch with running pool. Live-only: rke2/k3s accept, joining RKE2 server no conflict.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): live bestätigt -> done. cluster_cidr (OCP: pod_cidr, Default 10.42.0.0/16) wird als cluster-cidr geschrieben. RKE2 v1.36.4 (A V1, ocpt, Debian 13) und K3s v1.36.4+k3s1 (A V2) starten damit; k67 liest den Wert live aus config.yaml zurück. Pool daraus: Die frische Installation läuft cluster-pool. Beim RKE2-Re-Bootstrap meldet install_cilium ohne WARN 'Cilium 1.20.0 already deployed with the requested values, nothing to do'. Also ist cluster-pool-ipv4-cidr in cilium-config gleich cluster_cidr, sonst hätte _warn_cluster_cidr_kept gewarnt. Nicht gefahren: Join eines zweiten RKE2-Servers (HA). Das ist derselbe Schreibpfad; die Übereinstimmung prüft RKE2 selbst.
