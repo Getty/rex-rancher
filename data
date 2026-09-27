@@ -1,0 +1,30 @@
+---
+class: standard
+completed: 2026-09-27T16:31:56Z
+created: 2026-09-27T04:59:43Z
+id: 86
+priority: medium
+started: 2026-09-27T05:00:31Z
+status: done
+tags:
+- node
+- hostname
+title: 'prepare_node: hostname ersetzt einen FQDN-Static-Hostname durch den Kurznamen'
+updated: 2026-09-27T16:31:56Z
+---
+
+Aus kubernetes-ocp (Session kubernetes-ocp-c3, 2026-09-27), live: prepare_node(hostname => "otho-lab") hat den statischen Hostnamen "otho-lab.ai.citilan.de" (FQDN) durch "otho-lab" ersetzt (hostnamectl set-hostname). Vorschlag von OCP: Ist der erste Label des statischen Hostnamens gleich dem gewünschten Namen, bleibt der FQDN stehen.
+
+Orchestrator-Urteil: umsetzen. Ein Re-Run auf einem laufenden Node würde sonst den Kernel-Hostnamen und damit (ohne node_name) den Node-Namen beim nächsten Start ändern.
+
+Done: _set_hostname lässt einen statischen Hostnamen stehen, dessen erster Label gleich hostname ist (auch ohne hostnamectl über /etc/hostname); gleicher Name: nichts tun; sonst wie bisher. Log-Zeile nennt beide Namen. POD (Node-Name folgt dann dem FQDN, außer node_name ist gesetzt). Offline-Tests.
+
+2026-09-27 05:04 Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-af3521715945928e3, branch worktree-agent-af3521715945928e3 (base fea3843). Plan: read the static hostname from /etc/hostname via run 'cat' (no SFTP, same source for both branches), compare first label case-insensitively, red test in t/node.t first.
+
+2026-09-27 05:07 Done, uncommitted in /home/getty/dev/rex-rancher/.claude/worktrees/agent-af3521715945928e3 (branch worktree-agent-af3521715945928e3, base fea3843). Changed: lib/Rex/Rancher/Node.pm (_set_hostname reads the static hostname via new _static_hostname = run 'cat /etc/hostname 2>/dev/null', auto_die 0: first non-blank non-# line, undef on rc!=0/empty; first label eq requested name, case-insensitive -> log + return before either branch, so neither hostnamectl nor file+hostname runs; POD item), lib/Rex/Rancher.pm (hostname option POD, one sentence + link), t/node.t (5 subtests, @info captured in the logger fake). Red before the fix (hostnamectl set-hostname otho-lab over otho-lab.ai.citilan.de; file /etc/hostname + hostname otho-lab in the other branch), green after; prove -lr t/ 35 files / 895 tests PASS - compile + pure logic only. Log: 'Static hostname is already otho-lab.ai.citilan.de, leaving it (first label matches otho-lab)' / exact: 'Static hostname is already otho-lab, leaving it'. UNVERIFIED LIVE: cat /etc/hostname over LibSSH on Debian 13 / Ubuntu 24.04 / Rocky 9, and the node registering under the FQDN on the next rke2/k3s start. Changes not touched.
+
+2026-09-27 05:07 Also found (not touched): hostname/domain are not validated like locale (k55) and timezone (k60) and go unquoted into 'hostnamectl set-hostname $hostname' / 'hostname $hostname' - candidate for the same die-before-the-host check (rex-rancher board). Exact-equal case now skips hostnamectl entirely, so a kernel hostname that deviates from /etc/hostname (manual 'hostname x', DHCP transient) is no longer re-synced - as ordered, rare.
+
+2026-09-27 05:35 Committed 5a885af (Keep a static FQDN hostname whose first label is the requested name) on worktree-ocp-c3-round3. Stays in review: unverified live (needs another OCP/citilan run against a host with a pre-set static FQDN hostname; only cat /etc/hostname over LibSSH and the resulting node registration are unverified).
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): live bestätigt -> done. B (otoh, 5a885af): prepare_node(hostname => otho-lab) ließ den statischen Hostnamen otho-lab.ai.citilan.de stehen, weil sein erstes Label der gewünschte Name ist. Alle drei Hostnamen-Abfragen danach zeigen otho-lab.ai.citilan.de, /etc/hosts hat '127.0.1.1 otho-lab.ai.citilan.de otho-lab'. Damit ist auch cat /etc/hostname über Rex::LibSSH auf Ubuntu 24.04 belegt. In A (fea3843, ohne Fix) setzte derselbe Host noch 'Setting hostname to otho-lab'. Der Node registrierte sich als otho-lab, weil OCP beim Bootstrap node_name setzt. Der POD-Fall 'ohne node_name folgt der Node-Name dem FQDN' ist live nicht gelaufen.
