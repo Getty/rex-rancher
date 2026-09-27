@@ -1,0 +1,13 @@
+---
+class: standard
+created: 2026-09-27T03:29:07Z
+id: 83
+priority: low
+status: backlog
+tags:
+- escalated-from:kubernetes-ocp#196
+title: Public remove-bare-template-and-restart-once for a running node
+updated: 2026-09-27T03:29:07Z
+---
+
+Aus kubernetes-ocp k196 Teil 2b (2026-09-27). Die OCP::Drift-Remedy cleanup_legacy_containerd_template ruft pro Distribution Distribution->remove_bare_containerd_template auf und startet nichts neu. containerd läuft danach bis zum nächsten Start weiter auf dem Template-Output. Gewünscht ist eine öffentliche Funktion, die das Template entfernt und einen laufenden Dienst, dessen config.toml noch Template-Output ist, einmal neu startet (Logik wie _stale_containerd_restart/start_verb). Nebenbei: Die Fehlermeldung von remove_bare_containerd_template sagt "<service> was not (re)started". Außerhalb eines Installs führt das in die Irre.
