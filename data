@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-09-27T16:29:01Z
+created: 2026-09-25T04:08:00Z
+id: 49
+priority: medium
+started: 2026-09-25T04:31:42Z
+status: done
+title: rke2-Re-Run uebernimmt geaenderte config.yaml / neue Version auf laufendem
+  Node nicht
+updated: 2026-09-27T16:29:01Z
+---
+
+Aus #46: rke2 bekommt beim Re-Run nur systemctl start (No-op bei laufender Unit), k3s restart. Geaenderte config.yaml (tls_san, disable, cluster_cidr), eine neu gepinnte version oder ein nachtraeglich per gpu => 1 hinzugefuegter nvidia-Drop-in greifen auf rke2 erst beim naechsten Neustart. _verify_installed_version prueft die Binary, nicht den laufenden Prozess. Entscheiden: Restart bei geaenderter config.yaml/Binary (Hash vorher/nachher vergleichen) statt bedingungslos. Beachte rolling HA-Server. Nur live verifizierbar.
+
+Commit f91bf86. Distribution::restart_reasons: rke2 (server+agent) restarts only when running and (watched files newer than MainPID start: config.yaml(.d), registries.yaml, /etc/default env, containerd tmpl + config-v3.toml.d drop-in; nvidia-container-runtime ctime; /proc/PID/exe --version != rke2 --version). Rex file() only replaces on md5 change -> identical re-run stays start. Undeterminable check -> warn, treat unchanged. k3s keeps unconditional restart (installer rewrites unit each run). t/restart-reasons.t. Live-only: find -newermt/ps etimes on Debian/Rocky, /proc exe after binary replace, 2nd run stays start.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): live bestätigt -> done. restart_reasons auf RKE2 v1.36.4, Debian 13 (A, ocpt-cp): Eine geänderte config.yaml ergibt 'Restarting rke2-server, which reads these only when it starts: changed since it started: /etc/rancher/rke2/config.yaml' (03:43:18). Der unveränderte Re-Bootstrap startet nicht neu (03:48). Es kam keine Warnung zu einer unbestimmbaren Prüfung, find -newermt und ps etimes greifen also. Auf otoh (Ubuntu 24.04, A G) dasselbe nach dem Schreiben von /etc/default/rke2-server. Nicht gelaufen: Restart wegen einer ausgetauschten Binary. Das ist der Patch-Upgrade-Schritt von k56 und dort als offen notiert. Einen Rocky-Host gibt es im Rig nicht.
