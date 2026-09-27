@@ -1,0 +1,39 @@
+---
+claimed_at: 2026-09-27T05:36:20Z
+claimed_by: rex-rancher-worker-k77
+class: standard
+completed: 2026-09-27T05:36:20Z
+created: 2026-09-26T23:47:33Z
+id: 77
+priority: high
+started: 2026-09-26T23:48:30Z
+status: done
+tags:
+- rke2
+- k3s
+- version
+- escalated-from:kubernetes-ocp#193
+title: 'hold_running => 1: laufende Version statt Pin (install_server, install_agent,
+  rancher_deploy_*)'
+updated: 2026-09-27T05:36:20Z
+---
+
+OCP k193 Option b, Maintainer-Entscheidung 2026-09-27 (über kubernetes-ocp-c3). Option hold_running => 1 für install_server, install_agent, rancher_deploy_server/agent.
+- Dienst läuft: seine laufende Version (running_version über main_pid) wird die gepinnte Version.
+- Gestoppter Dienst: die installierte Binary zählt; fehlt sie, gilt der Pin (version).
+- Agent: seine eigene laufende Version; die Skew-Prüfung gegen die CP bleibt.
+- Explizites version plus hold: hold gewinnt, solange ein Dienst läuft oder eine Binary installiert ist, mit Log-Zeile, die beide Versionen nennt.
+- Neu gestartet wird dann nur bei Config-Änderung.
+Done: Option in allen vier, aufgelöst vor check_version_skew und vor jedem Schreiben; Tests rke2/k3s, Server/Agent; POD.
+
+2026-09-26 23:54 Start (Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-ad649c8c623c01694, Branch worktree-agent-ad649c8c623c01694, Basis 151caad). Baseline prove -lr t/: 31 Dateien, 652 Tests grün. k3s-Check: get.k3s.io (install.sh) startet selbst nur neu, wenn sha256 von Binary, Unit und Env-Datei vor/nach der Installation verschieden sind ('No change detected so skipping service start'); Plan: im Hold-Fall dieselbe Inhaltsprüfung von k3s(-agent).service(.env) plus restart_reasons (config mtime, Binary-Version) statt Restart bei jedem Lauf.
+
+2026-09-27 00:01 Umsetzung: neue Methode Rex::Rancher::Distribution->held_version(version => $pin) als die eine Stelle (auch für k78): main_pid -> running_version; sonst/unlesbar installed_version (Warnung, wenn der Dienst lief); sonst der Pin (Warnung, wenn der Dienst lief), ohne Pin undef = ungepinnt wie bisher. Nicht-Release-Strings (parse_release) gelten als unlesbar, weil sie auf die Installer-Zeile gehen. Anderer Pin: warn-Zeile 'hold_running: <Quelle>; that is the version for this run, not version => ...' mit beiden Versionen. install_server/install_agent lösen nach check_cilium_residue und vor check_version_skew auf; danach ist das der version für Skew-Check, Installer, verify_installed_version, start_verb(pinned). Agent: eigene Version, check_agent_version gegen die CP bleibt (Test: gehaltene neuere Minor als CP stirbt vor dem Schreiben). rancher_deploy_*: _install_opts reicht ohnehin alle Optionen durch, dort nur POD. install_method artifact braucht weiter version (Fallback für einen Host ohne etwas zum Halten); resolve_install_method unverändert. Restart: rke2 unverändert über restart_reasons (gleiche Binary -> nur Config-mtime), per Test belegt, auch der k56-Fall (neuere Minor auf der Platte, laufende gehalten -> Installer bekommt die laufende, start). k3s: eingegrenzt. start_verb(hold => 1, unit_digest => $vorher): Default start statt restart, restart bei restart_reasons oder wenn sha256sum von /etc/systemd/system/k3s(-agent).service und .env vor/nach dem Installer abweicht. Das ist dieselbe Prüfung, die get.k3s.io selbst vor seinem eigenen Restart macht (get_installed_hashes, 'No change detected so skipping service start'). Neue Methoden installer_unit_files (K3s: die zwei Dateien, RKE2: keine, Unit kommt mit der Version) und installer_unit_digest. Ohne hold startet k3s weiter bei jedem Lauf neu. live_verified/K3s-Warnung und alle auto_die => 0 unverändert. Tests: neu t/hold-running.t (49), rke2 und k3s x Server und Agent; ohne Fix 29/33 rot. prove -lr t/: 32 Dateien, 701 Tests grün (vorher 31/652). Unverified live: alles. Offen bleibt dieselbe Lücke wie bei upstream: Ein früherer Lauf schreibt die Unit mit neuem Inhalt und stirbt vor dem Restart, dann sieht der nächste Lauf keine Änderung mehr. Config-Änderungen fängt das config.yaml-mtime ab. Also found (für das Board dieses Repos): Skill rex-rancher-core sagt 'k3s restarts every run'; mit hold_running stimmt das nicht mehr, der Skill braucht einen Nachtrag.
+
+2026-09-27 00:01 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-ad649c8c623c01694, Branch worktree-agent-ad649c8c623c01694
+
+2026-09-27 00:07 Committed 665824f0f50f02eeb007beda4cbfa5fd2e2f06a8 (Add hold_running: keep a node on the version it runs instead of the pin) im Worktree agent-ad649c8c623c01694, Branch worktree-agent-ad649c8c623c01694, rebased auf main (Basis jetzt 87fb6c1); main folgt per Fast-Forward durch den Orchestrator. Unverified live.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored Rex::Rancher main fea3843 + Rex::GPU main 2996fe8 via make vendor): rke2 v1.36.4 auf Debian 13 (ocpt-cp/ocpt-w): Re-Bootstrap gegen den laufenden Server meldet 'hold_running: rke2-server runs v1.36.4+rke2r1', der zweite Lauf ohne Restart und ohne Neuschreiben der config.yaml. k3s v1.36.4+k3s1 auf denselben VMs: zwei Re-Bootstraps, 'hold_running: k3s runs v1.36.4+k3s1' an der echten k3s-MainPID; der zweite Lauf lässt die MainPID gleich (kein Restart, Unit-Digest-Logik greift). rancher_deploy_* selbst hat OCP nicht benutzt (OCP ruft install_server/install_agent direkt).
+
+2026-09-27 05:36 Release-Audit (kubernetes-ocp-c3, 2026-09-27): live bestätigt -- hold_running lief auf rke2 v1.36.4 und k3s v1.36.4+k3s1 (Debian 13) über install_server/install_agent direkt, genau mit der erwarteten Log-Zeile und ohne Restart im zweiten Lauf. rancher_deploy_* selbst (reine Options-Durchreichung) hat OCP nicht benutzt -- kein Grund, deswegen in review zu bleiben, da dort keine eigene Logik liegt. -> done.
