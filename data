@@ -1,0 +1,23 @@
+---
+class: standard
+completed: 2026-09-27T16:29:30Z
+created: 2026-09-25T17:36:19Z
+id: 54
+priority: high
+started: 2026-09-25T17:36:48Z
+status: done
+title: Review-Fixes Cilium (#41/#43)
+updated: 2026-09-27T16:29:30Z
+---
+
+Aus Code-Review 2026-09-25 (395935d..1257136):
+1. _wait_ready: scalar eval { $api->get } schluckt 401/403/Netzfehler als 'not found' -> nach 600s irrefuehrend. _get_optional nutzen, andere Fehler laut.
+2. _get_optional: Regex /\b404\b|not ?found/i zu weit -> nur echten 404-Status als 'fehlt' werten (sonst Defaults statt laufender IPAM).
+3. operator.replicas nur aus Release-Values; ohne gesetzten Wert erzwingt Default replicas: 1 -> laufenden Wert aus Deployment cilium-operator spec.replicas uebernehmen.
+4. Laufende IPAM nur uebernommen wenn has_deployed; bei failed/pending-install mit existierender cilium-config wird mit rke2-Defaults (kubernetes) neu installiert -> cilium-config lesen, sobald sie existiert, unabhaengig vom Release-Status.
+5. cluster_cidr (Server-Option) zaehlt als expliziter Pool -> stirbt bei laufendem anderem Pool; OCP hat Altcluster auf 10.0.0.0/8 und will pod_cidr einfach durchreichen. cluster_cidr = Pool fuer frische Installation, laufender Pool gewinnt (mit Warnung). Explizit per helm_values gesetzter abweichender Pool stirbt weiter.
+6. Changes/POD: auf rke2 bleibt ipam.mode kubernetes, Pods folgen cluster-cidr ueber Node-PodCIDRs; der cluster-pool-Wert ist dort inaktiv -> ehrlich formulieren.
+
+Commit 6038de4. All 6 points; t/cilium.t incl. OCP 10.0.0.0/8 + cluster_cidr case. Tradeoff: API outage during wait dies immediately.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): live bestätigt -> done. Auf Cilium 1.20.0, RKE2 und K3s (A): (1) _wait_ready über _get_optional meldet nach etwa 36s 'Cilium ready: cilium 1/1 ready, 1/1 updated; cilium-operator 1/1 ready'. (2) Nur echte 404 zählen als fehlend: Die frischen Installationen V1/V2/G/B lesen cilium-config, DaemonSet und cilium-operator ohne Fehler. (3)+(4) cilium-config und das cilium-operator-Deployment werden bei jedem install_cilium gelesen; der RKE2-Re-Bootstrap endet mit 'already deployed with the requested values, nothing to do'. (5) cluster_cidr bei gleichem laufendem Pool: ohne Warnung. Nicht getroffen sind reine lokale Entscheidungen über die live gelesenen Werte (offline in t/cilium.t): abweichender laufender Pool -> Warnung und behalten; failed/pending-install mit vorhandener cilium-config; 403 oder Netzfehler -> die.
