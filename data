@@ -1,0 +1,25 @@
+---
+class: standard
+completed: 2026-09-27T16:30:45Z
+created: 2026-09-25T19:55:23Z
+id: 64
+priority: medium
+started: 2026-09-25T22:36:38Z
+status: done
+tags:
+- ocp
+- cilium
+- escalated-from:kubernetes-ocp#155
+title: 'Cilium: IPAM-Modus fuer frische Installation, der einem laufenden Cilium weicht'
+updated: 2026-09-27T16:30:45Z
+---
+
+Aus der OCP-Umstellung auf 0.003 (kubernetes-ocp Branch rex-0.003-vendor).
+
+OCP muss ipam.mode cluster-pool in helm_values nennen, sonst bekommt ein frisches RKE2 den Library-Default kubernetes. Ein genannter Modus wird aber gegen den laufenden geprueft -> ein laufendes Cilium in anderem Modus laesst install/upgrade jetzt sterben, wo 0.002 den Modus behielt.
+
+Wunsch: analog zu cluster_cidr (Pool nur fuer frische Installation, laufender cluster-pool behaelt seinen) eine Option wie ipam_mode, die nur bei frischer Installation gilt und einem laufenden Cilium weicht (mit Warnung). Dann kann OCP das 0.002-Verhalten exakt halten. Niedrige Dringlichkeit: jeder OCP-gebaute Cluster laeuft cluster-pool, betroffen sind nur handgeaenderte.
+
+Commit 53dda9f. ipam_mode (kubernetes|cluster-pool) fresh-install only, running mode wins with warning; helm_values ipam.mode still dies on mismatch. Distribution->default_ipam_mode. OCP: _cilium_opts helm_values ipam -> ipam_mode => 'cluster-pool'.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): live bestätigt -> done. ipam_mode cluster-pool (von OCP gesetzt) auf frischem RKE2 (A V1 auf ocpt, G und B auf otoh): Cilium läuft cluster-pool statt des RKE2-Defaults kubernetes. Beim RKE2-Re-Bootstrap weicht ipam_mode dem laufenden Modus: 'already deployed with the requested values, nothing to do' ohne WARN, cilium-config las also cluster-pool. Nicht getroffen ist reine Entscheidungslogik über den live gelesenen Modus (offline getestet): Ein anderer laufender Modus ergibt Warnung und Behalten; ein abweichendes helm_values ipam.mode ergibt die.
