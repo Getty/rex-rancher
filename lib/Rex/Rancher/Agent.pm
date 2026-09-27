@@ -165,24 +165,17 @@ sub install_agent {
   my $distribution = $opts{distribution} // 'rke2';
   my $server       = $opts{server} or die "server is required for install_agent\n";
   my $token        = $opts{token} or die "token is required for install_agent\n";
-  my $version      = $opts{version};
   my $node_name    = $opts{node_name};
-  my $method       = Rex::Rancher::Options->resolve_install_method($opts{install_method}, $version);
+
+  # Everything that may refuse, before anything is written or installed;
+  # rancher_deploy_agent asked the same before it prepared the node (k78).
+  my $checked        = preflight_agent(%opts);
+  my $method         = $checked->{install_method};
+  my $version        = $checked->{version};
+  my $server_version = $checked->{server_version};
+  my $hold           = $opts{hold_running};
 
   my $dist = Rex::Rancher::Distribution->new_for($distribution, role => 'agent');
-
-  # Before anything is written or installed: an agent never goes to a newer
-  # minor than the control plane, nor skips or goes back a minor itself.
-  my $server_version = _control_plane_version($opts{kubeconfig});
-  # Nor onto Cilium state an earlier cluster left on a host without RKE2/K3s,
-  # which would hang every image pull of this agent (k71). The first read of
-  # the host; the control plane above is asked through the API.
-  Rex::Rancher::Uninstall->check_cilium_residue;
-  # hold_running: the agent's own version on the host is this run's version,
-  # still checked against the control plane below (k77).
-  my $hold = $opts{hold_running};
-  $version = $dist->held_version(version => $version) if $hold;
-  $dist->check_version_skew(version => $version, server_version => $server_version);
 
   Rex::Logger::info("Installing $distribution agent to join $server");
 
@@ -201,6 +194,71 @@ sub install_agent {
   _enable_service($dist, $server, $version, $hold, $units);
 
   Rex::Logger::info("$distribution agent installed and running");
+}
+
+=method preflight_agent
+
+  my $checked = Rex::Rancher::Agent::preflight_agent(%opts);
+  # { version => ..., install_method => 'script', server_version => ... }
+
+Everything L</install_agent> checks before it writes or installs, with the
+same options and in the same order, and nothing else: it only reads the
+host, and with C<kubeconfig> the cluster's API. L</install_agent> runs it
+first thing (after its check for C<server> and C<token>);
+L<Rex::Rancher/rancher_deploy_agent> runs it before it prepares the node, and
+a caller that prepares the node on its own can do the same, so a refused host
+is left as it was. Not exported.
+
+=over
+
+=item 1. the pure option checks: C<install_method> (with C<version>),
+C<distribution>;
+
+=item 2. with C<kubeconfig>, the control plane's version through the API
+(from this machine, no host involved); an API that does not answer dies;
+
+=item 3. Cilium datapath state an earlier cluster left on a host without
+RKE2 or K3s (L<Rex::Rancher::Uninstall/check_cilium_residue>), the first
+read of the host;
+
+=item 4. with C<hold_running>, the agent's own version to hold
+(L<Rex::Rancher::Distribution/held_version>);
+
+=item 5. the version skew against the running agent or installed binary,
+and against the control plane's version from item 2
+(L<Rex::Rancher::Distribution/check_version_skew>), with the held version
+under C<hold_running>, else C<version>.
+
+=back
+
+Dies as L</install_agent> would. Returns a hashref: the C<version> this run
+installs (held, pinned, or C<undef> for the stable channel), the
+C<install_method> and the control plane's C<server_version> (C<undef>
+without C<kubeconfig>).
+
+=cut
+
+sub preflight_agent {
+  my (%opts) = @_;
+  my %checked = (
+    install_method => Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version}),
+  );
+  my $dist = Rex::Rancher::Distribution->new_for($opts{distribution}, role => 'agent');
+
+  # An agent never goes to a newer minor than the control plane, nor skips
+  # or goes back a minor itself.
+  $checked{server_version} = _control_plane_version($opts{kubeconfig});
+  # Nor onto Cilium state an earlier cluster left on a host without RKE2/K3s,
+  # which would hang every image pull of this agent (k71). The first read of
+  # the host; the control plane above is asked through the API.
+  Rex::Rancher::Uninstall->check_cilium_residue;
+  # hold_running: the agent's own version on the host is this run's version,
+  # still checked against the control plane (k77).
+  $checked{version} = $opts{hold_running}
+    ? $dist->held_version(version => $opts{version}) : $opts{version};
+  $dist->check_version_skew(version => $checked{version},
+    server_version => $checked{server_version});
+  return \%checked;
 }
 
 # The control plane's version through the given kubeconfig, or nothing

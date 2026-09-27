@@ -193,6 +193,18 @@ Revision history for Rex-Rancher
     Before, a missing Rex::GPU was noticed only after node preparation,
     and 0.001 was accepted. With gpu_setup => 0 Rex::GPU is still not
     needed.
+  - rancher_deploy_server and rancher_deploy_agent now check the host right
+    after the connection check and before prepare_node and the GPU setup:
+    Cilium datapath residue, the version skew (with hold_running against
+    the held version; for an agent with kubeconfig_file also against the
+    control plane) and, on a server, the established cluster-cidr. A
+    refused host is left as it was instead of half prepared. install_server
+    and install_agent run the same checks again, as before, on the host as
+    node preparation left it. The checks are the new, not exported
+    functions Rex::Rancher::Server::preflight_server and
+    Rex::Rancher::Agent::preflight_agent, for callers that prepare the node
+    themselves. install_method => 'artifact' without version now also dies
+    before prepare_node runs, for the same reason.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

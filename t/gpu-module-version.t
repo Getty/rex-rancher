@@ -47,6 +47,9 @@ local *Rex::Rancher::_check_connection           = sub { push @ran, 'check_conne
 local *Rex::Rancher::prepare_node                = sub { push @ran, 'prepare_node' };
 local *Rex::Rancher::install_server              = sub { push @ran, 'install_server' };
 local *Rex::Rancher::install_agent               = sub { push @ran, 'install_agent' };
+# k78's preflight, not this test's concern (covered by t/deploy-preflight.t).
+local *Rex::Rancher::Server::preflight_server    = sub { {} };
+local *Rex::Rancher::Agent::preflight_agent      = sub { {} };
 local *Rex::Rancher::_save_kubeconfig_locally    = sub { push @ran, 'save_kubeconfig'; $_[1] };
 local *Rex::Rancher::wait_for_api                = sub { push @ran, 'wait_for_api'; 1 };
 local *Rex::Rancher::install_cilium              = sub { push @ran, 'install_cilium' };

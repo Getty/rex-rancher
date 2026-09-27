@@ -314,23 +314,15 @@ sub install_server {
     "$distribution has not been run live through Rex::Rancher; rke2 is the "
       . "verified distribution.", "warn")
     unless $dist->live_verified;
-  # Validated before anything touches the host (the token lookup reads it).
-  my $method       = Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version});
-  my $cluster_cidr = Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr});
-  # The first read of the host: Cilium state an earlier cluster left on a host
-  # without RKE2/K3s would hang every image pull of this install (k71).
-  Rex::Rancher::Uninstall->check_cilium_residue;
-  # hold_running: the version on the host is this run's version, for the
-  # skew check and everything after it (k77).
+  # Everything that may refuse, before anything is written (the token lookup
+  # below is the first read after it); rancher_deploy_server asked the same
+  # before it prepared the node (k78).
+  my $checked      = preflight_server(%opts);
+  my $method       = $checked->{install_method};
+  my $cluster_cidr = $checked->{cluster_cidr};
+  my $version      = $checked->{version};
   my $hold         = $opts{hold_running};
-  my $version      = $hold ? $dist->held_version(version => $opts{version}) : $opts{version};
-  # Before anything is written or installed: a rejected upgrade leaves the
-  # host as it was.
-  $dist->check_version_skew(version => $version);
   my $cilium       = exists $opts{cilium} ? $opts{cilium} : 1;
-  # Nor another pod network for a server already set up here: config.yaml
-  # would carry it and the service be restarted onto it (k67).
-  $dist->check_established_cluster_cidr(cluster_cidr => $cluster_cidr, cilium => $cilium);
   my $token        = _resolve_token($dist, $opts{token});
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
@@ -363,6 +355,71 @@ sub install_server {
   Rex::Logger::info("$distribution server installation complete");
 
   return 1;
+}
+
+=method preflight_server(%opts)
+
+  my $checked = Rex::Rancher::Server::preflight_server(%opts);
+  # { version => ..., install_method => 'script', cluster_cidr => ... }
+
+Everything L</install_server> checks before it writes or installs, with the
+same options and in the same order, and nothing else: it only reads the
+host. L</install_server> runs it first thing; L<Rex::Rancher/rancher_deploy_server>
+runs it before it prepares the node, and a caller that prepares the node
+on its own can do the same, so a refused host is left as it was. Not
+exported.
+
+=over
+
+=item 1. the pure option checks: C<distribution>, C<install_method> (with
+C<version>), C<cluster_cidr>;
+
+=item 2. Cilium datapath state an earlier cluster left on a host without
+RKE2 or K3s (L<Rex::Rancher::Uninstall/check_cilium_residue>), the first
+read of the host;
+
+=item 3. with C<hold_running>, the version to hold
+(L<Rex::Rancher::Distribution/held_version>);
+
+=item 4. the version skew against the running server or installed binary
+(L<Rex::Rancher::Distribution/check_version_skew>), with the held version
+under C<hold_running>, else C<version>;
+
+=item 5. the C<cluster-cidr> of a server already set up on the host
+(L<Rex::Rancher::Distribution/check_established_cluster_cidr>).
+
+=back
+
+Dies as L</install_server> would. Returns a hashref: the C<version> this run
+installs (held, pinned, or C<undef> for the stable channel), the
+C<install_method> and the C<cluster_cidr> (C<undef> when not given).
+
+=cut
+
+sub preflight_server {
+  my (%opts) = @_;
+  my $dist = Rex::Rancher::Distribution->new_for($opts{distribution});
+
+  # Pure, before anything touches the host. scalar(): no cluster_cidr
+  # returns an empty list, which would shift the pairs here.
+  my %checked = (
+    install_method => scalar Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version}),
+    cluster_cidr   => scalar Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr}),
+  );
+  # The first read of the host: Cilium state an earlier cluster left on a host
+  # without RKE2/K3s would hang every image pull of this install (k71).
+  Rex::Rancher::Uninstall->check_cilium_residue;
+  # hold_running: the version on the host is this run's version, for the
+  # skew check and everything after it (k77).
+  $checked{version} = $opts{hold_running}
+    ? $dist->held_version(version => $opts{version}) : $opts{version};
+  # A rejected upgrade leaves the host as it was.
+  $dist->check_version_skew(version => $checked{version});
+  # Nor another pod network for a server already set up here: config.yaml
+  # would carry it and the service be restarted onto it (k67).
+  $dist->check_established_cluster_cidr(cluster_cidr => $checked{cluster_cidr},
+    cilium => ( exists $opts{cilium} ? $opts{cilium} : 1 ));
+  return \%checked;
 }
 
 =method update_registries(%opts)

@@ -407,16 +407,19 @@ subtest 'install_agent with kubeconfig' => sub {
 };
 
 subtest 'rancher_deploy_agent hands kubeconfig_file to install_agent' => sub {
-  my %got;
+  my ( %got, %pre );
   no warnings 'redefine';
   local *Rex::Rancher::_check_connection       = sub { };
   local *Rex::Rancher::prepare_node            = sub { };
   local *Rex::Rancher::_gpu_setup_if_requested = sub { };
+  local *Rex::Rancher::Agent::preflight_agent  = sub { %pre = @_; {} };
   local *Rex::Rancher::install_agent           = sub { %got = @_ };
   Rex::Rancher::rancher_deploy_agent( server => 'https://cp:9345', token => 't', kubeconfig_file => 'kc' );
   is( $got{kubeconfig}, 'kc', 'as kubeconfig' );
+  is( $pre{kubeconfig}, 'kc', 'and to the preflight before the node is prepared (k78)' );
   Rex::Rancher::rancher_deploy_agent( server => 'https://cp:9345', token => 't' );
   ok( !exists $got{kubeconfig}, 'without it: none' );
+  ok( !exists $pre{kubeconfig}, 'nor to the preflight' );
 };
 
 is_deeply( \@perl_warnings, [], 'no Perl warnings' );

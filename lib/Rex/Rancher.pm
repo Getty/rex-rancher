@@ -46,6 +46,18 @@ DaemonSet is deployed via the local Kubernetes API (no C<kubectl> required
 on the remote host) and the function waits for C<nvidia.com/gpu> resources
 to appear on the node.
 
+Before step 1, right after the connection check, the host is asked
+everything L<Rex::Rancher::Server/install_server> would refuse it for, with
+the same options and in the same order
+(L<Rex::Rancher::Server/preflight_server>): Cilium datapath state an earlier
+cluster left on a host without RKE2 or K3s, the version skew against the
+running server or installed binary (with C<hold_running> against the held
+version), and the C<cluster-cidr> of a server already set up there. Any of
+them dies there, with nothing on the host changed: no packages, no swap or
+kernel module change, no GPU driver, no reboot. These only read the host;
+C<install_server> asks them again in step 3, on the host as node
+preparation and GPU setup left it.
+
 The full pipeline for a GPU server deployment:
 
 =over
@@ -224,7 +236,7 @@ affected; the address must still be a name in the API server certificate
 Pinned distribution version (C<INSTALL_RKE2_VERSION> / C<INSTALL_K3S_VERSION>).
 Default: latest stable. When given, the installed version is verified and a
 mismatch dies. On a running server, more than one minor ahead or a
-downgrade dies before anything is installed, and the next minor is
+downgrade dies before the node is prepared (see above), and the next minor is
 restarted onto only when pinned; unpinned it is installed but not
 restarted, with a warning. See L<Rex::Rancher::Server/install_server>.
 
@@ -234,8 +246,8 @@ If true, a server already on the node stays on the version it runs (or,
 when it is not running, the installed one), which is used as C<version>;
 a C<version> given as well applies only to a node with nothing to hold, and
 otherwise a warning names both. Held, the service is restarted only for a
-changed configuration, K3s included. Read in step 3, after node preparation
-and GPU setup, before anything of step 3 is written. Passed to
+changed configuration, K3s included. Read before the node is prepared, for
+the version skew check there (see above), and again in step 3. Passed to
 L<Rex::Rancher::Server/install_server>, which has the details. Default: C<0>.
 
 =item C<install_method>
@@ -270,9 +282,9 @@ C<server> needs the same value. On a cluster whose Cilium already runs
 C<cluster-pool> with another pool, that pool is kept, with a warning. A
 server already set up on the node keeps its C<cluster-cidr>: a value other
 than the one it runs with (C<10.42.0.0/16> when none is configured), given
-or defaulted, makes L<Rex::Rancher::Server/install_server> die before it
-writes or installs anything; node preparation and GPU setup have run by
-then.
+or defaulted, dies before the node is prepared (see above), as
+L<Rex::Rancher::Server/install_server> does before it writes or installs
+anything.
 
 =item C<ipam_mode>
 
@@ -418,11 +430,17 @@ sub rancher_deploy_server {
   }
 
   _check_connection();
+  # Everything install_server would refuse (Cilium residue, version skew with
+  # hold_running, cluster-cidr), before the node is prepared: a refused host
+  # is left as it was (k78). install_server asks again on the host as node
+  # preparation and GPU setup (a reboot) left it; both only read.
+  my @install = ( _install_opts(%opts), _gateway_api_disable(%opts) );
+  Rex::Rancher::Server::preflight_server(@install);
   prepare_node(%opts);
 
   _gpu_setup_if_requested($distribution, %opts);
 
-  install_server(_install_opts(%opts), _gateway_api_disable(%opts));
+  install_server(@install);
 
   # Fetch and save kubeconfig locally, then wait for the API from this machine.
   # install_server only waits for the kubeconfig file to appear on the remote;
@@ -495,8 +513,9 @@ C<kubeconfig_file>.
 
 The cluster's kubeconfig, as L</rancher_deploy_server> saved it; read, not
 written. Passed to L<Rex::Rancher::Agent/install_agent> as C<kubeconfig>:
-the agent dies before it is installed when its version is of a newer minor
-than the control plane's. Without it that is not checked. Optional.
+the agent dies before the node is prepared (see below) when its version is
+of a newer minor than the control plane's. Without it that is not checked.
+Optional.
 
 =item C<hostname>, C<domain>, C<timezone>, C<locale>, C<ntp>
 
@@ -514,6 +533,18 @@ C<k3s>, or C<gpu =E<gt> 1> (with C<gpu_setup>) without L<Rex::GPU> 0.002 or
 later, dies before the host is touched. As on the
 server, an SFTP-less host needs the C<LibSSH> connection backend; without it
 the deploy dies before the first step with a hint to C<Rex::LibSSH>.
+
+Right after that connection check, before the node is prepared, the agent
+is checked as L<Rex::Rancher::Agent/install_agent> would check it, with the
+same options and in the same order
+(L<Rex::Rancher::Agent/preflight_agent>): with C<kubeconfig_file> the control
+plane's version, read through the API from this machine (an API that does
+not answer dies too), then Cilium datapath state an earlier cluster left on
+a host without RKE2 or K3s, then the version skew against the running agent
+or installed binary and against the control plane (with C<hold_running>
+against the held version). Any of them dies with nothing on the host
+changed. These only read; C<install_agent> asks them again after node
+preparation and GPU setup.
 
 The server-only options have no effect on an agent and are ignored:
 C<tls_san>, C<disable>, C<cluster_cidr>, C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
@@ -536,14 +567,17 @@ sub rancher_deploy_agent {
   die "token is required for rancher_deploy_agent\n"  unless $opts{token};
 
   _check_connection();
+  # The server's saved kubeconfig, if given, lets the agent be checked
+  # against the control plane's version. Everything install_agent would
+  # refuse, before the node is prepared, as on the server (k78).
+  my @install = ( _install_opts(%opts),
+    ( defined $opts{kubeconfig_file} ? ( kubeconfig => $opts{kubeconfig_file} ) : () ) );
+  Rex::Rancher::Agent::preflight_agent(@install);
   prepare_node(%opts);
 
   _gpu_setup_if_requested($distribution, %opts);
 
-  # The server's saved kubeconfig, if given, lets install_agent check the
-  # control plane's version before it installs anything.
-  install_agent(_install_opts(%opts),
-    ( defined $opts{kubeconfig_file} ? ( kubeconfig => $opts{kubeconfig_file} ) : () ));
+  install_agent(@install);
 
   Rex::Logger::info("$distribution agent deployment complete");
 }

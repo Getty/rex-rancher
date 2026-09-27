@@ -68,7 +68,9 @@ for my $name (sort keys %deploy) {
   for my $dist (qw( rke2 k3s )) {
     @ran = ();
     $deploy{$name}->(distribution => $dist, gpu => 1);
-    is($ran[1], 'prepare_node', $name.', '.$dist.': passes the check');
+    # Between them only the preflight's reads of the host (k78), all run.
+    my @steps = grep { !/ run$/ } @ran;
+    is($steps[1], 'prepare_node', $name.', '.$dist.': passes the check');
   }
 }
 
