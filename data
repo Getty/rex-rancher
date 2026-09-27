@@ -1,0 +1,28 @@
+---
+claimed_at: 2026-09-27T05:34:59Z
+claimed_by: rex-rancher-worker-k84
+class: standard
+completed: 2026-09-27T05:34:59Z
+created: 2026-09-27T04:59:18Z
+id: 84
+priority: medium
+started: 2026-09-27T05:00:17Z
+status: done
+tags:
+- k3s
+- live
+title: 'K3s: live_verified auf 1 (OCP live: k3s v1.36.4+k3s1 auf Debian 13)'
+updated: 2026-09-27T05:34:59Z
+---
+
+Aus kubernetes-ocp (Session kubernetes-ocp-c3, 2026-09-27): OCP hat main fea3843 vendored und k3s v1.36.4+k3s1 auf ocpt-cp/ocpt-w live gefahren: frischer Bootstrap mit Worker (Ready), Cilium mit k8s_service_host, zwei Re-Bootstraps mit hold_running ("hold_running: k3s runs v1.36.4+k3s1" an der echten k3s-MainPID, zweiter Lauf ohne Restart), destroy, dazu Uninstall über OCP destroy/node rm. Die Warnung "k3s has not been run live through Rex::Rancher" kam bei jedem Lauf.
+
+Done: Rex::Rancher::Distribution::K3s->live_verified liefert 1; Tests, POD und README ziehen nach (keine Warnung mehr für k3s).
+
+2026-09-27 05:03 Worker started, baseline suite green: 35 files, 890 tests.
+
+2026-09-27 05:07 Done in worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a163207d8ce91bb81 on branch worktree-agent-a163207d8ce91bb81, base fea3843, uncommitted. K3s live_verified is 1. POD updated in K3s.pm, Distribution.pm, RKE2.pm, Server.pm, Cilium.pm, Rancher.pm. README section Supported / verified distributions rewritten with the OCP runs only: k3s v1.36.4+k3s1 and rke2 v1.36.4+rke2r1 on Debian 13, no GPU or other OS claimed for k3s. Tests: distribution-class.t expects 1; hold-running.t and cluster-cidr-established.t no longer filter the not-run-live warning, so they now fail if k3s warns again, checked by forcing live_verified to 0. prove -lr t/ green, 35 files, 890 tests. That proves compile and pure logic only.
+
+2026-09-27 05:07 Also found, not changed: 1. The install_server warning text still ends with rke2 is the verified distribution. It is unreachable now since new_for dies on anything but rke2 and k3s; left as is per brief. 2. K3s default_start_verb restart was partly justified by k3s not being live-verified; that clause was removed from the comment only. Whether k3s should narrow restarts by default like rke2 is a separate decision; hold_running narrowing ran live in OCP. 3. The base class Distribution.pm has no default live_verified, so a future distribution must define it. Proposed commit subject: Mark K3s as live-verified: no more not-run-live warning. Proposed Changes entry: install_server no longer warns that k3s has not been run live through Rex::Rancher; kubernetes-ocp ran k3s v1.36.4+k3s1 on Debian 13 with a worker, Cilium with k8s_service_host, hold_running re-runs and uninstall.
+
+2026-09-27 05:34 Committed 1045c4e (Mark K3s as live-verified: no more not-run-live warning) on worktree-ocp-c3-round3. This card documents its own live verification (kubernetes-ocp-c3 k3s v1.36.4+k3s1 run) -> done.
