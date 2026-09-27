@@ -185,6 +185,14 @@ Revision history for Rex-Rancher
     also when the install script wrote its unit or env file with other
     content. New Rex::Rancher::Distribution methods held_version,
     installer_unit_files and installer_unit_digest.
+  - rancher_deploy_server and rancher_deploy_agent with gpu => 1 (and
+    gpu_setup not switched off) now require Rex::GPU 0.002 or later: with
+    an older, missing or unloadable Rex::GPU they die before the host is
+    touched, naming the installed version and pointing to gpu_setup => 0.
+    Rex::GPU 0.001 wrote a bare containerd config.toml.tmpl on every run.
+    Before, a missing Rex::GPU was noticed only after node preparation,
+    and 0.001 was accepted. With gpu_setup => 0 Rex::GPU is still not
+    needed.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

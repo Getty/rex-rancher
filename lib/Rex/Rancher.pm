@@ -39,7 +39,7 @@ Full control plane deployment in a single call: prepare the node, optionally
 set up GPU support, install the Kubernetes distribution, wait for the API,
 install Cilium CNI, and deploy the NVIDIA device plugin.
 
-When C<gpu =E<gt> 1> is passed and L<Rex::GPU> is installed, GPU detection
+When C<gpu =E<gt> 1> is passed and L<Rex::GPU> 0.002 or later is installed, GPU detection
 and driver installation are performed automatically as step 2 before the
 cluster is brought up. After Cilium is running, the NVIDIA device plugin
 DaemonSet is deployed via the local Kubernetes API (no C<kubectl> required
@@ -91,8 +91,11 @@ else dies before the host is touched.
 
 If true, detect GPUs and run the full GPU setup pipeline via L<Rex::GPU>
 before installing the Kubernetes distribution, and deploy the NVIDIA device
-plugin once the API answers. Requires L<Rex::GPU> to be installed unless
-C<gpu_setup =E<gt> 0>. Default: C<0>; without it no GPU step runs and
+plugin once the API answers. Requires L<Rex::GPU> 0.002 or later unless
+C<gpu_setup =E<gt> 0>: with an older one, or none, the deploy dies before
+the host is touched, naming the installed version (0.001 writes a bare
+containerd C<config.toml.tmpl> on every run, which RKE2 and K3s render
+instead of their own containerd config). Default: C<0>; without it no GPU step runs and
 C<gpu_setup>/C<gpu_device_plugin> are ignored. Driver selection depends on the
 GPU generation, and some hardware/OS combinations make the deploy die instead
 — see L</GPU hardware support>.
@@ -374,6 +377,7 @@ sub rancher_deploy_server {
   my $distribution    = $opts{distribution}    // 'rke2';
   my $kubeconfig_file = $opts{kubeconfig_file};
   _check_distribution($distribution);
+  _check_gpu_module(%opts);
 
   my %cilium_opts = (
     distribution => $distribution,
@@ -505,8 +509,9 @@ As for L</rancher_deploy_server> (step 2).
 
 =back
 
-A missing C<server> or C<token>, or a C<distribution> other than C<rke2> or
-C<k3s>, dies before the host is touched. As on the
+A missing C<server> or C<token>, a C<distribution> other than C<rke2> or
+C<k3s>, or C<gpu =E<gt> 1> (with C<gpu_setup>) without L<Rex::GPU> 0.002 or
+later, dies before the host is touched. As on the
 server, an SFTP-less host needs the C<LibSSH> connection backend; without it
 the deploy dies before the first step with a hint to C<Rex::LibSSH>.
 
@@ -523,6 +528,7 @@ sub rancher_deploy_agent {
   my (%opts) = @_;
   my $distribution = $opts{distribution} // 'rke2';
   _check_distribution($distribution);
+  _check_gpu_module(%opts);
 
   # install_agent needs both; refuse before prepare_node and gpu_setup
   # (driver install, possibly a reboot) have touched the host.
@@ -708,6 +714,35 @@ sub _gateway_api_disable {
   return;
 }
 
+# Before the host is touched: gpu_setup needs Rex::GPU 0.002 or later. 0.001
+# writes Rex::GPU's bare containerd config.toml.tmpl again on every run, which
+# rke2/k3s render instead of their own config (install_* removes it before
+# the start; the NVIDIA runtime then comes only from rke2's own PATH scan).
+# Rex::GPU is an optional peer distribution: loaded here, at runtime, only
+# when gpu_setup is going to run.
+sub _check_gpu_module {
+  my (%opts) = @_;
+  my %steps = _gpu_steps(%opts);
+  return unless $steps{setup};
+
+  my $min  = '0.002';
+  my $hint = "Install Rex-GPU $min or later, or pass gpu_setup => 0 if the GPU "
+    . "Operator or the host provides the driver; nothing was done on the host\n";
+  unless (eval { require Rex::GPU; 1 }) {
+    my $err = $@;
+    die "gpu => 1 requested but Rex::GPU is not installed. $hint"
+      if $err =~ m{^Can't locate Rex/GPU\.pm in \@INC};
+    die "gpu => 1 requested but Rex::GPU could not be loaded: "
+      . ( $err =~ s/\s+\z//r ) . "\n$hint";
+  }
+  return if eval { Rex::GPU->VERSION($min); 1 };
+  my $have = Rex::GPU->VERSION;
+  die "gpu => 1 requested but Rex::GPU "
+    . ( defined $have ? $have : 'without a version' ) . " is installed, and "
+    . "gpu_setup needs $min or later: older versions write a bare containerd "
+    . "config.toml.tmpl on every run. $hint";
+}
+
 sub _gpu_setup_if_requested {
   my ($distribution, %opts) = @_;
 
@@ -718,10 +753,9 @@ sub _gpu_setup_if_requested {
   }
   return unless $steps{setup};
 
-  my $loaded = eval { require Rex::GPU; Rex::GPU->import(); 1 };
-  unless ($loaded) {
-    die "gpu => 1 requested but Rex::GPU is not installed. Install the Rex-GPU distribution, or pass gpu_setup => 0 if the GPU Operator or the host provides the driver.\n";
-  }
+  # Loaded and version-checked by _check_gpu_module, which rancher_deploy_*
+  # run under the same _gpu_steps condition before the host is touched.
+  Rex::GPU->import();
 
   Rex::GPU::gpu_setup(
     containerd_config => $distribution,
@@ -860,7 +894,7 @@ framework. It handles everything from raw Linux node preparation through to
 a running CNI and GPU device plugin.
 
 GPU support is optional. Pass C<gpu =E<gt> 1> and install L<Rex::GPU>
-separately. Rex::Rancher works identically for non-GPU nodes. Clusters that
+0.002 or later separately. Rex::Rancher works identically for non-GPU nodes. Clusters that
 hand the GPU to the NVIDIA GPU Operator pass C<gpu_setup =E<gt> 0> and/or
 C<gpu_device_plugin =E<gt> 0> and need no L<Rex::GPU>.
 
@@ -924,7 +958,7 @@ For fine-grained control, use the individual modules directly:
 
 With C<gpu =E<gt> 1> (and C<gpu_setup> not switched off), driver choice and
 hardware checks are made by L<Rex::GPU>'s C<gpu_setup>; Rex::Rancher passes only the distribution and
-C<reboot>. L<Rex::GPU> 0.002 (the recommended version) behaves as follows:
+C<reboot>. L<Rex::GPU> 0.002 (the oldest version accepted) behaves as follows:
 
 =over
 
@@ -937,10 +971,10 @@ GeForce MX): pinned to the proprietary 580 driver branch.
 
 =item * B<Which GPUs get a driver> is decided by generation, not by name:
 every Maxwell-or-newer GPU counts, consumer and laptop cards (GeForce MX,
-GT 1030, GTX 9xx, laptop RTX) included. Earlier L<Rex::GPU> versions skipped
-these, so a re-deploy with C<gpu =E<gt> 1> on such a node now installs the
-driver and, with C<reboot>, reboots it; afterwards the node reports
-C<nvidia.com/gpu>.
+GT 1030, GTX 9xx, laptop RTX) included. L<Rex::GPU> 0.001, which the
+deploy no longer accepts, skipped these, so a re-deploy with
+C<gpu =E<gt> 1> on a node it set up installs the driver and, with
+C<reboot>, reboots it; afterwards the node reports C<nvidia.com/gpu>.
 
 =item * B<Kepler and older> (e.g. GT 710, GTX 7xx, Tesla K80/K40/K20): skipped
 with a warning, no driver is installed, and a newer GPU on the same host is
