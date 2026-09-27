@@ -1,0 +1,30 @@
+---
+class: standard
+completed: 2026-09-27T16:31:33Z
+created: 2026-09-27T04:59:28Z
+id: 85
+priority: medium
+started: 2026-09-27T05:00:22Z
+status: done
+tags:
+- rke2
+- uninstall
+- gpu
+title: 'Uninstall: /etc/default/rke2-server bzw. rke2-agent aus nvidia_runtime_path
+  bleibt liegen'
+updated: 2026-09-27T16:31:33Z
+---
+
+Aus kubernetes-ocp (Session kubernetes-ocp-c3, 2026-09-27), live beobachtet nach OCP destroy auf einem GPU-Host: ensure_nvidia_runtime_path hat /etc/default/rke2-server geschrieben ("Writing PATH to /etc/default/rke2-server for the NVIDIA runtime lookup"); rke2-uninstall.sh lässt die Datei liegen, uninstall_cmd/uninstall_node auch.
+
+Done: uninstall_cmd entfernt /etc/default/rke2-server und /etc/default/rke2-agent nur, wenn es unsere Datei ist (Inhalt/Marker geprüft); eine fremde Datei (andere Zeilen, fremder Inhalt) bleibt stehen. uninstall_cmd läuft auch auf Fremd-Clustern. k3s hat kein env_file. Offline-Tests, POD.
+
+2026-09-27 05:04 Start in worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a4c5140eb6f094901 (branch worktree-agent-a4c5140eb6f094901, base fea3843). Plan: pure Distribution->env_files (env_file of both roles, k3s empty), a guarded step in uninstall_cmd after the vendor uninstallers that removes a file only when its content is exactly runtime_path_line; writer unchanged (no marker: restart_watch). Test first in t/uninstall.t (red), stub run against a temp dir via a Distribution subclass.
+
+2026-09-27 05:14 Repro red on fea3843: t/uninstall.t dies at the missing Distribution->env_files; with a throwaway env_files injected, the order test and 3 stub subtests are red (own file not removed). Fix: (1) NEW Distribution->env_files (pure, also class method): env_file of both roles, undef left out -> rke2: /etc/default/rke2-server, /etc/default/rke2-agent; k3s: none (deliberately empty, k3s has no env_file). (2) uninstall_cmd step right after the vendor uninstallers, one per distribution with env_files (so none for k3s): command -v rke2 >/dev/null 2>&1 || for f in /etc/default/rke2-server /etc/default/rke2-agent; do if [ -f $f ] && [ "$(cat $f 2>/dev/null)" = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" ]; then rm -f $f 2>/dev/null || true; fi; done. Ours = content is exactly runtime_path_line (what ensure_nvidia_runtime_path writes on a host without the file; trailing newlines ignored). Anything else (admin lines next to ours, comment, other PATH, CRLF, empty file, directory) stays untouched; no file = nothing. Binary guard: while rke2 is still on PATH after its uninstaller the unit still reads the file, so it stays (outcome check still fails the line as before). Writer unchanged, no marker (restart_watch). Outcome check unchanged: a file left is no failure. POD: uninstall_cmd step list, uninstall_node Destructive paragraph, env_files.
+
+2026-09-27 05:15 Done, commit-ready, not committed; Changes untouched. Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a4c5140eb6f094901, branch worktree-agent-a4c5140eb6f094901 (base fea3843). k85 = lib/Rex/Rancher/Distribution.pm (env_files), t/uninstall.t, and 4 of 6 hunks in lib/Rex/Rancher/Uninstall.pm (the uninstall_cmd step item, the _env_files_cmd call, the uninstall_node Destructive sentence, the _env_files_cmd sub); the other 2 Uninstall.pm hunks are k87 POD. Tests: t/uninstall.t 9 -> 10 top-level (env_files pure; 6 stub subtests under /bin/sh -e against RKE2 env files in a temp dir via Local::Uninstall/Local::Distribution/Local::RKE2 overrides: own file gone (with or without newline), admin files untouched (other lines, comment, other PATH, CRLF, twice, empty), each file on its own, no file / directory = no failure, failing rm does not stop the line, rke2 still installed = file stays). 0 skips here. 6 mutants caught (no binary guard, no content check, grep instead of exact, rm unguarded, if->&& list, step dropped). Step checked under bash, dash, busybox sh (syntax and temp-file run). prove -lr t/: 35 files, 891 tests, PASS. dzil build + podchecker OK. UNVERIFIED LIVE: the next OCP destroy on a GPU host (file gone), and a foreign rke2 host with an admin env file (file stays).
+
+2026-09-27 05:35 Committed 3553875 (Uninstall: remove the NVIDIA PATH file when it holds only our line) on worktree-ocp-c3-round3. Stays in review: unverified live (needs a GPU-host destroy in kubernetes-ocp or citilan to confirm the file is actually removed on a real rke2-server/-agent env file).
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): live bestätigt -> done. B (otoh, Ubuntu 24.04, RKE2 v1.36.4, 5a885af): ensure_nvidia_runtime_path schrieb /etc/default/rke2-server mit nur der PATH-Zeile ('Writing PATH to /etc/default/rke2-server for the NVIDIA runtime lookup'). Die Uninstall-Kette von OCP destroy (uninstall_cmd) entfernte die Datei. Danach gab es keine Cilium-Reste: bpffs, cilium_host, cgroupv2-Mount und ip rules im Grundzustand. Nicht getroffen: Eine fremde env-Datei mit weiteren Zeilen bleibt stehen (offline getestet).
