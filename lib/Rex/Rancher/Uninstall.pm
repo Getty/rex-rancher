@@ -156,10 +156,14 @@ one that fails does not keep the next from running;
 =item * what the uninstallers leave of Rex::Rancher's and the
 distribution's own: the Cilium CLI C</usr/local/bin/cilium>
 (L<Rex::Rancher::Cilium> installs it), C</opt/cni> (the CNI binaries,
-Cilium's among them), C</run/k3s> (the runtime dir of both distributions);
+Cilium's among them), C</run/k3s> (the runtime dir of both distributions),
+removed with C<--one-file-system>: a mount the uninstaller left below them
+(containerd's task mounts live in C</run/k3s>) is skipped, never recursed
+into;
 
 =item * Cilium's datapath: the C<clsact> qdisc of every device carrying a
-Cilium tc program; the pins in C</sys/fs/bpf/cilium> and
+Cilium tc program (with C<tc> installed, see below); the pins in
+C</sys/fs/bpf/cilium> and
 C</sys/fs/bpf/tc/globals/cilium_*> (unpinning a link no agent holds any
 more is what detaches its program); the devices C<cilium_host>,
 C<cilium_net>, C<cilium_vxlan>, C<cilium_geneve>, C<cilium_wg0>; the
@@ -177,12 +181,29 @@ priority C<0> one is there, so the host never lacks a C<local> lookup.
 =back
 
 Each of those steps is guarded: a step with nothing to do, or a tool that
-is not installed, is not a failure. What decides is the outcome, checked
-last: the line exits C<1> when an L<Rex::Rancher::Distribution/binary> is
-still on C<PATH> (C<... is still installed after the uninstall: PATH>), or
-when a L</cilium_residue> is still there (C<Cilium datapath state is still
-on the host after the uninstall: NAMES -- reboot the host ...>), with that
-on stderr. L</uninstall_failure> turns it into a message.
+is not installed, is not a failure. Two missing tools leave part of the
+datapath unchecked, and each says so with a warning, one line on stderr
+starting with C<rex-rancher-uninstall-warning: >:
+
+=over
+
+=item * no C<tc> (on Rocky/RHEL it comes with the C<iproute-tc> package):
+Cilium's legacy tc attachments on the host's devices were not checked or
+removed;
+
+=item * no iptables backend with both C<-save> and C<-restore>: the
+C<CILIUM_*> chains were not checked or removed.
+
+=back
+
+A reboot clears either. A warning never changes the exit status. What
+decides is the outcome, checked last: the line exits C<1> when an
+L<Rex::Rancher::Distribution/binary> is still on C<PATH> (C<... is still
+installed after the uninstall: PATH>), or when a L</cilium_residue> is
+still there (C<Cilium datapath state is still on the host after the
+uninstall: NAMES -- reboot the host ...>), with that on stderr.
+L</uninstall_warnings> picks the warnings out of the output,
+L</uninstall_failure> turns a failed outcome into a message.
 
 =cut
 
@@ -194,7 +215,10 @@ sub uninstall_cmd {
     'for u in ' . join(' ', map { $_->uninstall_scripts } @dists) . '; do'
       . ' if command -v $u >/dev/null 2>&1; then $u 2>/dev/null || true; fi;'
       . ' done',
-    'rm -rf ' . join(' ', $self->_leftover_paths) . ' 2>/dev/null || true',
+    # --one-file-system: /run/k3s holds containerd's task mounts, a pod's
+    # hostPath bind among them; one the uninstaller left mounted is skipped,
+    # never recursed into.
+    'rm -rf --one-file-system ' . join(' ', $self->_leftover_paths) . ' 2>/dev/null || true',
     $self->_cilium_cleanup_cmd,
     'for t in ' . join(' ', $self->_cilium_ip_tables)
       . '; do while ip rule del lookup $t 2>/dev/null; do :; done; done',
@@ -220,19 +244,47 @@ sub uninstall_cmd {
       . ' -- reboot the host before ' . $labels . ' is installed on it again" >&2; exit 1; fi';
 }
 
+=method uninstall_warnings
+
+  my @warnings = Rex::Rancher::Uninstall->uninstall_warnings($stdout, $stderr);
+
+The warnings in the output of L</uninstall_cmd>, in the order written,
+each its text without the marker, trimmed; empty when every cleanup step
+could run. Pure. Takes any number of outputs -- pass stdout and stderr: the
+line writes its warnings to stderr, a channel with a pty merges them into
+stdout. Only whole lines starting with C<rex-rancher-uninstall-warning: >
+and a text count; the vendor uninstallers' output, a login banner, a
+shell's complaint or a C<set -x> trace are not warnings.
+
+Warnings are not a failure: the exit status alone decides that (see
+L</uninstall_failure>). L</uninstall_node> logs them; a caller running the
+line through its own channel reports them there.
+
+=cut
+
+sub uninstall_warnings {
+  my ( $self, @output ) = @_;
+  my $marker = $self->_warning_marker;
+  return map { /\A\Q$marker\E:\s*(\S.*)\z/ ? $1 : () }
+    map { s/\A\s+|\s+\z//gr } map { split /\n/ } grep { defined } @output;
+}
+
 =method uninstall_failure
 
   my $message = Rex::Rancher::Uninstall->uninstall_failure($exit, $stderr);
 
 The message for an L</uninstall_cmd> that exited C<$exit> with C<$stderr>,
-ending in a newline; nothing for exit C<0>. Pure.
+ending in a newline; nothing for exit C<0>, warnings or not. Pure. The
+warning lines (see L</uninstall_warnings>) are not part of the reason.
 
 =cut
 
 sub uninstall_failure {
   my ( $self, $exit, $stderr ) = @_;
   return unless $exit;
-  ( my $why = $stderr // '' ) =~ s/\s+\z//;
+  my $marker = $self->_warning_marker;
+  my $why = join "\n", grep { !/\A\s*\Q$marker\E:/ } split /\n/, $stderr // '';
+  $why =~ s/\s+\z//;
   return "Uninstall of " . $self->_distribution_labels . " failed (exit $exit)"
     . ( length $why ? ": $why" : '' ) . "\n";
 }
@@ -249,6 +301,11 @@ uninstall script, and Cilium's devices, iptables chains, tc attachments and
 ip rules are removed. It runs only when called; no install function calls
 it.
 
+Logs every L</uninstall_warnings> as a warning -- no C<tc> on the host, or
+no iptables backend with both C<-save> and C<-restore>, so that part of
+the datapath was not checked or removed; a reboot clears it. A warning
+does not fail it.
+
 Dies with L</uninstall_failure> when RKE2 or K3s is still installed
 afterwards (an uninstall script missing or failing), or when Cilium's
 datapath state survived: that host needs a reboot before anything is
@@ -263,11 +320,14 @@ sub uninstall_node {
   my $self = __PACKAGE__;
   Rex::Logger::info("Uninstalling " . $self->_distribution_labels
     . " and clearing Cilium's datapath from this host");
-  my $stderr = '';
+  my ( $stdout, $stderr ) = ( '', '' );
   # auto_die => 0: the exit status and stderr make the message below.
   Rex::Commands::Run::run($self->uninstall_cmd,
-    sub { my ( $out, $err ) = @_; $stderr = $err // ''; return $out }, auto_die => 0);
-  my $failure = $self->uninstall_failure($? >> 8, $stderr);
+    sub { my ( $out, $err ) = @_; $stdout = $out // ''; $stderr = $err // ''; return $out },
+    auto_die => 0);
+  my $exit = $? >> 8;
+  Rex::Logger::info($_, 'warn') for $self->uninstall_warnings($stdout, $stderr);
+  my $failure = $self->uninstall_failure($exit, $stderr);
   die $failure if defined $failure;
   Rex::Logger::info($self->_distribution_labels . " uninstalled, no Cilium datapath state left");
   return 1;
@@ -310,6 +370,18 @@ sub _distribution_present_cmd {
 # version happens to match instead of installing the one asked for.
 sub _leftover_paths { qw( /usr/local/bin/cilium /opt/cni /run/k3s ) }
 
+# A warning is one line on stderr, starting with the marker, so that
+# uninstall_warnings finds it among whatever else the channel carries. The
+# text goes between double quotes: no ", $, ` or backslash in it -- and no
+# single quote, which the line as a whole has none of.
+sub _warning_marker { 'rex-rancher-uninstall-warning' }
+
+sub _warning_cmd {
+  my ( $self, $text ) = @_;
+  # || true: a warning that cannot be written must not fail the line.
+  return 'echo "' . $self->_warning_marker . ': ' . $text . '" >&2 || true';
+}
+
 # Cilium's proxy route tables (2004 to-proxy, 2005 from-proxy); nothing else
 # uses these table ids.
 sub _cilium_ip_tables { ( 2004, 2005 ) }
@@ -338,19 +410,30 @@ sub _iptables {
 #   - the cgroup2 mount, then Cilium's runtime dir -- with --one-file-system,
 #     so a mount that refused to go is never recursed into.
 #
+# A tool the tc or the iptables step needs that is missing skips that step
+# with a warning, not silently: tc is not in Rocky's/RHEL's base (it comes
+# with iproute-tc), and a host may have no iptables tools at all while
+# Cilium's own container wrote the chains.
+#
 # Taken over as kubernetes-ocp runs it (OCP::Role::Provider::ExistingHost).
 sub _cilium_cleanup_cmd {
   my ( $self ) = @_;
   my $cgroup = $self->_cilium_cgroup_root;
   return join ' ; ',
-    'for d in /sys/class/net/*; do d=${d##*/};'
+    'if command -v tc >/dev/null 2>&1; then'
+      . ' for d in /sys/class/net/*; do d=${d##*/};'
       . ' if tc filter show dev $d ingress 2>/dev/null | grep -qE "cil_|bpf_(netdev|host|overlay|lxc)"'
       . ' || tc filter show dev $d egress 2>/dev/null | grep -qE "cil_|bpf_(netdev|host|overlay|lxc)";'
-      . ' then tc qdisc del dev $d clsact 2>/dev/null || true; fi; done',
+      . ' then tc qdisc del dev $d clsact 2>/dev/null || true; fi; done;'
+      . ' else ' . $self->_warning_cmd('tc is not installed: tc attachments Cilium left on the host'
+        . ' devices were not checked or removed (on Rocky/RHEL, tc comes with the iproute-tc package);'
+        . ' a reboot clears them') . '; fi',
     'rm -rf ' . join(' ', $self->_cilium_pins) . ' 2>/dev/null || true',
     'for l in ' . join(' ', $self->_cilium_links) . '; do ip link del dev $l 2>/dev/null || true; done',
+    'ipt_used=""',
     'for ipt in ' . join(' ', $self->_iptables) . '; do'
       . ' command -v $ipt-save >/dev/null 2>&1 && command -v $ipt-restore >/dev/null 2>&1 || continue;'
+      . ' ipt_used=1;'
       . ' for tb in filter nat mangle raw; do'
       . ' s=$($ipt-save -t $tb 2>/dev/null) || continue;'
       . ' printf "%s\n" "$s" | grep -qE "^:(OLD_)?CILIUM_" || continue;'
@@ -360,6 +443,9 @@ sub _cilium_cleanup_cmd {
       . ' printf "%s\n" "$s" | sed -nE "s/^:((OLD_)?CILIUM_[^ ]*) .*/-X \1/p";'
       . ' echo COMMIT; } | $ipt-restore --noflush 2>/dev/null || true;'
       . ' done; done',
+    '[ -n "$ipt_used" ] || ' . $self->_warning_cmd('no iptables backend with both -save and -restore'
+      . ' is installed: the CILIUM_* iptables chains Cilium left were not checked or removed;'
+      . ' a reboot clears them'),
     "umount $cgroup 2>/dev/null || umount -l $cgroup 2>/dev/null || true",
     'rm -rf --one-file-system ' . $self->_cilium_run_dir . ' 2>/dev/null || true';
 }
@@ -378,6 +464,7 @@ sub _cilium_cleanup_cmd {
   # The same line through another channel than Rex
   my $cmd = Rex::Rancher::Uninstall->uninstall_cmd;
   my $r   = $my_ssh->run($cmd);
+  warn "$_\n" for Rex::Rancher::Uninstall->uninstall_warnings($r->{stdout}, $r->{stderr});
   die Rex::Rancher::Uninstall->uninstall_failure($r->{exit}, $r->{stderr})
     if $r->{exit};
 
@@ -404,7 +491,9 @@ re-run, an upgrade) and is left alone.
 
 L</uninstall_node> is the other side: it runs the vendor uninstall scripts
 and then clears the datapath as Cilium's own cleanup does, and says when a
-reboot is still needed. Both test the same L</cilium_residue>.
+reboot is still needed -- or, as a warning, when a missing C<tc> or
+iptables tool left part of the datapath unchecked. Both test the same
+L</cilium_residue>.
 
 Both come from kubernetes-ocp, which measured the problem (a fresh RKE2
 after C<rke2-uninstall.sh> without a reboot) and runs the same uninstall

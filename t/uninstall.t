@@ -20,6 +20,16 @@ use Test::More;
 #   3. uninstall_node runs exactly that line over Rex and turns a failed
 #      outcome into a clear message.
 #
+# k79 (kubernetes-ocp k196, after k71): the leftover paths go with
+# --one-file-system, like /run/cilium; a host without tc, or without an
+# iptables backend that has both -save and -restore, gets a warning instead of
+# a silently skipped cleanup. The claims:
+#   4. a warning is one marked line on stderr and never changes the exit
+#      status -- the outcome check alone decides;
+#   5. uninstall_warnings counts only the marked lines, on either channel;
+#      uninstall_failure keeps them out of the failure reason;
+#   6. uninstall_node logs them as warn.
+#
 # Whether the kernel really detaches the programs when the pins go is a live
 # question (Cilium's own detach does exactly that for its bpf_links), NOT
 # claimed here; nor that a real host ends up clean.
@@ -36,6 +46,12 @@ my @perl_warnings;
 $SIG{__WARN__} = sub { push @perl_warnings, @_ };
 
 my $cmd = $U->uninstall_cmd;
+
+my $MARK = 'rex-rancher-uninstall-warning: ';
+my $TC_WARNING = 'tc is not installed: tc attachments Cilium left on the host devices were not'
+  . ' checked or removed (on Rocky/RHEL, tc comes with the iproute-tc package); a reboot clears them';
+my $IPT_WARNING = 'no iptables backend with both -save and -restore is installed: the CILIUM_*'
+  . ' iptables chains Cilium left were not checked or removed; a reboot clears them';
 
 # ---- the vendor uninstallers are the distributions' ---------------------------
 
@@ -55,17 +71,23 @@ subtest 'the line: every step, in order' => sub {
     [ 'every vendor uninstaller that is there; a failing one does not stop the next' =>
       'for u in rke2-uninstall.sh k3s-uninstall.sh k3s-agent-uninstall.sh; do'
       . ' if command -v $u >/dev/null 2>&1; then $u 2>/dev/null || true; fi; done' ],
-    [ 'the Cilium CLI, the CNI dir, the shared runtime dir' =>
-      'rm -rf /usr/local/bin/cilium /opt/cni /run/k3s 2>/dev/null || true' ],
-    [ 'legacy tc: clsact off every device with a Cilium program' =>
-      'for d in /sys/class/net/*; do d=${d##*/};' ],
+    [ 'the Cilium CLI, the CNI dir, the shared runtime dir, never into a mount below them' =>
+      'rm -rf --one-file-system /usr/local/bin/cilium /opt/cni /run/k3s 2>/dev/null || true' ],
+    [ 'legacy tc, with tc there: clsact off every device with a Cilium program' =>
+      'if command -v tc >/dev/null 2>&1; then for d in /sys/class/net/*; do d=${d##*/};' ],
+    [ 'without tc: a warning on stderr that cannot fail the line' =>
+      ' else echo "' . $MARK . $TC_WARNING . '" >&2 || true; fi' ],
     [ 'the pins' => 'rm -rf /sys/fs/bpf/cilium /sys/fs/bpf/tc/globals/cilium_* 2>/dev/null || true' ],
     [ 'the devices' => 'for l in cilium_host cilium_net cilium_vxlan cilium_geneve cilium_wg0;'
       . ' do ip link del dev $l 2>/dev/null || true; done' ],
     [ 'the iptables chains in every backend' =>
       'for ipt in iptables ip6tables iptables-legacy ip6tables-legacy iptables-nft ip6tables-nft; do' ],
+    [ 'a backend with both -save and -restore is noted' =>
+      ' command -v $ipt-save >/dev/null 2>&1 && command -v $ipt-restore >/dev/null 2>&1 || continue; ipt_used=1;' ],
     [ 'every table' => 'for tb in filter nat mangle raw; do' ],
     [ 'one restore per table, every other rule kept' => '$ipt-restore --noflush 2>/dev/null || true' ],
+    [ 'no such backend: a warning on stderr that cannot fail the line' =>
+      '[ -n "$ipt_used" ] || echo "' . $MARK . $IPT_WARNING . '" >&2 || true' ],
     [ 'the cgroup2 mount' =>
       'umount /run/cilium/cgroupv2 2>/dev/null || umount -l /run/cilium/cgroupv2 2>/dev/null || true' ],
     [ 'then the runtime dir, never into a mount that stayed' =>
@@ -98,6 +120,28 @@ subtest 'the line: every step, in order' => sub {
   like( $cmd, qr/\$ipt-save -t \$tb/, 'reads each table with the backend\'s own -save' );
   like( $cmd, qr/-j \(OLD_\)\?CILIUM_/, 'jumps into CILIUM_ and OLD_CILIUM_ chains are deleted' );
   like( $cmd, qr/umount -l /, 'a busy cgroup2 mount is detached lazily' );
+  like( $cmd, qr/\bipt_used="" ; for ipt in /, 'the backend flag starts empty right before the loop' );
+  unlike( $cmd, qr/'/, 'no single quote in the line: a caller may wrap it in single quotes' );
+  unlike( $_, qr/["\$`\\']/, 'the warning text is inert inside double quotes' ) for $TC_WARNING, $IPT_WARNING;
+};
+
+subtest 'uninstall_warnings: only the marked lines count, on either channel' => sub {
+  is_deeply( [ $U->uninstall_warnings ], [], 'no output: none' );
+  is_deeply( [ $U->uninstall_warnings( undef, '' ) ], [], 'undef and empty: none' );
+  my $noise = join "\n",
+    'Last login: Sun Sep 27 10:00:00 2026',
+    'sh: 1: tc: not found',
+    'warning: something else entirely',
+    '+ echo "' . $MARK . $TC_WARNING . '"',
+    'the text ' . $MARK . 'in the middle of a line',
+    $MARK,
+    'RKE2/K3s is still installed after the uninstall: /usr/local/bin/rke2 -- its uninstall script is missing or failed',
+    '';
+  is_deeply( [ $U->uninstall_warnings( $noise, $noise ) ], [],
+    'a banner, shell complaints, a set -x trace, a marker not at the start or without text: none' );
+  is_deeply( [ $U->uninstall_warnings( "stdout of the uninstallers\n  $MARK$TC_WARNING\r\n",
+      $noise . $MARK . $IPT_WARNING . "\n" ) ],
+    [ $TC_WARNING, $IPT_WARNING ], 'the texts, trimmed, stdout before stderr' );
 };
 
 subtest 'uninstall_failure: the message' => sub {
@@ -107,6 +151,14 @@ subtest 'uninstall_failure: the message' => sub {
       . " -- its uninstall script is missing or failed\n\n" ),
     "Uninstall of RKE2/K3s failed (exit 1): RKE2/K3s is still installed after the uninstall:"
     . " /usr/local/bin/rke2 -- its uninstall script is missing or failed\n", 'the reason, trimmed' );
+  is( $U->uninstall_failure( 0, "$MARK$TC_WARNING\n$MARK$IPT_WARNING\n" ), undef,
+    'exit 0 with warnings: no failure' );
+  is( $U->uninstall_failure( 1, "$MARK$TC_WARNING\n$MARK$IPT_WARNING\nRKE2/K3s is still installed after the"
+      . " uninstall: /usr/local/bin/rke2 -- its uninstall script is missing or failed\n" ),
+    "Uninstall of RKE2/K3s failed (exit 1): RKE2/K3s is still installed after the uninstall:"
+    . " /usr/local/bin/rke2 -- its uninstall script is missing or failed\n", 'the warnings are not the reason' );
+  is( $U->uninstall_failure( 1, "$MARK$TC_WARNING\n" ), "Uninstall of RKE2/K3s failed (exit 1)\n",
+    'nothing but warnings on stderr: the exit' );
 };
 
 # ---- 2. the line under /bin/sh -e, against stubs -----------------------------
@@ -203,7 +255,8 @@ SKIP: {
         ip => "case \"\$1 \$2\" in \"link del\") exit 0;; esac\nexit 1\n",
       );
       my $log = $r->{log};
-      like( $log, qr{^rm -rf /usr/local/bin/cilium /opt/cni /run/k3s$}m, 'the leftover paths go' );
+      like( $log, qr{^rm -rf --one-file-system /usr/local/bin/cilium /opt/cni /run/k3s$}m,
+        'the leftover paths go, never recursing into a mount below them' );
       like( $log, qr{^rm -rf /sys/fs/bpf/cilium /sys/fs/bpf/tc/globals/cilium_\*}m,
         'the pinned links and maps go -- unpinning a link Cilium no longer holds detaches its program' );
       for my $l (qw( cilium_host cilium_net cilium_vxlan cilium_geneve cilium_wg0 )) {
@@ -370,7 +423,7 @@ SAVE
       my $r = run_uninstall(
         'rke2-uninstall.sh' => "exit 1\n",
         rke2                => "exit 0\n",
-        ( map { $_ => "exit 0\n" } qw( rm tc umount ) ),
+        ( map { $_ => "exit 0\n" } qw( rm tc umount iptables-save iptables-restore ) ),
         ip => "exit 1\n",
       );
       my $rke2 = "$r->{bin}/rke2";
@@ -381,12 +434,87 @@ SAVE
         "Uninstall of RKE2/K3s failed (exit 1): RKE2/K3s is still installed after the uninstall: $rke2 -- its uninstall script is missing or failed\n",
         'uninstall_failure makes it the message' );
     };
+
+    # ---- k79: the warnings ---------------------------------------------------
+
+    my %quiet = (
+      ( map { $_ => "exit 0\n" } qw( rm umount ) ),
+      ip => "exit 1\n",
+    );
+    my %tc  = ( tc => "exit 0\n" );
+    my %ipt = ( 'iptables-save' => "exit 0\n", 'iptables-restore' => "exit 0\n" );
+
+    subtest 'tc and a complete iptables backend: no warning' => sub {
+      my $r = run_uninstall( %quiet, %tc, %ipt );
+      is( $r->{stderr}, '', 'nothing on stderr' );
+      is_deeply( [ $U->uninstall_warnings( $r->{stderr} ) ], [], 'no warning' );
+      like( $r->{log}, qr/^tc filter show dev /m, 'the tc cleanup ran' );
+      like( $r->{log}, qr/^iptables-save -t filter$/m, 'the iptables cleanup ran' );
+      SKIP: {
+        skip 'this machine carries Cilium state itself', 1 if machine_has_residue();
+        is( $r->{status}, 0, 'exit 0' );
+      }
+    };
+
+    subtest 'without tc: a warning, the exit status untouched' => sub {
+      my $r = run_uninstall( %quiet, %ipt );
+      is( $r->{stderr}, "$MARK$TC_WARNING\n", 'one marked line on stderr' );
+      is_deeply( [ $U->uninstall_warnings( $r->{stderr} ) ], [$TC_WARNING],
+        'tc attachments not checked, iproute-tc, a reboot clears them' );
+      like( $r->{log}, qr/^iptables-save -t filter$/m, 'the rest of the cleanup still ran' );
+      SKIP: {
+        skip 'this machine carries Cilium state itself', 1 if machine_has_residue();
+        is( $r->{status}, 0, 'exit 0: a warning is not a failure' );
+      }
+    };
+
+    subtest 'no iptables backend with both -save and -restore: a warning, the exit status untouched' => sub {
+      for my $case (
+        [ 'no iptables tools at all' => {} ],
+        [ 'only halves of backends' => { 'iptables-save' => "exit 0\n", 'ip6tables-restore' => "exit 0\n",
+            'iptables-nft-save' => "exit 0\n" } ],
+      ) {
+        my ( $what, $tools ) = @$case;
+        my $r = run_uninstall( %quiet, %tc, %$tools );
+        is( $r->{stderr}, "$MARK$IPT_WARNING\n", "$what: one marked line on stderr" );
+        is_deeply( [ $U->uninstall_warnings( $r->{stderr} ) ], [$IPT_WARNING],
+          "$what: CILIUM_* chains not cleared, a reboot clears them" );
+        unlike( $r->{log}, qr/^ip6?tables(?:-nft)?-save /m, "$what: no half backend is read" );
+        SKIP: {
+          skip 'this machine carries Cilium state itself', 1 if machine_has_residue();
+          is( $r->{status}, 0, "$what: exit 0" );
+        }
+      }
+      my $six = run_uninstall( %quiet, %tc, 'ip6tables-save' => "exit 0\n", 'ip6tables-restore' => "exit 0\n" );
+      is( $six->{stderr}, '', 'any one complete backend: no warning' );
+    };
+
+    subtest 'neither: both warnings, in the order of the steps' => sub {
+      my $r = run_uninstall(%quiet);
+      is( $r->{stderr}, "$MARK$TC_WARNING\n$MARK$IPT_WARNING\n", 'two marked lines, nothing else' );
+      is_deeply( [ $U->uninstall_warnings( $r->{stderr} ) ], [ $TC_WARNING, $IPT_WARNING ], 'tc, then iptables' );
+      SKIP: {
+        skip 'this machine carries Cilium state itself', 1 if machine_has_residue();
+        is( $r->{status}, 0, 'exit 0' );
+      }
+    };
+
+    subtest 'warnings on a failed outcome: exit 1 stays, the failure reason stays clean' => sub {
+      my $r = run_uninstall( %quiet, rke2 => "exit 0\n" );
+      my $rke2 = "$r->{bin}/rke2";
+      is( $r->{exit}, 1, 'exit 1' );
+      is_deeply( [ $U->uninstall_warnings( $r->{stderr} ) ], [ $TC_WARNING, $IPT_WARNING ], 'both warnings' );
+      is( $U->uninstall_failure( $r->{exit}, $r->{stderr} ),
+        "Uninstall of RKE2/K3s failed (exit 1): RKE2/K3s is still installed after the uninstall: $rke2"
+        . " -- its uninstall script is missing or failed\n",
+        'the failure message carries the failure, not the warnings' );
+    };
   };
 }
 
 # ---- 3. uninstall_node over Rex -------------------------------------------------
 
-my ( @ran, $exit, $stderr );
+my ( @ran, @logged, $exit, $stderr, $stdout );
 {
   no warnings 'redefine';
   *Rex::Commands::Run::run = sub {
@@ -394,12 +522,19 @@ my ( @ran, $exit, $stderr );
     my $code = ref $rest[0] eq 'CODE' ? shift @rest : undef;
     push @ran, [ $c, {@rest} ];
     $? = $exit << 8;
-    return $code ? $code->( "stdout of the uninstallers\n", $stderr ) : "stdout of the uninstallers\n";
+    return $code ? $code->( $stdout, $stderr ) : $stdout;
   };
-  *Rex::Logger::info = sub { };
+  *Rex::Logger::info = sub { push @logged, [ $_[0], $_[1] // 'info' ] };
 }
 
-sub uninstall { ( $exit, $stderr, @ran ) = @_; return eval { uninstall_node(); 1 } }
+sub uninstall {
+  ( $exit, $stderr, $stdout ) = @_;
+  $stdout //= "stdout of the uninstallers\n";
+  @ran = @logged = ();
+  return eval { uninstall_node(); 1 };
+}
+
+sub warned { map { $_->[0] } grep { $_->[1] eq 'warn' } @logged }
 
 subtest 'uninstall_node: exported, runs exactly the line' => sub {
   ok( defined &main::uninstall_node, 'use Rex::Rancher::Uninstall exports uninstall_node' );
@@ -424,6 +559,22 @@ subtest 'uninstall_node: a failed outcome dies with a clear message' => sub {
   ok( !uninstall( 255, '' ), 'a refused login: dies' );
   is( $@, "Uninstall of RKE2/K3s failed (exit 255)\n", 'with the exit status' );
   unlike( $@, qr/stdout of the uninstallers/, 'the uninstallers\' output is not the reason' );
+};
+
+subtest 'uninstall_node: warnings are logged as warn and do not fail it' => sub {
+  ok( uninstall( 0, "sh: 1: tc: not found\n$MARK$TC_WARNING\n" ), 'exit 0 with a warning: no die' ) or diag $@;
+  is_deeply( [ warned() ], [$TC_WARNING], 'the warning, logged as warn; the shell noise is not' );
+  ok( uninstall( 0, '', "rke2-uninstall.sh output\n$MARK$IPT_WARNING\n" ), 'a warning on stdout (a pty): no die' )
+    or diag $@;
+  is_deeply( [ warned() ], [$IPT_WARNING], 'logged as well' );
+  ok( uninstall( 0, '' ), 'no warning: no die' ) or diag $@;
+  is_deeply( [ warned() ], [], 'nothing logged as warn' );
+
+  ok( !uninstall( 1, "$MARK$TC_WARNING\n$MARK$IPT_WARNING\nRKE2/K3s is still installed after the uninstall:"
+      . " /usr/local/bin/rke2 -- its uninstall script is missing or failed\n" ), 'a failed outcome with warnings: dies' );
+  is( $@, "Uninstall of RKE2/K3s failed (exit 1): RKE2/K3s is still installed after the uninstall:"
+    . " /usr/local/bin/rke2 -- its uninstall script is missing or failed\n", 'the failure, without the warnings' );
+  is_deeply( [ warned() ], [ $TC_WARNING, $IPT_WARNING ], 'the warnings were logged before it died' );
 };
 
 is_deeply( \@perl_warnings, [], 'no Perl warnings' );

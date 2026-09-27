@@ -151,13 +151,19 @@ Revision history for Rex-Rancher
     reboot. A host with RKE2 or K3s on it is not checked.
   - New Rex::Rancher::Uninstall. uninstall_node runs the RKE2/K3s uninstall
     scripts that are on the host, removes the Cilium CLI, /opt/cni and
-    /run/k3s, clears Cilium's datapath (tc attachments, bpffs pins,
-    cilium_* devices, CILIUM_* iptables chains in every backend, the
+    /run/k3s with --one-file-system (a mount left under them is skipped,
+    not recursed into), clears Cilium's datapath (tc attachments, bpffs
+    pins, cilium_* devices, CILIUM_* iptables chains in every backend, the
     cgroup2 mount, /run/cilium, Cilium's ip rules), and dies when RKE2/K3s
-    is still installed or Cilium state survived (then: reboot).
-    Destructive, and only run when called. uninstall_cmd and
+    is still installed or Cilium state survived (then: reboot). Missing
+    tc (on Rocky/RHEL it needs the iproute-tc package) or no iptables
+    backend with both -save and -restore warns instead of silently
+    skipping that step; a reboot clears it too, and the exit status stays
+    unchanged. Destructive, and only run when called. uninstall_cmd and
     uninstall_failure give the same line and message to callers with their
-    own channel; check_cilium_residue is the install guard.
+    own channel; uninstall_failure leaves warnings out of the reason. New
+    uninstall_warnings($stdout, $stderr) picks the warnings out for a caller
+    reading its own channel. check_cilium_residue is the install guard.
   - update_registries now removes a containerd config.toml.tmpl that holds
     only imports and version = 2, as Rex::GPU 0.001 wrote it, before it
     restarts rke2 or k3s: that restart would render it again instead of the
