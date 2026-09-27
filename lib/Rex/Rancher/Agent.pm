@@ -83,6 +83,20 @@ without a pinned C<version> is installed but not restarted onto, with a
 warning), and to a stopped one against its installed binary. With C<kubeconfig>, the agent is also never brought to a newer
 minor than the control plane (see there).
 
+=item C<hold_running>
+
+If true, the agent stays on the version it runs: its own running version
+(C</proc/PID/exe --version> of C<rke2-agent.service> /
+C<k3s-agent.service>), or when it is not running its installed binary's, is
+this run's C<version>; with neither, C<version> applies, or without it the
+stable channel. A C<version> given as well loses to the held one, with a
+warning that names both. Read before anything is written or installed; the
+fallbacks, their warnings and the restart only for a changed configuration
+(K3s included) are those of L<Rex::Rancher::Server/install_server>'s
+C<hold_running>. With C<kubeconfig> the held version is still checked
+against the control plane: an agent that runs a newer minor than it dies
+before anything is installed.
+
 =item C<kubeconfig>
 
 Local path to a kubeconfig of the cluster (as C<rancher_deploy_server>'s
@@ -164,6 +178,10 @@ sub install_agent {
   # which would hang every image pull of this agent (k71). The first read of
   # the host; the control plane above is asked through the API.
   Rex::Rancher::Uninstall->check_cilium_residue;
+  # hold_running: the agent's own version on the host is this run's version,
+  # still checked against the control plane below (k77).
+  my $hold = $opts{hold_running};
+  $version = $dist->held_version(version => $version) if $hold;
   $dist->check_version_skew(version => $version, server_version => $server_version);
 
   Rex::Logger::info("Installing $distribution agent to join $server");
@@ -172,13 +190,15 @@ sub install_agent {
   _write_registries($dist, %opts);
   # Before the installer and the first start, as on the server.
   $dist->ensure_nvidia_runtime_path if $opts{nvidia_runtime_path};
+  # Held, k3s is restarted only for a change, its unit's content included.
+  my $units = $hold ? $dist->installer_unit_digest : undef;
   _run_installer($dist, $version, $server, $method);
   $dist->verify_installed_version($version);
   # Again with what was installed: the check above had to go without it
   # when the channel did not resolve.
   $dist->check_agent_version($dist->installed_version, $server_version, 1)
     if defined $server_version;
-  _enable_service($dist, $server, $version);
+  _enable_service($dist, $server, $version, $hold, $units);
 
   Rex::Logger::info("$distribution agent installed and running");
 }
@@ -256,7 +276,7 @@ sub _run_installer {
 }
 
 sub _enable_service {
-  my ($dist, $server, $version) = @_;
+  my ($dist, $server, $version, $hold, $units) = @_;
 
   my $service = $dist->service;
   # Before the start decision, as on the server: this start would render
@@ -266,8 +286,10 @@ sub _enable_service {
   # so a re-run still picks up a new binary and config.yaml. rke2's
   # installer never started the agent: start, or restart for a stale
   # containerd config or a change since it started (see
-  # Rex::Rancher::Distribution's start_verb).
-  my $verb = $dist->start_verb(pinned => ( defined $version && length $version ));
+  # Rex::Rancher::Distribution's start_verb). Held (hold_running), k3s is
+  # started like rke2, and restarted also for a rewritten unit.
+  my $verb = $dist->start_verb(pinned => ( defined $version && length $version ),
+    hold => $hold, unit_digest => $units);
   Rex::Logger::info("Enabling and starting $service");
   run "systemctl enable $service", auto_die => 1;
   # --no-block, same as the server: a start that fails or outlasts systemd's
@@ -338,8 +360,10 @@ is used with the C<K3S_URL> environment variable and
 C<INSTALL_K3S_SKIP_START>: instead of the script's own blocking restart, the
 agent is restarted with C<--no-block> and waited on for at most 10 minutes,
 so an agent that cannot reach its server dies with its journal instead of
-hanging the deploy. A running C<rke2-agent> is only started, which leaves it
-alone, unless its C<config.yaml>, C<registries.yaml>,
+hanging the deploy (with C<hold_running> it is only started unless
+something changed, as below for RKE2, or the install script rewrote its
+unit or env file with other content). A running C<rke2-agent> is only
+started, which leaves it alone, unless its C<config.yaml>, C<registries.yaml>,
 C</etc/default/rke2-agent>, containerd drop-ins, NVIDIA runtime or binary
 changed since it started, or its containerd config is still the output of
 L<Rex::GPU> 0.001's template: then it is restarted, as described under

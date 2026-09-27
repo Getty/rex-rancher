@@ -29,6 +29,10 @@ sub agent_service        { 'rke2-agent.service' }
 sub default_start_verb   { 'start' }
 sub live_verified        { 1 }
 
+# None to compare: the units come in the version's own tarball or RPM, so
+# the same version brings the same unit.
+sub installer_unit_files { () }
+
 # The install script puts it next to rke2, for server and agent alike.
 sub uninstall_scripts    { ( 'rke2-uninstall.sh' ) }
 

@@ -136,6 +136,32 @@ starting on it. No binary on the host is a fresh install and is not
 checked. If the stable channel cannot be resolved there, only a warning
 says the skew is not checked.
 
+=item C<hold_running>
+
+If true, the host stays on the version it runs: the version of the running
+server (its main process, C</proc/PID/exe --version>) is this run's
+C<version>, for the version skew check, the installer, the check of the
+installed version and the restart decision alike. A server that is not
+running holds the installed binary's version (C<rke2 --version> /
+C<k3s --version>); with neither, C<version> applies, and without it the
+stable channel, as without C<hold_running>. A running server whose version
+cannot be read holds the installed binary instead, and without one
+C<version>, each with a warning. It is read before anything is written or
+installed, RKE2 and K3s alike (see
+L<Rex::Rancher::Distribution/held_version>).
+
+A C<version> given as well is installed only where there is nothing to
+hold; otherwise the held version wins, and a warning names both.
+C<install_method =E<gt> 'artifact'> still requires C<version>, for a host
+with nothing to hold.
+
+Held, the server is restarted only when its configuration changed (see
+L</Re-runs>; the binary stays on the version it runs): RKE2 as without
+C<hold_running>, and K3s, which is otherwise restarted on every run, the same
+way, and also when the install script wrote C</etc/systemd/system/k3s.service>
+or C<k3s.service.env> with other content than before, the check the K3s
+install script itself makes before it restarts K3s. Default: C<0>.
+
 =item C<install_method>
 
 How the distribution gets onto the host. C<script> (default) pipes the
@@ -294,9 +320,13 @@ sub install_server {
   # The first read of the host: Cilium state an earlier cluster left on a host
   # without RKE2/K3s would hang every image pull of this install (k71).
   Rex::Rancher::Uninstall->check_cilium_residue;
+  # hold_running: the version on the host is this run's version, for the
+  # skew check and everything after it (k77).
+  my $hold         = $opts{hold_running};
+  my $version      = $hold ? $dist->held_version(version => $opts{version}) : $opts{version};
   # Before anything is written or installed: a rejected upgrade leaves the
   # host as it was.
-  $dist->check_version_skew(version => $opts{version});
+  $dist->check_version_skew(version => $version);
   my $cilium       = exists $opts{cilium} ? $opts{cilium} : 1;
   # Nor another pod network for a server already set up here: config.yaml
   # would carry it and the service be restarted onto it (k67).
@@ -306,7 +336,6 @@ sub install_server {
   my $tls_san      = $opts{tls_san};
   my $node_labels  = $opts{node_labels};
   my $registries   = $opts{registries};
-  my $version      = $opts{version};
   my $node_name    = $opts{node_name};
   my $disable      = $opts{disable};
 
@@ -329,7 +358,7 @@ sub install_server {
   $dist->ensure_nvidia_runtime_path if $opts{nvidia_runtime_path};
 
   # Install and start
-  _install($dist, $server, $version, $method);
+  _install($dist, $server, $version, $method, $hold);
 
   Rex::Logger::info("$distribution server installation complete");
 
@@ -730,8 +759,11 @@ sub _write_config {
 #
 
 sub _install {
-  my ($dist, $server, $version, $method) = @_;
+  my ($dist, $server, $version, $method, $hold) = @_;
 
+  # Held, k3s is restarted only for a change: its installer rewrites the
+  # unit and env file on every run, so their content is compared (start_verb).
+  my $units = $hold ? $dist->installer_unit_digest : undef;
   # No token on any installer line: it is already in config.yaml (written
   # before the installer runs), and anything on these lines shows up in ps.
   $dist->install_server_package($server, $version, $method);
@@ -750,7 +782,8 @@ sub _install {
   # distribution wants it (start_verb), then the bounded wait.
   my $service = $dist->service;
   run "systemctl enable " . $service, auto_die => 1;
-  run "systemctl " . $dist->start_verb(pinned => ( defined $version && length $version ))
+  run "systemctl " . $dist->start_verb(pinned => ( defined $version && length $version ),
+      hold => $hold, unit_digest => $units)
     . " --no-block " . $service, auto_die => 1;
 
   $dist->wait_for_service;
@@ -901,7 +934,10 @@ A restart takes this server's API and etcd member down for its duration and
 touches no other node. Several servers of one HA cluster restarting at the
 same time can lose etcd quorum: deploy them one after another (Rex's
 default), not in parallel. K3s is restarted on every run, as its install
-script rewrites the unit each time, except onto an unpinned new minor.
+script rewrites the unit each time, except onto an unpinned new minor, and
+except with C<hold_running>: then it is restarted as RKE2 is, and also when
+the install script changed the content of its unit or env file (see
+C<hold_running> under L</install_server>).
 
 =head2 K3s installation
 

@@ -29,8 +29,19 @@ sub agent_service        { 'k3s-agent.service' }
 # like rke2: the script rewrites k3s.service and k3s.service.env on every run
 # (so their mtime alone would say "changed" each time), the unit's arguments
 # come from this run's installer line, and the k3s path is not live-verified.
+# hold_running narrows it (start_verb): restart_reasons plus the content of
+# those two files before and after the installer, which is what the install
+# script itself compares (with the binary's) before its own restart.
 sub default_start_verb   { 'restart' }
 sub live_verified        { 0 }
+
+# Where get.k3s.io puts them with systemd (SYSTEMD_DIR default, SYSTEM_NAME
+# k3s / k3s-agent).
+sub installer_unit_files {
+  my ( $self ) = @_;
+  my $unit = '/etc/systemd/system/' . ( $self->is_agent ? 'k3s-agent' : 'k3s' ) . '.service';
+  return ( $unit, "$unit.env" );
+}
 
 # Named after the service the install script set up: k3s-uninstall.sh on a
 # server, k3s-agent-uninstall.sh on an agent (a worker has only the latter).
@@ -151,7 +162,10 @@ C<--no-block> and waited on instead) and C<K3S_URL> for a join, release
 binaries C<k3s> / C<k3s-ARCH>. The service is restarted on every run: the
 install script rewrites its unit and C<k3s.service.env> each time, so it is
 not narrowed to L<Rex::Rancher::Distribution/restart_reasons> as on RKE2.
-The version skew rules of L<Rex::Rancher::Distribution/start_verb> and
+With C<hold_running> it is: restarted for L<Rex::Rancher::Distribution/restart_reasons>
+or when the install script wrote the unit or its env file with other content
+than before (L<Rex::Rancher::Distribution/installer_unit_files>), the check
+the script itself makes before its own restart. The version skew rules of L<Rex::Rancher::Distribution/start_verb> and
 L<Rex::Rancher::Distribution/check_version_skew> apply as on RKE2: a
 running k3s is not restarted onto an unpinned new minor.
 

@@ -225,6 +225,16 @@ downgrade dies before anything is installed, and the next minor is
 restarted onto only when pinned; unpinned it is installed but not
 restarted, with a warning. See L<Rex::Rancher::Server/install_server>.
 
+=item C<hold_running>
+
+If true, a server already on the node stays on the version it runs (or,
+when it is not running, the installed one), which is used as C<version>;
+a C<version> given as well applies only to a node with nothing to hold, and
+otherwise a warning names both. Held, the service is restarted only for a
+changed configuration, K3s included. Read in step 3, after node preparation
+and GPU setup, before anything of step 3 is written. Passed to
+L<Rex::Rancher::Server/install_server>, which has the details. Default: C<0>.
+
 =item C<install_method>
 
 C<script> (default, C<curl | sh>) or C<artifact> (checksum-verified release
@@ -470,10 +480,12 @@ L<Rex::Rancher::Server/get_token>. Required.
 
 Override the node name registered in Kubernetes (optional).
 
-=item C<distribution>, C<version>, C<install_method>, C<node_labels>, C<registries>, C<nvidia_runtime_path>
+=item C<distribution>, C<version>, C<hold_running>, C<install_method>, C<node_labels>, C<registries>, C<nvidia_runtime_path>
 
 As for L</rancher_deploy_server>; passed to
-L<Rex::Rancher::Agent/install_agent>.
+L<Rex::Rancher::Agent/install_agent>. With C<hold_running> the agent keeps
+its own version, still checked against the control plane with
+C<kubeconfig_file>.
 
 =item C<kubeconfig_file>
 

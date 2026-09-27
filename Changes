@@ -164,6 +164,17 @@ Revision history for Rex-Rancher
     distribution's own containerd config, and the new registry mirrors would
     never take effect. Any other template is kept. A removal that fails dies
     before the restart (registries.yaml is written by then).
+  - New hold_running option for install_server, install_agent,
+    rancher_deploy_server and rancher_deploy_agent: the version the service
+    runs (stopped: the installed binary; neither: version, or the stable
+    channel) is this run's version, for the skew check, the installer and
+    the restart decision, read before anything is written. A version given
+    as well loses to it, with a warning naming both; an agent is still
+    checked against the control plane. Held, the service is restarted only
+    for a changed configuration, and K3s, otherwise restarted on every run,
+    also when the install script wrote its unit or env file with other
+    content. New Rex::Rancher::Distribution methods held_version,
+    installer_unit_files and installer_unit_digest.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

@@ -206,9 +206,17 @@ NVIDIA runtime lookup, or C<undef> where none is needed (K3s).
 How the service is started when its containerd config is not stale:
 C<start> (RKE2: a running service is restarted only for
 L</restart_reasons>) or C<restart> (K3s, on every run, as its install
-script did). Either way L</start_verb> checks the version skew first, and
-an unpinned new minor version leaves a running service of either
-distribution alone.
+script did, unless C<hold_running>: see L</start_verb>). Either way
+L</start_verb> checks the version skew first, and an unpinned new minor
+version leaves a running service of either distribution alone.
+
+=method installer_unit_files
+
+The files the distribution's install script rewrites on every run and the
+L</service> reads only when it starts, for L</installer_unit_digest>: on
+K3s the unit and its env file, C</etc/systemd/system/k3s.service> and
+C<k3s.service.env> (agent: C<k3s-agent.service>, C<.env>); none on RKE2,
+whose unit comes with the version installed.
 
 =method asset_name
 
@@ -739,6 +747,77 @@ sub installed_version {
     Rex::Commands::Run::run($self->binary . " --version 2>&1", auto_die => 0));
 }
 
+=method held_version
+
+  my $version = $dist->held_version(version => $pinned);
+
+What C<hold_running> holds a run to, read from the host and meant to be
+used as C<version> from there on: for L</check_version_skew>, the installer,
+L</verify_installed_version> and L</start_verb> (C<pinned>). Writes
+nothing, so it can be asked before anything else is.
+
+The L</running_version> of the L</service> when it runs (L</main_pid>);
+when it does not run, the L</installed_version>, the binary it would start
+on; with neither, C<version> as given, or C<undef> without one (unpinned,
+the stable channel, as without C<hold_running>). A running service whose
+version cannot be read falls back to the installed binary, and without one
+to C<version>, each with a warning. A version that is not shaped like a
+release (L</parse_release>) counts as unreadable: it goes onto an installer
+line.
+
+A held version other than C<version> wins; a warning names both. Every
+other outcome is logged as info.
+
+=cut
+
+sub held_version {
+  my ( $self, %args ) = @_;
+  my $pinned  = $args{version};
+  my $service = $self->service;
+  my $binary  = $self->binary;
+  my $release = sub { defined $_[0] && $self->parse_release($_[0]) ? $_[0] : undef };
+
+  my $pid = $self->main_pid;
+  my ( $held, $from );
+  if ($pid) {
+    $held = $release->($self->running_version($pid));
+    $from = "$service runs $held" if defined $held;
+  }
+  unless (defined $held) {
+    $held = $release->($self->installed_version);
+    $from = ( $pid ? '' : "$service is not running, " ) . "the installed $binary is $held"
+      if defined $held;
+    Rex::Logger::info("Could not ask the running $service (/proc/$pid/exe --version) for "
+      . "its version: hold_running holds the installed $binary $held instead", 'warn')
+      if $pid && defined $held;
+  }
+
+  unless (defined $held) {
+    my $applies = defined $pinned && length $pinned
+      ? "version $pinned applies"
+      : "version is not pinned, the stable channel's applies";
+    if ($pid) {
+      Rex::Logger::info("Could not ask the running $service (/proc/$pid/exe --version) for "
+        . "its version, and no installed $binary reports a version: hold_running holds "
+        . "nothing, $applies", 'warn');
+    }
+    else {
+      Rex::Logger::info("hold_running: $service is not running and no installed $binary "
+        . "reports a version: $applies");
+    }
+    return $pinned;
+  }
+
+  if (defined $pinned && length $pinned && !$self->same_version($pinned, $held)) {
+    Rex::Logger::info("hold_running: $from; that is the version for this run, not "
+      . "version => '$pinned'", 'warn');
+  }
+  else {
+    Rex::Logger::info("hold_running: $from; that is the version for this run");
+  }
+  return $held;
+}
+
 =method check_version_skew
 
   $dist->check_version_skew(version => $pinned, server_version => $cp);
@@ -1058,6 +1137,7 @@ sub _shell_quote {
 =method start_verb
 
   $dist->start_verb(pinned => defined $version);
+  $dist->start_verb(pinned => 1, hold => 1, unit_digest => $before);
 
 C<start> or C<restart> for the L</service>. Reads the host.
 
@@ -1079,6 +1159,13 @@ and where that is C<start> (RKE2), C<restart> when L</restart_reasons> has
 any, logging them: a running service reads its configuration only when it
 starts.
 
+With C<hold> (C<hold_running>, whose held version is C<pinned>) it is
+C<start> for K3s too, turned into C<restart> the same way, and also when
+C<unit_digest> is given (L</installer_unit_digest> taken before the
+installer ran) and the L</installer_unit_files> now have other content --
+the check K3s' own install script makes before it restarts K3s. For RKE2
+C<hold> changes nothing.
+
 =cut
 
 sub start_verb {
@@ -1087,16 +1174,47 @@ sub start_verb {
   return 'start' if $pid && $self->_hold_new_binary($pid, $args{pinned});
   return 'restart' if $self->_stale_containerd_restart;
 
-  # k3s restarts anyway. A `start` of a running rke2 is a no-op, so it is
-  # turned into a restart exactly when the service runs on something older
-  # than what is on disk now.
-  my $default = $self->default_start_verb;
+  # k3s restarts anyway, unless held. A `start` of a running service is a
+  # no-op, so it is turned into a restart exactly when the service runs on
+  # something older than what is on disk now.
+  my $default = $args{hold} ? 'start' : $self->default_start_verb;
   return $default unless $default eq 'start' && $pid;
-  my @reasons = $self->_restart_reasons_for($pid);
+  my @reasons = ( $self->_restart_reasons_for($pid), $self->_unit_rewritten($args{unit_digest}) );
   return $default unless @reasons;
   Rex::Logger::info("Restarting " . $self->service . ", which reads these only when "
     . "it starts: " . join('; ', @reasons));
   return 'restart';
+}
+
+=method installer_unit_digest
+
+  my $before = $dist->installer_unit_digest;
+
+C<sha256sum> of the L</installer_unit_files> on the host, errors included
+(a file that is not there yet), as K3s' install script takes it to decide
+whether it restarts K3s; C<undef> without such files (RKE2), with nothing
+asked. Compared with a second one after the installer ran by
+L</start_verb>'s C<unit_digest>.
+
+=cut
+
+sub installer_unit_digest {
+  my ( $self ) = @_;
+  my @files = $self->installer_unit_files or return;
+  return Rex::Commands::Run::run('sha256sum ' . join(' ', map { $self->_shell_quote($_) } @files)
+    . ' 2>&1', auto_die => 0) // '';
+}
+
+# The installer rewrote the unit or its env file with other content than
+# before it ran: the service's arguments or environment (K3S_URL, proxies)
+# changed, which it takes only when it starts.
+sub _unit_rewritten {
+  my ( $self, $before ) = @_;
+  return unless defined $before;
+  my $after = $self->installer_unit_digest // '';
+  return if $after eq $before;
+  return "rewritten by the installer with other content: "
+    . join(', ', $self->installer_unit_files);
 }
 
 # A restart onto the installed binary, checked against the running one.
