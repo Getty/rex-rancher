@@ -1,0 +1,32 @@
+---
+claimed_at: 2026-09-27T05:35:48Z
+claimed_by: rex-rancher-worker-k69
+class: standard
+completed: 2026-09-27T05:35:48Z
+created: 2026-09-26T22:50:43Z
+id: 69
+priority: low
+started: 2026-09-26T23:48:34Z
+status: done
+tags:
+- cilium
+title: 'Cilium: _read_running warnt ''uninitialized'' bei install_cilium auf frischem
+  Cluster'
+updated: 2026-09-27T05:35:48Z
+---
+
+Nebenbefund aus k66 (rex-rancher-worker, 2026-09-27). _read_running macht aus einem undef $release über eval { $release->{config}{operator}{replicas} } per Autovivification einen leeren Hash; danach wirft `$release && $release->{status} eq 'deployed'` "Use of uninitialized value". Trifft jedes install_cilium mit kubeconfig auf einem frischen Cluster (rancher_deploy_server, STDERR), im Testlauf 16x. Fix vermutlich: Guard `$release &&` vor dem eval. Kosmetisch, aber in jedem frischen Deploy sichtbar.
+
+Done: kein Warning bei frischem Cluster; Test, der Warnings fängt.
+
+Maintainer 2026-09-27: in 0.003.
+
+2026-09-26 23:52 Cause confirmed: in _read_running, eval { $release->{config}{operator}{replicas} } autovivifies an undef $release (a copy local to the sub) into {config=>{operator=>{}}}. The following '$release && $release->{status} eq deployed' then compares an undef status. Result unchanged either way (no version set), only the warning. Fix: '$release ? eval {...} : undef'. Reproduced red first: new subtest 'a fresh cluster reads without warnings (k69)' in t/cilium.t catches warnings with local $SIG{__WARN__} and runs _read_running(undef) plus install_cilium with kubeconfig on an empty FakeAPI. Also: 4 older _read_running fixtures in t/cilium.t passed {config=>...} without status (a shape _release_from_secrets never returns, it always sets status // 'unknown') and warned from the same line; they now carry status => 'deployed'. They assert only operator_replicas/ipam/pool/host, so they check the same things. prove -lr t/: 31 files, 653 tests, PASS, 0 'uninitialized' in the output; the new subtest is red against HEAD's Cilium.pm. Unverified live: the missing STDERR line in a real rancher_deploy_server run (kubernetes-ocp).
+
+2026-09-26 23:52 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a274f9b66d92af0ab, Branch worktree-agent-a274f9b66d92af0ab. lib/Rex/Rancher/Cilium.pm (_read_running guard) + t/cilium.t (k69-Subtest, 4 Fixtures mit status). prove -lr t/ grün: 31 Dateien, 653 Tests. Nicht committet, Changes unberührt.
+
+2026-09-26 23:57 Committed fb166fb (Stop _read_running warning "uninitialized" on a fresh cluster); lib/Rex/Rancher/Cilium.pm + t/cilium.t + Changes. prove -lr t/: 31 files, 653 tests, PASS. main folgt per Fast-Forward durch den Orchestrator.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): in frischen Bootstrap-Logs gab es keine 'uninitialized'-Warnung.
+
+2026-09-27 05:35 Release-Audit (kubernetes-ocp-c3, 2026-09-27): live bestätigt -- in frischen Bootstrap-Logs keine 'uninitialized'-Warnung mehr. -> done.
