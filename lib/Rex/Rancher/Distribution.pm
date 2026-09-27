@@ -1619,6 +1619,24 @@ sub ensure_nvidia_runtime_path {
     if $? == 0;
 }
 
+=method env_files
+
+  my @files = $dist->env_files;
+
+The L</env_file> of either L</role>, server first, leaving out a role
+without one: C</etc/default/rke2-server> and C</etc/default/rke2-agent> on
+RKE2, none on K3s. Pure; also a class method. For
+L<Rex::Rancher::Uninstall/uninstall_cmd>, which does not know the role a
+host had.
+
+=cut
+
+sub env_files {
+  my ( $self ) = @_;
+  my $class = ref $self || $self;
+  return grep { defined } map { $class->new( role => $_ )->env_file } qw( server agent );
+}
+
 #
 # Secret files: config.yaml, registries.yaml
 #

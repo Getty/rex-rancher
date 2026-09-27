@@ -220,6 +220,13 @@ Revision history for Rex-Rancher
     k8s_service_host, re-runs with hold_running, and the uninstall). RKE2
     and K3s are now equally live-verified distributions; GPU nodes and
     other operating systems are still K3s-unverified.
+  - uninstall_node and uninstall_cmd now remove the /etc/default/rke2-server
+    or -agent file ensure_nvidia_runtime_path wrote for the NVIDIA runtime
+    PATH lookup, which no vendor uninstaller touches (a GPU host left it
+    behind on every kubernetes-ocp destroy): only once rke2 is gone, and
+    only when the file holds nothing but that PATH line; a file an admin
+    added anything to stays untouched. K3s has no such file. New
+    Rex::Rancher::Distribution->env_files.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

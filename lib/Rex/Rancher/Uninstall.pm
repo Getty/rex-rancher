@@ -153,6 +153,17 @@ its own channel. Pure. In this order:
 host (C<rke2-uninstall.sh>, C<k3s-uninstall.sh>, C<k3s-agent-uninstall.sh>);
 one that fails does not keep the next from running;
 
+=item * the C<PATH> files for the NVIDIA runtime lookup, which
+L<Rex::Rancher::Distribution/ensure_nvidia_runtime_path> writes and no
+uninstaller removes (L<Rex::Rancher::Distribution/env_files>:
+C</etc/default/rke2-server> and C</etc/default/rke2-agent>; K3s has none).
+One goes only when it holds nothing but
+L<Rex::Rancher::Distribution/runtime_path_line> -- the file written on a
+host that had none -- and the distribution's
+L<Rex::Rancher::Distribution/binary> is off C<PATH>. A file with anything
+else in it is the admin's and stays as it is, our C<PATH> line included, as
+does one while the distribution is still installed; neither is a failure;
+
 =item * what the uninstallers leave of Rex::Rancher's and the
 distribution's own: the Cilium CLI C</usr/local/bin/cilium>
 (L<Rex::Rancher::Cilium> installs it), C</opt/cni> (the CNI binaries,
@@ -215,6 +226,7 @@ sub uninstall_cmd {
     'for u in ' . join(' ', map { $_->uninstall_scripts } @dists) . '; do'
       . ' if command -v $u >/dev/null 2>&1; then $u 2>/dev/null || true; fi;'
       . ' done',
+    ( map { $self->_env_files_cmd($_) } @dists ),
     # --one-file-system: /run/k3s holds containerd's task mounts, a pod's
     # hostPath bind among them; one the uninstaller left mounted is skipped,
     # never recursed into.
@@ -298,7 +310,10 @@ Cilium left in the kernel: runs L</uninstall_cmd> over the exec channel (no
 SFTP) and returns C<1> when the host is clean afterwards. B<Destructive>:
 the distribution's data (C</var/lib/rancher>, etcd with it) goes with its
 uninstall script, and Cilium's devices, iptables chains, tc attachments and
-ip rules are removed. It runs only when called; no install function calls
+ip rules are removed, as is the C</etc/default/rke2-server> or
+C<-agent> file Rex::Rancher wrote for the NVIDIA runtime -- only when it
+holds nothing but that C<PATH> line; an admin's file stays (see
+L</uninstall_cmd>). It runs only when called; no install function calls
 it.
 
 Logs every L</uninstall_warnings> as a warning -- no C<tc> on the host, or
@@ -361,6 +376,25 @@ sub _distribution_present_cmd {
     'systemctl is-active --quiet '
       . join(' ', map { ( $_->server_service, $_->agent_service ) } @dists)
       . ' 2>/dev/null';
+}
+
+# The PATH file ensure_nvidia_runtime_path writes for the NVIDIA runtime
+# lookup, which no vendor uninstaller removes (kubernetes-ocp, a GPU host
+# after destroy). The line also runs on hosts Rex::Rancher did not set up, so
+# a file goes only when it is exactly what is written on a host without one:
+# runtime_path_line and nothing else ($(...) drops trailing newlines). A file
+# with anything more is the admin's and stays whole, our PATH line in it too:
+# whatever PATH that line replaced is gone, so editing it out restores
+# nothing. Recognised by content, not a marker: the file is in restart_watch,
+# and adding one to it would restart rke2 on every node's next run. And only
+# once the distribution's binary is gone, since its units read the file (the
+# outcome check reports a binary that stayed). K3s has no env files: no step.
+sub _env_files_cmd {
+  my ( $self, $dist ) = @_;
+  my @files = $dist->env_files or return;
+  return 'command -v ' . $dist->binary . ' >/dev/null 2>&1 || for f in ' . join(' ', @files) . ';'
+    . ' do if [ -f $f ] && [ "$(cat $f 2>/dev/null)" = "' . $dist->runtime_path_line . '" ];'
+    . ' then rm -f $f 2>/dev/null || true; fi; done';
 }
 
 # What the vendor uninstallers stop short of: the Cilium CLI

@@ -30,6 +30,18 @@ use Test::More;
 #      uninstall_failure keeps them out of the failure reason;
 #   6. uninstall_node logs them as warn.
 #
+# k85 (kubernetes-ocp, a GPU host after destroy): no vendor uninstaller removes
+# the PATH file ensure_nvidia_runtime_path writes for the NVIDIA runtime lookup
+# (/etc/default/rke2-server, -agent). The line runs on hosts Rex::Rancher did
+# not set up too, so the claims:
+#   7. the files come from the distributions (env_files: both roles, none on
+#      K3s), not a list of their own;
+#   8. a file goes only when it holds nothing but the line
+#      ensure_nvidia_runtime_path writes on a host without one, and only once
+#      the distribution's binary is gone; a file with anything else in it, a
+#      directory in its place or no file at all is left alone and fails
+#      nothing.
+#
 # Whether the kernel really detaches the programs when the pins go is a live
 # question (Cilium's own detach does exactly that for its bpf_links), NOT
 # claimed here; nor that a real host ends up clean.
@@ -41,6 +53,34 @@ use Rex::Rancher::Uninstall;
 
 my $U = 'Rex::Rancher::Uninstall';
 my $D = 'Rex::Rancher::Distribution';
+
+# k85: the same line with RKE2's env files in a temp dir, through the override
+# points uninstall_cmd documents (distribution_class, distribution_classes) --
+# which also shows the files come from the distribution classes.
+{
+  package Local::RKE2;
+  use Moo;
+  extends 'Rex::Rancher::Distribution::RKE2';
+  our $DIR;
+  sub env_file { $DIR.'/'.( $_[0]->is_agent ? 'rke2-agent' : 'rke2-server' ) }
+}
+{
+  package Local::Distribution;
+  use parent -norequire, 'Rex::Rancher::Distribution';
+  sub distribution_classes {
+    { rke2 => 'Local::RKE2', k3s => 'Rex::Rancher::Distribution::K3s' }
+  }
+}
+{
+  package Local::Uninstall;
+  use parent -norequire, 'Rex::Rancher::Uninstall';
+  sub distribution_class { 'Local::Distribution' }
+}
+# new_for loads the class by name; this one is already here.
+$INC{'Local/RKE2.pm'} = __FILE__;
+
+# What ensure_nvidia_runtime_path writes on a host without the file.
+my $PATH_LINE = 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 my @perl_warnings;
 $SIG{__WARN__} = sub { push @perl_warnings, @_ };
@@ -64,6 +104,23 @@ subtest 'uninstall_scripts: per distribution, the same for either role' => sub {
   }
 };
 
+subtest 'env_files: the env file of either role, none on K3s' => sub {
+  for my $role (qw( server agent )) {
+    is_deeply( [ $D->new_for( 'rke2', role => $role )->env_files ],
+      [qw( /etc/default/rke2-server /etc/default/rke2-agent )], "rke2 $role: server first, then agent" );
+    is_deeply( [ $D->new_for( 'k3s', role => $role )->env_files ], [], "k3s $role: none" );
+  }
+  is_deeply( [ 'Rex::Rancher::Distribution::RKE2'->env_files ],
+    [qw( /etc/default/rke2-server /etc/default/rke2-agent )], 'as a class method too' );
+  for my $role (qw( server agent )) {
+    my $rke2 = $D->new_for( 'rke2', role => $role );
+    is( $rke2->env_with_runtime_path(''), "$PATH_LINE\n",
+      "rke2 $role: a file written on a host without one is the line the uninstall recognises" );
+    is( $rke2->runtime_path_line, $PATH_LINE, "rke2 $role: runtime_path_line" );
+  }
+  unlike( $PATH_LINE, qr/["\$`\\']/, 'the line is inert inside double quotes' );
+};
+
 # ---- 1. what the line is made of ----------------------------------------------
 
 subtest 'the line: every step, in order' => sub {
@@ -71,6 +128,10 @@ subtest 'the line: every step, in order' => sub {
     [ 'every vendor uninstaller that is there; a failing one does not stop the next' =>
       'for u in rke2-uninstall.sh k3s-uninstall.sh k3s-agent-uninstall.sh; do'
       . ' if command -v $u >/dev/null 2>&1; then $u 2>/dev/null || true; fi; done' ],
+    [ "RKE2's PATH files for the NVIDIA runtime, once rke2 is gone, only when they hold nothing but that line" =>
+      'command -v rke2 >/dev/null 2>&1 || for f in /etc/default/rke2-server /etc/default/rke2-agent;'
+      . ' do if [ -f $f ] && [ "$(cat $f 2>/dev/null)" = "' . $PATH_LINE . '" ];'
+      . ' then rm -f $f 2>/dev/null || true; fi; done' ],
     [ 'the Cilium CLI, the CNI dir, the shared runtime dir, never into a mount below them' =>
       'rm -rf --one-file-system /usr/local/bin/cilium /opt/cni /run/k3s 2>/dev/null || true' ],
     [ 'legacy tc, with tc there: clsact off every device with a Cilium program' =>
@@ -121,6 +182,7 @@ subtest 'the line: every step, in order' => sub {
   like( $cmd, qr/-j \(OLD_\)\?CILIUM_/, 'jumps into CILIUM_ and OLD_CILIUM_ chains are deleted' );
   like( $cmd, qr/umount -l /, 'a busy cgroup2 mount is detached lazily' );
   like( $cmd, qr/\bipt_used="" ; for ipt in /, 'the backend flag starts empty right before the loop' );
+  unlike( $cmd, qr{/etc/default/k3s}, 'no PATH file for K3s: it has no env_file' );
   unlike( $cmd, qr/'/, 'no single quote in the line: a caller may wrap it in single quotes' );
   unlike( $_, qr/["\$`\\']/, 'the warning text is inert inside double quotes' ) for $TC_WARNING, $IPT_WARNING;
 };
@@ -215,8 +277,11 @@ sub machine_has_residue {
 # Runs the line under /bin/sh -e with a PATH of nothing but stubs. A stub body
 # gets $STUB_LOG (one line per call: name and args) and $STUB_DIR. Real tools
 # the logic needs (grep, sed) are linked in by name.
-sub run_uninstall {
-  my ( %stubs ) = @_;
+sub run_uninstall { run_line( $cmd, @_ ) }
+
+# The same for another line (k85: one built by Local::Uninstall).
+sub run_line {
+  my ( $line, %stubs ) = @_;
   my $dir = tempdir( CLEANUP => 1 );
   my $bin = "$dir/bin";
   mkdir $bin or die "$bin: $!";
@@ -229,7 +294,7 @@ sub run_uninstall {
     local $ENV{PATH}     = $bin;
     local $ENV{STUB_LOG} = "$dir/log";
     local $ENV{STUB_DIR} = $dir;
-    system('/bin/sh', '-e', '-c', '{ '.$cmd.' ; } 2>'.$dir.'/stderr');
+    system('/bin/sh', '-e', '-c', '{ '.$line.' ; } 2>'.$dir.'/stderr');
   };
   return {
     status => $status,
@@ -508,6 +573,113 @@ SAVE
         "Uninstall of RKE2/K3s failed (exit 1): RKE2/K3s is still installed after the uninstall: $rke2"
         . " -- its uninstall script is missing or failed\n",
         'the failure message carries the failure, not the warnings' );
+    };
+
+    # ---- k85: the PATH files for the NVIDIA runtime ------------------------
+    #
+    # RKE2's env files in a temp dir (Local::RKE2). The rm stub removes for
+    # real, but only below that dir; cat is the real one.
+
+    my ( $RM ) = grep { -x } map { "$_/rm" } qw( /usr/bin /bin );
+    my ( $CAT ) = grep { -x } map { "$_/cat" } qw( /usr/bin /bin );
+
+    # $files: name => content, or name => \'dir' for a directory in its place.
+    my $env_run = sub {
+      my ( $files, %stubs ) = @_;
+      my $envdir = tempdir( CLEANUP => 1 );
+      for my $name ( sort keys %$files ) {
+        ref $files->{$name} ? mkdir "$envdir/$name" : spew( "$envdir/$name", $files->{$name} );
+      }
+      local $Local::RKE2::DIR = $envdir;
+      my $line = Local::Uninstall->uninstall_cmd;
+      my $r = run_line( $line,
+        ( map { $_ => "exit 0\n" } qw( tc umount iptables-save iptables-restore ) ),
+        ip  => "exit 1\n",
+        cat => "exec $CAT \"\$\@\"\n",
+        rm  => "for a; do case \"\$a\" in $envdir/*) $RM -f -- \"\$a\";; esac; done\nexit 0\n",
+        %stubs,
+      );
+      $r->{line}   = $line;
+      $r->{envdir} = $envdir;
+      $r->{env}    = {
+        map { $_ => ( -d "$envdir/$_" ? 'a directory' : -e "$envdir/$_" ? slurp("$envdir/$_") : undef ) }
+          qw( rke2-server rke2-agent )
+      };
+      $r->{removed} = [ map { m{^rm -f \Q$envdir\E/(\S+)$}m ? $1 : () } split /\n/, $r->{log} ];
+      return $r;
+    };
+
+    subtest 'k85: the files come from the distribution classes' => sub {
+      plan skip_all => 'no rm or cat to hand to the stubs' unless $RM && $CAT;
+      my $r = $env_run->( {} );
+      like( $r->{line}, qr{ for f in \Q$r->{envdir}\E/rke2-server \Q$r->{envdir}\E/rke2-agent; },
+        "Local::RKE2's env files, both roles" );
+      unlike( $r->{line}, qr{/etc/default/}, 'no path of its own' );
+    };
+
+    subtest 'k85: only the PATH line Rex::Rancher writes: the file goes' => sub {
+      plan skip_all => 'no rm or cat to hand to the stubs' unless $RM && $CAT;
+      my $r = $env_run->( { 'rke2-server' => "$PATH_LINE\n", 'rke2-agent' => "$PATH_LINE\n" } );
+      is_deeply( $r->{env}, { 'rke2-server' => undef, 'rke2-agent' => undef }, 'server and agent file gone' );
+      is_deeply( $r->{removed}, [qw( rke2-server rke2-agent )], 'each removed once' );
+      my $nl = $env_run->( { 'rke2-server' => $PATH_LINE } );
+      is( $nl->{env}{'rke2-server'}, undef, 'the same line without its newline: gone as well' );
+      my $ro = $env_run->( { 'rke2-server' => "$PATH_LINE\n" }, rm => "exit 1\n" );
+      like( $ro->{log}, qr/^umount /m, 'an rm that fails does not stop the line' );
+      SKIP: {
+        skip 'this machine carries Cilium state itself', 2 if machine_has_residue();
+        is( $r->{status}, 0, 'exit 0' ) or diag $r->{stderr};
+        is( $ro->{status}, 0, 'nor fail it' ) or diag $ro->{stderr};
+      }
+    };
+
+    subtest "k85: an admin's file is left as it is" => sub {
+      plan skip_all => 'no rm or cat to hand to the stubs' unless $RM && $CAT;
+      my $rke2 = $D->new_for('rke2');
+      for my $case (
+        [ 'other lines, kept next to our PATH line' =>
+            $rke2->env_with_runtime_path("HTTP_PROXY=http://proxy.internal:3128\n") ],
+        [ 'a comment above our PATH line' => "# for the NVIDIA runtime\n$PATH_LINE\n" ],
+        [ 'another PATH'                  => "PATH=/opt/bin:/usr/bin:/bin\n" ],
+        [ 'our PATH line with CRLF'       => "$PATH_LINE\r\n" ],
+        [ 'our PATH line twice'           => "$PATH_LINE\n$PATH_LINE\n" ],
+        [ 'an empty file'                 => '' ],
+      ) {
+        my ( $what, $content ) = @$case;
+        my $r = $env_run->( { 'rke2-server' => $content, 'rke2-agent' => $content } );
+        is_deeply( $r->{env}, { 'rke2-server' => $content, 'rke2-agent' => $content }, "$what: unchanged" );
+        is_deeply( $r->{removed}, [], "$what: no rm for it" );
+        SKIP: {
+          skip 'this machine carries Cilium state itself', 1 if machine_has_residue();
+          is( $r->{status}, 0, "$what: exit 0, a file left is no failure" ) or diag $r->{stderr};
+        }
+      }
+      my $mixed = $env_run->( { 'rke2-server' => "$PATH_LINE\n", 'rke2-agent' => "X=1\n$PATH_LINE\n" } );
+      is_deeply( $mixed->{env}, { 'rke2-server' => undef, 'rke2-agent' => "X=1\n$PATH_LINE\n" },
+        'each file decided on its own' );
+    };
+
+    subtest 'k85: no file, or a directory in its place: nothing to do, no failure' => sub {
+      plan skip_all => 'no rm or cat to hand to the stubs' unless $RM && $CAT;
+      for my $case ( [ 'no file' => {} ], [ 'a directory' => { 'rke2-server' => \'dir', 'rke2-agent' => \'dir' } ] ) {
+        my ( $what, $files ) = @$case;
+        my $r = $env_run->($files);
+        is_deeply( $r->{removed}, [], "$what: no rm for it" );
+        is( $r->{env}{'rke2-server'}, ( %$files ? 'a directory' : undef ), "$what: as it was" );
+        SKIP: {
+          skip 'this machine carries Cilium state itself', 2 if machine_has_residue();
+          is( $r->{stderr}, '', "$what: nothing on stderr" );
+          is( $r->{status}, 0, "$what: exit 0" );
+        }
+      }
+    };
+
+    subtest 'k85: rke2 still installed after its uninstaller: its file stays' => sub {
+      plan skip_all => 'no rm or cat to hand to the stubs' unless $RM && $CAT;
+      my $r = $env_run->( { 'rke2-server' => "$PATH_LINE\n" }, 'rke2-uninstall.sh' => "exit 1\n", rke2 => "exit 0\n" );
+      is( $r->{env}{'rke2-server'}, "$PATH_LINE\n", 'the unit still reads it: left' );
+      is( $r->{exit}, 1, 'the outcome check fails the line, as before' );
+      like( $r->{stderr}, qr/^RKE2\/K3s is still installed after the uninstall: /m, 'for the binary, not the file' );
     };
   };
 }
