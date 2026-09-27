@@ -69,9 +69,8 @@ Options:
 
 =item C<distribution>
 
-C<rke2> (default) or C<k3s>. B<rke2 is the verified distribution.> The k3s
-path carries the configuration kubernetes-ocp verified live (see L</cilium>),
-but has not itself been run live through Rex::Rancher.
+C<rke2> (default) or C<k3s>. Both have been run live through Rex::Rancher;
+what the k3s runs covered is listed in L<Rex::Rancher::Distribution::K3s>.
 
 =item C<token>
 
@@ -269,8 +268,9 @@ are server settings that k3s agents take from the server; an additional
 server joining with C<server> gets the same keys, as k3s requires them to
 match across servers. The same keys and Cilium values were verified live in
 kubernetes-ocp (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API v1.6.1), the
-Cilium version L<Rex::Rancher::Cilium> defaults to; the k3s path through
-Rex::Rancher has not been run live.
+Cilium version L<Rex::Rancher::Cilium> defaults to, and have since been run
+live through Rex::Rancher's k3s path (a control plane with one worker; see
+L<Rex::Rancher::Distribution::K3s>).
 
 =item C<nvidia_runtime_path>
 

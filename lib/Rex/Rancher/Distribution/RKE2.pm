@@ -139,8 +139,8 @@ after install_server_package => sub {
 
 =head1 DESCRIPTION
 
-The RKE2 side of L<Rex::Rancher::Distribution>, the default and the live
-verified distribution. Configuration in C</etc/rancher/rke2>, units
+The RKE2 side of L<Rex::Rancher::Distribution>, the default distribution,
+verified live like K3s. Configuration in C</etc/rancher/rke2>, units
 C<rke2-server> and C<rke2-agent.service>, installer from
 L<https://get.rke2.io> (agents with C<INSTALL_RKE2_TYPE=agent>), release
 tarballs C<rke2.linux-ARCH.tar.gz>. A running service is left running on a

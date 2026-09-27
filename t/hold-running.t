@@ -97,8 +97,6 @@ sub installer_version {
   return unless defined $line;
   return $line =~ /INSTALL_(?:RKE2|K3S)_VERSION=(\S+)/ ? $1 : '';
 }
-# The warnings of this run, without install_server's k3s "not run live" one.
-sub own_warn { grep { !/has not been run live/ } @warn }
 sub started   { grep { /^systemctl (?:start|restart) / } @log }
 sub installed_anything { grep { /get\.(?:rke2|k3s)\.io|^file / } @log }
 
@@ -131,7 +129,7 @@ for my $c (@ROLES) {
     is( installer_version(), "v1.30.4$r", 'the installer gets the running version' );
     ok( !( grep { /^curl -fsSL -o \/dev\/null/ } @log ), 'the stable channel is not asked' );
     ok( ( grep { $_ eq "$bin --version 2>&1" } @log ), 'the installed version is verified' );
-    is_deeply( [ own_warn() ], [], 'no warning of its own' );
+    is_deeply( \@warn, [], 'no warning' );
     ok( ( grep { /^hold_running: \Q$svc\E runs v1\.30\.4\Q$r\E/ } @info ), 'says what it holds' );
   };
 
@@ -182,7 +180,7 @@ for my $c (@ROLES) {
     reset_host( pid => 42, running => undef, installed => "v1.30.4$r" );
     ok( eval { deploy( $dist, $role, hold_running => 1, version => "v1.30.9$r" ); 1 }, 'installs' ) or diag $@;
     is( installer_version(), "v1.30.4$r", 'the installed binary' );
-    like( ( own_warn() )[0] // '', qr/^Could not ask the running \Q$svc\E \(\/proc\/42\/exe --version\) for its version: hold_running holds the installed \Q$bin\E v1\.30\.4\Q$r\E instead$/,
+    like( $warn[0] // '', qr/^Could not ask the running \Q$svc\E \(\/proc\/42\/exe --version\) for its version: hold_running holds the installed \Q$bin\E v1\.30\.4\Q$r\E instead$/,
       'warned' );
   };
 
@@ -190,7 +188,7 @@ for my $c (@ROLES) {
     reset_host( pid => 42, running => undef );
     ok( eval { deploy( $dist, $role, hold_running => 1, version => "v1.30.9$r" ); 1 }, 'installs' ) or diag $@;
     is( installer_version(), "v1.30.9$r", 'the pin' );
-    like( ( own_warn() )[0] // '', qr/^Could not ask the running \Q$svc\E \(\/proc\/42\/exe --version\) for its version, and no installed \Q$bin\E reports a version: hold_running holds nothing, version v1\.30\.9\Q$r\E applies$/,
+    like( $warn[0] // '', qr/^Could not ask the running \Q$svc\E \(\/proc\/42\/exe --version\) for its version, and no installed \Q$bin\E reports a version: hold_running holds nothing, version v1\.30\.9\Q$r\E applies$/,
       'warned' );
   };
 }

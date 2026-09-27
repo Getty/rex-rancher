@@ -311,9 +311,8 @@ CNI and kube-proxy are switched off in C<config.yaml> (RKE2: C<cni: none>
 and C<disable-kube-proxy: true>; K3s: C<flannel-backend: none>,
 C<disable-network-policy: true>, C<disable-kube-proxy: true> and
 C<cluster-cidr: 10.42.0.0/16>) and Cilium is installed in step 5 with
-kube-proxy replacement. K3s carries the configuration kubernetes-ocp
-verified live, with the Cilium version Rex::Rancher defaults to (see
-L<Rex::Rancher::Cilium>), but has not been run live through Rex::Rancher. Set to
+kube-proxy replacement. Both distributions have been run live through
+Rex::Rancher this way (see L<Rex::Rancher::Cilium>). Set to
 C<0> and Rex::Rancher does nothing CNI-related: the distribution's built-in
 CNI comes up (Canal for RKE2, Flannel for K3s) and the pipeline skips
 L<Rex::Rancher::Cilium/install_cilium> entirely. Passing

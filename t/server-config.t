@@ -15,7 +15,7 @@ use Test::More;
 #
 # _build_server_config is pure (no file/YAML I/O), so it is unit-testable
 # offline; the actual write stays in _write_config. Nothing here says the
-# resulting cluster comes up -- k3s has not been run live through Rex::Rancher.
+# resulting cluster comes up -- only a live deploy does.
 # -----------------------------------------------------------------------------
 
 use JSON::MaybeXS ();

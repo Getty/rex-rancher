@@ -187,10 +187,11 @@ and agents alike serve it. K3s agents serve it on C<127.0.0.1:6444> instead,
 so on K3s Cilium is given the control plane's own address,
 C<k8s_service_host>, and dies without one.
 
-B<rke2 is the verified distribution.> The k3s values are those
-kubernetes-ocp verified live (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API
-v1.6.1 standard), with the Cilium and CLI versions this module defaults to;
-Rex::Rancher's k3s path has not been run live itself.
+Both distributions have been run live through Rex::Rancher. The k3s values
+are those kubernetes-ocp verified live (k3s v1.36.4+k3s1, Cilium 1.20.0,
+Gateway API v1.6.1 standard), with the Cilium and CLI versions this module
+defaults to; Rex::Rancher's k3s path has since brought Cilium up live with
+C<k8s_service_host> (see L<Rex::Rancher::Distribution::K3s>).
 
 Options:
 

@@ -97,7 +97,7 @@ my %want = (
     artifact_dir => '/tmp/k3s-artifacts', containerd_dir => '/var/lib/rancher/k3s/agent/etc/containerd',
     default_start_verb => 'restart', default_cluster_cidr => '10.42.0.0/16',
     default_disable => [qw( traefik servicelb )],
-    needs_k8s_service_host => 1, gateway_api_crd_chart => undef, live_verified => 0,
+    needs_k8s_service_host => 1, gateway_api_crd_chart => undef, live_verified => 1,
     cni_bin_dir => '/opt/cni/bin', cni_conf_dir => '/etc/cni/net.d',
     restart_services_cmd => 'systemctl restart k3s.service 2>/dev/null || systemctl restart k3s-agent.service 2>/dev/null',
   },

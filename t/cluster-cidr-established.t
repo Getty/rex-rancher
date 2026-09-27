@@ -119,7 +119,7 @@ for my $dist (qw( rke2 k3s )) {
     is( written_cidr($cfg), '172.20.0.0/16', 'config.yaml written with it' );
     ok( ( grep { /get\.\Q$dist\E\.io/ } @log ), 'installer ran' );
     ok( ( grep { $_ eq "cat '$cfg'" } @log ), 'config.yaml read over the exec channel' );
-    is_deeply( [ grep { !/^Could not (?:resolve the version|tell when)|has not been run live/ } @warn ], [], 'no warning of its own' );
+    is_deeply( [ grep { !/^Could not (?:resolve the version|tell when)/ } @warn ], [], 'no warning of its own' );
   };
 
   subtest "$dist: config.yaml's cluster-cidr, another cluster_cidr: dies, nothing touched" => sub {

@@ -264,8 +264,9 @@ C<undef> on K3s.
 
 =method live_verified
 
-True for RKE2, which has been deployed live through Rex::Rancher; false for
-K3s, where L<Rex::Rancher::Server/install_server> warns.
+True for a distribution that has been deployed live through Rex::Rancher:
+RKE2 and K3s both. For one that has not,
+L<Rex::Rancher::Server/install_server> warns.
 
 =method script_install_cmd
 

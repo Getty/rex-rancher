@@ -27,13 +27,13 @@ sub agent_service        { 'k3s-agent.service' }
 # A re-run picks up a new binary and config.yaml, as the install script's own
 # restart did before INSTALL_K3S_SKIP_START. Not narrowed to restart_reasons
 # like rke2: the script rewrites k3s.service and k3s.service.env on every run
-# (so their mtime alone would say "changed" each time), the unit's arguments
-# come from this run's installer line, and the k3s path is not live-verified.
+# (so their mtime alone would say "changed" each time), and the unit's
+# arguments come from this run's installer line.
 # hold_running narrows it (start_verb): restart_reasons plus the content of
 # those two files before and after the installer, which is what the install
 # script itself compares (with the binary's) before its own restart.
 sub default_start_verb   { 'restart' }
-sub live_verified        { 0 }
+sub live_verified        { 1 }
 
 # Where get.k3s.io puts them with systemd (SYSTEMD_DIR default, SYSTEM_NAME
 # k3s / k3s-agent).
@@ -174,8 +174,11 @@ C<disable-network-policy: true>, C<disable-kube-proxy: true> and
 C<cluster-cidr: 10.42.0.0/16> (K3s' own default, also Cilium's pool). K3s
 needs no C<PATH> line for a host NVIDIA runtime.
 
-The K3s path has not been run live through Rex::Rancher; RKE2 is the
-verified distribution. The methods are those documented in
+The K3s path has been run live through Rex::Rancher in kubernetes-ocp:
+k3s v1.36.4+k3s1 on Debian 13, a fresh control plane with a joined worker,
+Cilium with C<k8s_service_host>, re-runs with C<hold_running> (the second
+without a restart) and the uninstall. GPU nodes and other operating systems
+have not been run on K3s. The methods are those documented in
 L<Rex::Rancher::Distribution>.
 
 =head1 SEE ALSO

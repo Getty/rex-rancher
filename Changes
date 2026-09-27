@@ -214,6 +214,12 @@ Revision history for Rex-Rancher
     Rex::Rancher::Agent::preflight_agent, for callers that prepare the node
     themselves. install_method => 'artifact' without version now also dies
     before prepare_node runs, for the same reason.
+  - install_server no longer warns that k3s "has not been run live through
+    Rex::Rancher": kubernetes-ocp has run k3s v1.36.4+k3s1 on Debian 13
+    through it (a fresh control plane with a joined worker, Cilium with
+    k8s_service_host, re-runs with hold_running, and the uninstall). RKE2
+    and K3s are now equally live-verified distributions; GPU nodes and
+    other operating systems are still K3s-unverified.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2

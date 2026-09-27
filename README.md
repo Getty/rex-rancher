@@ -72,11 +72,17 @@ set connection => 'LibSSH';
 
 ### Supported / verified distributions
 
-RKE2 is the verified, supported distribution. K3s carries the configuration
-kubernetes-ocp verified live (k3s v1.36.4+k3s1, Cilium 1.20.0, Gateway API v1.6.1), the
-Cilium version Rex::Rancher defaults to, but has not been run live through
-Rex::Rancher itself (`install_server` warns about it). On K3s the first `tls_san` (or
-`k8s_service_host`) must be the control plane address every node reaches.
+RKE2 (the default) and K3s are both supported and have been run live through
+Rex::Rancher. The latest runs, in kubernetes-ocp:
+
+- RKE2 v1.36.4+rke2r1 on Debian 13.
+- K3s v1.36.4+k3s1 on Debian 13: a fresh control plane with a joined worker
+  (Ready), Cilium with `k8s_service_host`, re-runs with `hold_running` (the
+  second without a restart) and the uninstall. GPU nodes and other operating
+  systems have not been run on K3s.
+
+On K3s the first `tls_san` (or `k8s_service_host`) must be the control plane
+address every node reaches.
 
 Verified on Debian, Ubuntu, and RHEL/Rocky. openSUSE Leap / SLES is
 **unverified and unsupported** — node preparation there relies on Rex's
