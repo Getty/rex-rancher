@@ -1,0 +1,42 @@
+---
+claimed_at: 2026-09-27T05:36:09Z
+claimed_by: rex-rancher-worker-k73
+class: standard
+completed: 2026-09-27T05:36:09Z
+created: 2026-09-26T22:57:09Z
+id: 73
+priority: high
+started: 2026-09-26T22:57:47Z
+status: done
+tags:
+- kubeconfig
+- api
+- escalated-from:kubernetes-ocp#196
+title: 'Öffentlicher Helfer: lokale Kubeconfig vom Node holen und auf erreichbare
+  Adresse patchen'
+updated: 2026-09-27T05:36:09Z
+---
+
+Aus kubernetes-ocp k196 (Maintainer 2026-09-27, Punkt R3).
+
+Heute nur privat: _save_kubeconfig_locally (lib/Rex/Rancher.pm ~710-775) holt die Kubeconfig (get_kubeconfig), patcht https://127.0.0.1:PORT auf eine erreichbare Adresse (kubeconfig_server/tls_san), behält die CA, schreibt die Datei. OCP-Vorbild (nur lesen): ~/dev/kubernetes-ocp/share/Rexfile ~900-927 (_local_kubeconfig/_external_kubeconfig), lib/OCP/Rex.pm ~307-339 (fetch_kubeconfig_ssh) und ~385-408 (get_kubeconfig). OCP setzt seine Politik obendrauf (CA raus, insecure-skip-tls-verify) -- die gehört NICHT in den Helfer, der Helfer muss sie nur zulassen.
+
+Done: öffentlicher, dokumentierter Helfer, der die Kubeconfig vom Node holt, den Server auf eine gegebene/abgeleitete erreichbare Adresse patcht, die CA behält und den Inhalt so liefert (bzw. schreibt), dass ein Aufrufer eigene Politik darauf anwenden kann; rancher_deploy_server nutzt ihn ohne Verhaltensänderung; Offline-Tests; POD.
+
+2026-09-26 23:05 Worktree .claude/worktrees/agent-a8986c05706dadaf5 (branch worktree-agent-a8986c05706dadaf5, base bcbdc15); baseline prove -lr t/: 26 files, 474 tests green. Checked k3s source (pkg/server/server.go writeKubeConfig -> Control.BindAddressOrLoopback(false,true) -> Loopback(true)); rke2 has no writer of its own, it runs k3s' server (go.mod k3s-io/k3s, write-kubeconfig flags copied): the kubeconfig server is https://127.0.0.1:PORT, or https://[::1]:PORT when the (first) service CIDR is IPv6, or the configured bind-address. Never localhost. Helper will patch 127.0.0.1 and [::1], not localhost.
+
+2026-09-26 23:08 Red first: t/kubeconfig-save.t extended (0600 under umask 022, existing 0644 file -> 0600, address warnings word for word + log order) against the unchanged code: 2/35 fail (mode 0644), warnings/order green = pinned. Design: Server.pm next to get_kubeconfig: patch_kubeconfig_server($content,$server) pure; fetch_kubeconfig(distribution, server, filter, file) Rex, 0600 write via sysopen+fchmod, filter coderef runs between patch and write. No fallback to connection->server (transport != API address, OCP k138 is the proof); server omitted = kubeconfig as the node wrote it (what the pipeline's no-address case does).
+
+2026-09-26 23:17 Implemented. Server.pm (exported, next to get_kubeconfig): patch_kubeconfig_server($content,$server) pure: https://127.0.0.1:PORT and https://[::1]:PORT -> https://SERVER:PORT, port kept, CA/client cert untouched, IPv6 server bracketed (Socket inet_pton), already-bracketed kept, non-loopback URL (bind-address) and localhost left alone, dies without content/server; a Rex server object is stringified. fetch_kubeconfig(distribution, server, filter, file): get_kubeconfig -> patch (only if server given) -> filter coderef (caller policy, empty result dies, non-code dies before the host is read) -> file written 0600 (sysopen 0600 + CORE::chmod path, in place so symlinks stay) + 'Kubeconfig saved to FILE' -> returns content. No connection->server fallback (transport != API address/cert name; OCP k138 is the precedent); server omitted = node's loopback kept (Local/tunnel), which is exactly the pipeline's no-address case. rancher_deploy_server: _save_kubeconfig_locally now calls fetch_kubeconfig; its address warnings run as the filter (after fetch, before write, same position as before); errors wrapped with the same $stopped suffix; 'Kubeconfig saved to' now logged by fetch_kubeconfig at the same point. Tests: new t/kubeconfig-fetch.t (63), t/kubeconfig-save.t 25->43 (0600, exact warnings + log order, exact die messages, IPv6); the new save assertions run against HEAD's lib: 40/43, only 0600 x2 and IPv6 brackets fail = the intended changes. prove -lr t/: Files=27, Tests=555, PASS (was 26/474). Compile + offline logic only; unverified live.
+
+2026-09-26 23:17 Also found: Rex::Commands::Fs exports chmod, stat, unlink (and rename/mkdir/chown...) into every module that uses it (Server.pm, probably Agent/Node). A bare chmod/stat there runs on the REMOTE host. First draft of the 0600 write hit this (t/kubeconfig-save.t caught it: 'Can't chmod GLOB'); fixed with CORE::chmod + comment. No other bare local use in lib/ today. Candidate line for the rex-rancher-core skill (board: rex-rancher) -- dispatcher's call.
+
+2026-09-26 23:17 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a8986c05706dadaf5, Branch worktree-agent-a8986c05706dadaf5 (base bcbdc15). Changed: lib/Rex/Rancher/Server.pm (fetch_kubeconfig, patch_kubeconfig_server, _write_kubeconfig, POD, SYNOPSIS), lib/Rex/Rancher.pm (_save_kubeconfig_locally via fetch_kubeconfig; kubeconfig_file POD), t/kubeconfig-save.t, new t/kubeconfig-fetch.t. prove -lr t/: 27 files, 555 tests PASS. User-visible: saved kubeconfig 0600; IPv6 kubeconfig_server/tls_san now bracketed; [::1] (IPv6 service CIDR) now patched too. Changes not touched, not committed. Unverified live.
+
+Committed 4d8e820 auf Branch worktree-agent-a8986c05706dadaf5 (rebased auf main 98b5e5f); main folgt per Fast-Forward durch den Orchestrator. Unverified live.
+
+Maintainer 2026-09-27 (über kubernetes-ocp-c3): server bleibt optional, kein Re-Export aus Rex::Rancher; host:port nach 0.003 (k81).
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): fetch_kubeconfig lief live in jedem Bootstrap, jedem API-Wait und jedem Cilium-Aufruf (rke2 v1.36.4 und k3s v1.36.4+k3s1, Debian 13).
+
+2026-09-27 05:36 Release-Audit (kubernetes-ocp-c3, 2026-09-27): live bestätigt -- fetch_kubeconfig lief in jedem Bootstrap, jedem API-Wait und jedem Cilium-Aufruf (rke2 v1.36.4 und k3s v1.36.4+k3s1, Debian 13). -> done.
