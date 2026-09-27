@@ -1,0 +1,29 @@
+---
+claimed_at: 2026-09-27T05:35:19Z
+claimed_by: rex-rancher-worker-k85
+class: standard
+completed: 2026-09-27T05:35:19Z
+created: 2026-09-27T04:59:50Z
+id: 87
+priority: low
+started: 2026-09-27T05:00:26Z
+status: done
+tags:
+- uninstall
+- docs
+- rke2
+- k3s
+title: 'POD uninstall_node/uninstall_cmd: Node-Passwort weg, Rejoin braucht Löschen
+  des node-password-Secrets'
+updated: 2026-09-27T05:35:19Z
+---
+
+Aus kubernetes-ocp (Session kubernetes-ocp-c3, 2026-09-27): rke2-uninstall.sh löscht ganz /etc/rancher, also auch /etc/rancher/node/password. Wer den Node danach wieder in denselben Cluster joinen will, bekommt "Node password rejected", bis im Cluster das Secret kube-system/<node>.node-password.rke2 gelöscht ist.
+
+Done: POD-Satz bei uninstall_node und uninstall_cmd (rke2; k3s-Gegenstück geprüft und genannt: <node>.node-password.k3s, sofern k3s-uninstall.sh das Passwort ebenfalls löscht). Kein Verhalten.
+
+2026-09-27 05:14 Checked at the source (2026-09-27). rke2: rancher/rke2 master a842cc9 (2026-09-16) bundle/bin/rke2-uninstall.sh line 121: rm -rf /etc/rancher/rke2 /etc/rancher/node /etc/cni ...; line 122: rm -d /etc/rancher || true (only /etc/rancher/rke2 and /etc/rancher/node explicitly, /etc/rancher itself only if then empty). k3s: k3s-io/k3s master 2977c52 (2026-09-03) install.sh create_uninstall (the same template for k3s-uninstall.sh and k3s-agent-uninstall.sh, named SYSTEM_NAME-uninstall.sh): rm -rf /etc/rancher/k3s only, /etc/rancher/node NOT removed -> a k3s node rejoins with its old password, so no .node-password.k3s sentence needed. Secret name: k3s pkg/nodepassword/nodepassword.go getSecretName = strings.ToLower(nodeName + ".node-password." + version.Program), namespace kube-system; rke2 builds it with -X .../pkg/version.Program=${PROG} (scripts/build-binary), PROG=rke2 (scripts/version.sh) -> NODE.node-password.rke2. Deleting the Node object removes the secret too: pkg/nodepassword/controller.go sets an owner reference to the node (GC), and docs.k3s.io/architecture: 'the node should be deleted from the cluster. This will clean up both the old node entry, and the node password secret'. POD only: paragraph at uninstall_node, sentence at uninstall_cmd pointing to it. No behaviour.
+
+2026-09-27 05:15 Done, POD only, commit-ready, not committed; Changes untouched. Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a4c5140eb6f094901, branch worktree-agent-a4c5140eb6f094901. k87 = 2 hunks in lib/Rex/Rancher/Uninstall.pm: the paragraph closing the uninstall_cmd POD (rke2-uninstall.sh also removes /etc/rancher/node, K3s keeps it, see uninstall_node) and the paragraph closing the uninstall_node POD (rejoin under the same node name: Node password rejected while kube-system/NODE.node-password.rke2 holds the old hash; delete the Node, which takes the secret with it, or the secret; nothing here does that; K3s keeps /etc/rancher/node and rejoins with its password). Separate hunks from k85, each applies to HEAD alone (patch --dry-run). No behaviour, no automatic secret deletion. podchecker on the woven module OK; prove -lr t/ PASS (35 files, 891 tests).
+
+2026-09-27 05:35 Committed 499852f (Document that rke2-uninstall.sh takes the node password) on worktree-ocp-c3-round3. POD-only with the RKE2/K3s source citations already on the card (a842cc9 / 2977c52); no behavior to verify live -> done.
