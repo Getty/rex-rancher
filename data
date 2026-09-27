@@ -1,0 +1,49 @@
+---
+claimed_at: 2026-09-27T05:35:58Z
+claimed_by: rex-rancher-worker-k71
+class: standard
+completed: 2026-09-27T05:35:58Z
+created: 2026-09-26T22:56:59Z
+id: 71
+priority: high
+started: 2026-09-26T23:06:32Z
+status: done
+tags:
+- cilium
+- rke2
+- k3s
+- node
+- escalated-from:kubernetes-ocp#196
+title: 'Cilium-Reste: Vorabprüfung in install_server/install_agent und Uninstall-/Aufräumfunktion'
+updated: 2026-09-27T05:35:58Z
+---
+
+Aus kubernetes-ocp k196 (Maintainer 2026-09-27: alles Generische, das OCP selbst macht, wandert vor 0.003 in die Lib; OCP stellt danach um und löscht seinen Code). Punkt R1.
+
+Hintergrund (OCP k190, gemessen auf ocpt-cp): Cilium-Datapath überlebt rke2-uninstall.sh/k3s-uninstall.sh -- Socket-LB-Programme am Root-Cgroup (/run/cilium/cgroupv2), tc/tcx-Programme, in bpffs gepinnte Maps/Links (/sys/fs/bpf/cilium), cilium_*-Devices, CILIUM_*-iptables-Chains, Cilium-ip-rules (Tabellen 2004/2005, local-Lookup von Prio 0 nach 100 verschoben). Bis zum Reboot übersetzt der Socket-LB alte Service-Adressen (z. B. Registry-Mirror localhost:30500), jeder Image-Pull hängt, ein frisches rke2 bekommt etcd nicht in seiner Start-Frist hoch.
+
+Vorbild (nur lesen): ~/dev/kubernetes-ocp/share/Rexfile ~580-626 (_cilium_leftover_probe, _cilium_leftover_signals, _cilium_leftovers, _refuse_cilium_leftovers), lib/OCP/Role/Provider/ExistingHost.pm ~1-150 (@UNINSTALLERS, @LEFTOVER_PATHS, @LEFTOVER_IP_TABLES, @CILIUM_PINS/LINKS, @IPTABLES, @CILIUM_RESIDUE, $CILIUM_CLEANUP_CMD, $UNINSTALL_CMD), t/190 (hält Probe und Residue-Liste synchron).
+
+Done:
+(a) install_server und install_agent sterben, bevor irgendetwas geschrieben/installiert wird, wenn der Host Cilium-Reste trägt (/sys/fs/bpf/cilium, Mount /run/cilium/cgroupv2, Device cilium_host) und KEIN rke2/k3s da ist (Binary auf PATH oder aktive Unit). Mit Distribution gehört der Zustand dem laufenden Cluster, kein Abbruch. Meldung nennt die Funde und fordert zum Reboot auf. Nur die eigenen Probe-Tokens zählen (Banner/Shell-Rauschen nicht).
+(b) Öffentliche Uninstall-/Aufräumfunktion: Vendor-Uninstaller (was da ist), generische Leftover-Pfade, Cilium-Datapath-Aufräumung (tc clsact, Pins, Links, iptables-Chains aller Backends, cgroup2-Mount, /run/cilium), Cilium-ip-rules; danach Ergebnisprüfung: stirbt, wenn rke2/k3s noch auf PATH oder Residue bleibt (-> Reboot).
+(c) Eine Quelle für die Residue-Signale, die (a) und (b) teilen.
+rke2 und k3s, Server und Agent; Offline-Tests; POD; OCP kann seinen Code löschen.
+
+2026-09-26 23:17 Repro: t/cilium-residue.t (install refusal, rke2/k3s x server/agent, fake run answering the probe with /sys/fs/bpf/cilium + cilium_host) is red on 339a76c: install_server/install_agent install over the leftover host. Plan: new module Rex::Rancher::Uninstall (exports uninstall_node; pure class methods cilium_residue / cilium_residue_probe_cmd / cilium_residue_in / uninstall_cmd / uninstall_failure; Rex step check_cilium_residue), uninstall_scripts on Distribution::RKE2/K3s.
+
+2026-09-26 23:30 Done, commit-ready, not committed. NEW lib/Rex/Rancher/Uninstall.pm: exports uninstall_node(). Pure class methods: cilium_residue (the one source: shell test + name for /sys/fs/bpf/cilium, the /run/cilium/cgroupv2 mount, cilium_host), cilium_residue_probe_cmd, cilium_residue_in (only whole-line tokens count), uninstall_cmd (OCP's UNINSTALL_CMD verbatim in steps, order and guards; uninstallers, binaries and units come from the Distribution classes), uninstall_failure(exit, stderr). Rex step check_cilium_residue: dies with the findings, the socket-LB / image-pull / start consequence and 'Reboot the host, then run the install again'; a probe exit != 0 with nothing found only warns. uninstall_scripts on Distribution::RKE2 (rke2-uninstall.sh) and ::K3s (k3s-uninstall.sh, k3s-agent-uninstall.sh), POD in Distribution.pm.
+
+2026-09-26 23:30 Wiring: install_server runs check_cilium_residue after the pure option checks, before check_version_skew; install_agent after _control_plane_version (API, not the host), before check_version_skew. POD: install_server Dies-if list + paragraph, install_agent Dies paragraph, Rex::Rancher module list, README row, 00-load test. Leftover paths kept at OCP's three, all Rex::Rancher- or distribution-owned. Deviations from OCP: still-installed message names the binary path; residue message says 'before RKE2/K3s is installed on it again'; install message says 'a registry mirror', not localhost:30500; a failing probe warns.
+
+2026-09-26 23:30 Tests: cilium-residue.t (17) and uninstall.t (7, includes a port of the OCP 190 shell tests against stub tools, skipped when running as root or when the shell does not pick up the stubs). Repro red on 339a76c. Three mutants caught (unguarded step, prio-100 rule deleted without prio 0, probe ignoring a distribution). Full suite: 29 files, 521 tests, PASS. Tests use File::Temp, no new prereq.
+
+2026-09-26 23:31 UNVERIFIED LIVE: the probe and the uninstall line on a real host (rke2 and k3s), that unpinning really detaches the socket-LB, the refusal on a real leftover host. Open: (1) rancher_deploy_server/agent still run prepare_node and gpu_setup before install_* refuses (pipeline in Rex/Rancher.pm, the k73 file); OCP can call check_cilium_residue itself before prepare_node. (2) Rocky 9: tc lives in iproute-tc; without it legacy tc attachments stay and the outcome check cannot see them. (3) No iptables tools on the host: CILIUM chains stay unseen. (4) IPv6 ip rules not handled (Rex::Rancher's Cilium is IPv4). (5) Also found, for the dispatcher: the rex-rancher-core skill table wants a Rex::Rancher::Uninstall row.
+
+2026-09-26 23:31 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-af479fa8b484ca05e, Branch worktree-agent-af479fa8b484ca05e
+
+Committed 151caad auf Branch worktree-agent-af479fa8b484ca05e (rebased auf main 4d8e820); main folgt per Fast-Forward durch den Orchestrator. Unverified live.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): uninstall_cmd auf einem echten Fremd-Cluster-Agent mit Cilium (Ubuntu 24.04, rke2 v1.36.3): Exit 0, keine Warnungen, keine Reste (Cilium-Links, BPF-Pins, ip-rules), kein Reboot nötig, Host-Dienste liefen weiter. 5x über OCP destroy/node rm (rke2 und k3s), jedes Mal sauber. robocop (rke2 v1.36.4, Debian 13): Node-Abbau über Uninstall, danach Rejoin, Residue-Guard sauber ohne Reboot. Nebenbefunde daraus: #85 (/etc/default/rke2-* bleibt liegen), #87 (Node-Passwort beim Rejoin).
+
+2026-09-27 05:35 Release-Audit (kubernetes-ocp-c3, 2026-09-27): live bestätigt -- uninstall_cmd auf echtem Fremd-Cluster-Agent (Ubuntu 24.04, rke2 v1.36.3) 5x über OCP destroy/node rm sauber (rke2 und k3s), keine Warnungen, keine Cilium-Reste, kein Reboot nötig; robocop-Rejoin nach Uninstall mit sauberem Residue-Guard. -> done. (Nebenbefunde #85/#87 bereits als eigene Karten erledigt/committet.)
