@@ -430,8 +430,16 @@ C<cilium-operator> when they were applied).
 
 C<kubeconfig> is required: without it the function dies before anything
 touches the host. It does the same, pointing to L</install_cilium>, when
-no Cilium runs: no ConfigMap C<kube-system/cilium-config>, no C<cilium>
-DaemonSet and no C<deployed> revision of the Helm release. The running
+the Helm release C<cilium> in C<kube-system> has no C<deployed> revision:
+C<cilium upgrade> is a Helm upgrade and cannot install, so a ConfigMap
+C<kube-system/cilium-config> or a C<cilium> DaemonSet without a deployed
+release is not enough. A release left C<failed>, C<pending-install>,
+C<uninstalling> or C<uninstalled> without one is what L</install_cilium>
+removes and installs again. A release stuck in C<pending-upgrade> or
+C<pending-rollback> (or C<pending-install> over a deployed revision) dies
+before the host as well, with the message of L</install_cilium> naming the
+Secret to delete. A C<failed> upgrade over a deployed revision is upgraded
+again. The running
 configuration is read and kept exactly as in
 L</install_cilium> (IPAM mode and pool from C<kube-system/cilium-config>,
 K3s C<k8sServiceHost> from the DaemonSet, C<operator.replicas> from the
@@ -474,8 +482,8 @@ sub upgrade_cilium {
 
   my $api     = _api($o->{kubeconfig});
   my $release = _read_release($api);
+  _require_deployed_release($release);
   my $running = _read_running($api, $release);
-  _require_running($running, $release);
   _adopt_running($o, $running);
   _settle_version($o, $running->{version});
   _require_k8s_service_host($o);
@@ -884,15 +892,24 @@ sub _release_action {
     || $status eq 'uninstalling'
     || $status eq 'uninstalled';
 
-  if ($status eq 'pending-upgrade' || $status eq 'pending-rollback') {
-    my $secret = 'sh.helm.release.v1.' . RELEASE_NAME . '.v' . ($release->{revision} // '?');
-    die "Helm release " . RELEASE_NAME . " is stuck in $status (revision "
-      . ($release->{revision} // '?') . "): an earlier run was interrupted or "
-      . "another deploy is still running. Once none is, delete Secret $secret "
-      . "in " . RELEASE_NAMESPACE . " and re-run.\n";
-  }
+  _die_release_stuck($release)
+    if $status eq 'pending-upgrade' || $status eq 'pending-rollback';
 
   die "Helm release " . RELEASE_NAME . " is in unexpected state '$status'\n";
+}
+
+# Helm refuses any operation on a release while another one is pending on
+# it: an earlier run was interrupted, or another deploy still runs. The
+# revision below it still carries the pod network, so nothing is done
+# automatically. install_cilium and upgrade_cilium both die here.
+sub _die_release_stuck {
+  my ($release) = @_;
+  my $revision = $release->{revision} // '?';
+  my $secret   = 'sh.helm.release.v1.' . RELEASE_NAME . '.v' . $revision;
+  die "Helm release " . RELEASE_NAME . " is stuck in $release->{status} (revision "
+    . "$revision): an earlier run was interrupted or "
+    . "another deploy is still running. Once none is, delete Secret $secret "
+    . "in " . RELEASE_NAMESPACE . " and re-run.\n";
 }
 
 # Cilium cannot switch IPAM mode under running pods: an upgrade that changes
@@ -942,7 +959,6 @@ sub _get_optional {
 # k8sServiceHost from the agent's KUBERNETES_SERVICE_HOST, operator.replicas
 # from the cilium-operator Deployment (a release that never set it runs the
 # chart's default, which the values do not record), else the release values.
-# present is 1 when the ConfigMap or the cilium DaemonSet exists.
 sub _read_running {
   my ($api, $release) = @_;
 
@@ -958,7 +974,6 @@ sub _read_running {
   }
 
   if (my $cm = _get_optional($api, 'ConfigMap', CILIUM_CONFIGMAP)) {
-    $running{present} = 1;
     my $data = $cm->data // {};
     # No ipam key: the agent's own default, cluster-pool.
     $running{ipam_mode} = $data->{ipam} // 'cluster-pool';
@@ -973,7 +988,6 @@ sub _read_running {
     if $release && $release->{status} eq 'deployed' && defined $release->{chart_version};
 
   if (my $ds = _get_optional($api, 'DaemonSet', RELEASE_NAME)) {
-    $running{present} = 1;
     $running{k8s_service_host} = _daemonset_env($ds, 'KUBERNETES_SERVICE_HOST');
     my $image = _daemonset_version($ds);
     $running{version} = $image if defined $image;
@@ -982,22 +996,35 @@ sub _read_running {
   return \%running;
 }
 
-# upgrade_cilium upgrades a Cilium that is there: cilium-config, the cilium
-# DaemonSet or a deployed revision of the release. Without any of them
-# `cilium upgrade` fails only after the CLI, the Gateway API CRDs and the
-# values file are in place, so this dies before the host is touched -- and
-# before a k3s k8sServiceHost check that would only report a consequence.
-sub _require_running {
-  my ($running, $release) = @_;
-  return if $running->{present} || ( $release && $release->{has_deployed} );
+# upgrade_cilium upgrades the deployed revision of Cilium's Helm release:
+# `cilium upgrade` is a Helm upgrade without --install. Helm refuses it while
+# another operation is pending on the release, and without a deployed
+# revision ("has no deployed releases") -- a cilium-config or cilium
+# DaemonSet does not change that. Either way it would fail only after the
+# CLI, the Gateway API CRDs and the values file are in place, so this dies
+# before the host is touched, before the running Cilium is read, and before
+# a k3s k8sServiceHost check that would only report a consequence. A pending
+# upgrade or rollback dies as in install_cilium; a pending install over a
+# deployed revision is pending all the same. A failed upgrade over a
+# deployed revision upgrades again.
+sub _require_deployed_release {
+  my ($release) = @_;
+  my $status = $release ? $release->{status} : '';
 
-  die "upgrade_cilium found no Cilium on the cluster: no ConfigMap "
-    . RELEASE_NAMESPACE . "/" . CILIUM_CONFIGMAP . ", no DaemonSet "
-    . RELEASE_NAMESPACE . "/" . RELEASE_NAME . ", and "
+  _die_release_stuck($release)
+    if $status eq 'pending-upgrade' || $status eq 'pending-rollback'
+    || ( $status eq 'pending-install' && $release->{has_deployed} );
+
+  return if $release && $release->{has_deployed};
+
+  die "upgrade_cilium found no deployed revision of Helm release " . RELEASE_NAME
+    . " in " . RELEASE_NAMESPACE . " ("
+    . ( $release ? "latest revision " . ( $release->{revision} // '?' ) . " is $status" : 'no release' )
+    . "): cilium upgrade upgrades a deployed Helm release and cannot install "
+    . "one, whether or not cilium-config or the cilium DaemonSet exist. "
     . ( $release
-      ? "Helm release " . RELEASE_NAME . " has no deployed revision ($release->{status})"
-      : "no Helm release " . RELEASE_NAME )
-    . ". Nothing to upgrade: install it with install_cilium\n";
+      ? "Use install_cilium, which removes the release left behind and installs Cilium again\n"
+      : "Install Cilium with install_cilium\n" );
 }
 
 # The cilium-agent image tag as a version (quay.io/cilium/cilium:v1.20.0@sha256:...

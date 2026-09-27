@@ -518,8 +518,8 @@ subtest 'read the running Cilium' => sub {
   } );
   is_deeply( $C->can('_read_running')->( $api, { status => 'deployed', config => { operator => { replicas => 2 } } } ), {
     ipam_mode => 'cluster-pool', pool => [ '10.0.0.0/16', '10.1.0.0/16' ],
-    k8s_service_host => '203.0.113.7', operator_replicas => 2, present => 1,
-  }, 'mode, pool list, host, replicas, present' );
+    k8s_service_host => '203.0.113.7', operator_replicas => 2,
+  }, 'mode, pool list, host, replicas' );
 
   $api = FakeAPI->new( objects => { 'ConfigMap/cilium-config' => configmap() } );
   is( $C->can('_read_running')->( $api, undef )->{ipam_mode}, 'cluster-pool',
@@ -647,7 +647,7 @@ subtest 'install_cilium: a stale release is reinstalled on what cilium-config sa
 
 subtest 'upgrade_cilium: k3s keeps the running k8sServiceHost' => sub {
   @cmds = ();
-  $api = FakeAPI->new( objects => {
+  $api = FakeAPI->new( secrets => [ helm_secret( revision => 1, status => 'deployed', chart_version => '1.20.0' ) ], objects => {
     'ConfigMap/cilium-config' => configmap( ipam => 'cluster-pool', 'cluster-pool-ipv4-cidr' => '10.42.0.0/16' ),
     'DaemonSet/cilium'        => daemonset( env => { KUBERNETES_SERVICE_HOST => '203.0.113.7' } ),
   } );
@@ -655,7 +655,7 @@ subtest 'upgrade_cilium: k3s keeps the running k8sServiceHost' => sub {
   like( $files{'/tmp/cilium-values-k3s.yaml'}, qr/^k8sServiceHost: 203\.0\.113\.7$/m, 'host from the DaemonSet' );
   is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], 'upgraded' );
 
-  # No DaemonSet to read a host from (no Cilium at all: k66 below).
+  # No DaemonSet to read a host from (no release at all: k66/k70 below).
   @cmds = ();
   $api = FakeAPI->new( secrets => [ helm_secret( revision => 1, status => 'deployed', chart_version => '1.20.0' ) ] );
   eval { upgrade_cilium( distribution => 'k3s', kubeconfig => '/kc' ) };
@@ -682,60 +682,116 @@ subtest 'upgrade_cilium without kubeconfig dies before the host (k51)' => sub {
 };
 
 # -----------------------------------------------------------------------------
-# k66: upgrade_cilium needs a Cilium to upgrade. With neither cilium-config,
-# nor the cilium DaemonSet, nor a deployed revision of the Helm release it
-# dies before the CLI, the Gateway API CRDs or the values file reach host or
-# cluster; any one of the three is enough to go on as before.
+# k66, k70: upgrade_cilium upgrades the deployed revision of Helm release
+# cilium -- `cilium upgrade` is a Helm upgrade without --install. Without a
+# deployed revision it points to install_cilium, even with cilium-config or
+# the cilium DaemonSet on the cluster; with a pending upgrade or rollback it
+# dies as install_cilium does. Both before the CLI, the Gateway API CRDs or
+# the values file reach host or cluster, and before the running Cilium is
+# read. A failed upgrade over a deployed revision still upgrades.
 # -----------------------------------------------------------------------------
 
-subtest 'upgrade_cilium without a running Cilium dies before the host (k66)' => sub {
+subtest 'upgrade_cilium without a deployed release dies before the host (k66, k70)' => sub {
   my @crds;
   no warnings 'redefine';
   local *Rex::Rancher::Cilium::_ensure_gateway_api_crds = sub { push @crds, $_[1]; 1 };
   use warnings 'redefine';
 
   my %o = ( distribution => 'rke2', kubeconfig => '/kc', gateway_api => 1, gateway_api_version => 'v1.6.1' );
-  my $none = qr{^upgrade_cilium found no Cilium on the cluster: no ConfigMap kube-system/cilium-config, no DaemonSet kube-system/cilium};
+  my $undeployed = qr{^upgrade_cilium found no deployed revision of Helm release cilium in kube-system .*: cilium upgrade .*cannot install one.*install_cilium}s;
+  my $cleared    = qr{install_cilium, which removes the release left behind and installs Cilium again};
+  my $rev = sub { helm_secret( revision => $_[0], status => $_[1], chart_version => '1.20.0' ) };
+  my $cm  = configmap( ipam => 'kubernetes' );
+  my $ds  = daemonset();
 
-  for my $case (
-    [ 'nothing at all',              [],          qr/no Helm release cilium\. .*install_cilium/s ],
-    [ 'a failed first install only', ['failed'],  qr/Helm release cilium has no deployed revision \(failed\)\. .*install_cilium/s ],
-    [ 'a pending install only',      ['pending-install'], qr/no deployed revision \(pending-install\)/ ],
-    [ 'a pending upgrade only',      ['pending-upgrade'], qr/no deployed revision \(pending-upgrade\)/ ],
-  ) {
-    my ( $name, $status, $says ) = @$case;
-    @cmds = (); %files = (); @crds = ();
-    $api = FakeAPI->new( secrets => [ map { helm_secret( revision => 1, status => $_, chart_version => '1.20.0' ) } @$status ] );
-    eval { upgrade_cilium( %o ) };
-    like( $@, $none, $name.': dies saying no Cilium runs' );
-    like( $@, $says, $name.': names the release state and install_cilium' );
+  my $nothing_ran = sub {
+    my ( $name ) = @_;
     is_deeply( \@cmds, [], $name.': nothing ran on the host (no CLI install, no cilium upgrade)' );
     is_deeply( \@crds, [], $name.': no Gateway API CRDs applied' );
     is_deeply( \%files, {}, $name.': no values file written' );
+  };
+
+  # (a) no deployed revision: install_cilium, whatever else of Cilium runs.
+  for my $case (
+    [ 'nothing at all',          [], {}, qr/\(no release\)/ ],
+    [ 'only cilium-config',      [], { 'ConfigMap/cilium-config' => $cm }, qr/\(no release\)/ ],
+    [ 'only the DaemonSet',      [], { 'DaemonSet/cilium' => $ds }, qr/\(no release\)/ ],
+    [ 'a failed first install',  [ $rev->( 1, 'failed' ) ], {}, qr/\(latest revision 1 is failed\)/ ],
+    [ 'a pending first install', [ $rev->( 1, 'pending-install' ) ], {}, qr/\(latest revision 1 is pending-install\)/ ],
+    [ 'an uninstalling release', [ $rev->( 1, 'uninstalling' ) ], {}, qr/\(latest revision 1 is uninstalling\)/ ],
+    [ 'an uninstalled release',  [ $rev->( 1, 'uninstalled' ) ], {}, qr/\(latest revision 1 is uninstalled\)/ ],
+    [ 'cilium-config and DaemonSet over a pending first install', [ $rev->( 1, 'pending-install' ) ],
+      { 'ConfigMap/cilium-config' => $cm, 'DaemonSet/cilium' => $ds }, qr/\(latest revision 1 is pending-install\)/ ],
+  ) {
+    my ( $name, $secrets, $objects, $state ) = @$case;
+    @cmds = (); %files = (); @crds = ();
+    $api = FakeAPI->new( secrets => $secrets, objects => $objects );
+    eval { upgrade_cilium( %o ) };
+    like( $@, $undeployed, $name.': dies pointing to install_cilium' );
+    like( $@, $state, $name.': names the release state' );
+    @$secrets ? like( $@, $cleared, $name.': install_cilium clears what is left' )
+              : unlike( $@, $cleared, $name.': nothing left to clear' );
+    $nothing_ran->( $name );
   }
 
-  # k3s without k8s_service_host: the missing Cilium is the message, not the
-  # missing host that follows from it.
-  @cmds = ();
-  $api = FakeAPI->new;
-  eval { upgrade_cilium( distribution => 'k3s', kubeconfig => '/kc' ) };
-  like( $@, $none, 'k3s without a host: no Cilium wins' );
-  is_deeply( \@cmds, [], 'k3s without a host: nothing ran on the host' );
+  # (b) a pending upgrade or rollback: the same message as install_cilium,
+  # checked before a deployed revision is looked for.
+  for my $case (
+    [ 'a pending upgrade over a deployed revision',  [ $rev->( 1, 'deployed' ), $rev->( 2, 'pending-upgrade' ) ], 'pending-upgrade', 2 ],
+    [ 'a pending rollback over a deployed revision', [ $rev->( 1, 'deployed' ), $rev->( 2, 'pending-rollback' ) ], 'pending-rollback', 2 ],
+    [ 'a pending upgrade without a deployed revision', [ $rev->( 1, 'failed' ), $rev->( 2, 'pending-upgrade' ) ], 'pending-upgrade', 2 ],
+    [ 'a pending install over a deployed revision',  [ $rev->( 1, 'deployed' ), $rev->( 2, 'pending-install' ) ], 'pending-install', 2 ],
+  ) {
+    my ( $name, $secrets, $status, $n ) = @$case;
+    @cmds = (); %files = (); @crds = ();
+    $api = FakeAPI->new( secrets => $secrets, objects => { 'ConfigMap/cilium-config' => $cm, 'DaemonSet/cilium' => $ds } );
+    eval { upgrade_cilium( %o ) };
+    like( $@, qr{^Helm release cilium is stuck in \Q$status\E \(revision $n\): .*delete Secret sh\.helm\.release\.v1\.cilium\.v$n in kube-system and re-run}s,
+      $name.': dies saying a Helm operation hangs, naming the Secret' );
+    $nothing_ran->( $name );
+  }
 
-  # Any API error but a 404 still dies as itself, never as "no Cilium".
+  # install_cilium says the same for the same state (one helper for both).
+  for my $status (qw( pending-upgrade pending-rollback )) {
+    my $secrets = [ $rev->( 1, 'deployed' ), $rev->( 2, $status ) ];
+    $api = FakeAPI->new( secrets => $secrets );
+    eval { upgrade_cilium( %o ) };
+    my $upgrade = $@;
+    like( $upgrade, qr/^Helm release cilium is stuck in \Q$status\E /, $status.': upgrade_cilium dies stuck' );
+    $api = FakeAPI->new( secrets => $secrets );
+    eval { install_cilium( %o ) };
+    is( $@, $upgrade, $status.': install_cilium and upgrade_cilium die with the same message' );
+  }
+
+  # Checked before the running Cilium is read: an API error on the
+  # DaemonSet does not hide a missing release.
   @cmds = ();
   $api = FakeAPI->new( objects => { 'DaemonSet/cilium' =>
+    sub { die "Kubernetes API error (get DaemonSet): 403 {\"reason\":\"Forbidden\"}\n" } } );
+  eval { upgrade_cilium( %o ) };
+  like( $@, $undeployed, 'no release and a 403 on the DaemonSet: the missing release wins' );
+
+  # k3s without k8s_service_host: the missing release is the message, not
+  # the missing host that follows from it.
+  @cmds = ();
+  $api = FakeAPI->new( objects => { 'ConfigMap/cilium-config' => $cm, 'DaemonSet/cilium' => $ds } );
+  eval { upgrade_cilium( distribution => 'k3s', kubeconfig => '/kc' ) };
+  like( $@, $undeployed, 'k3s without a host: the missing release wins' );
+  is_deeply( \@cmds, [], 'k3s without a host: nothing ran on the host' );
+
+  # With a deployed release, any API error but a 404 still dies as itself.
+  @cmds = ();
+  $api = FakeAPI->new( secrets => [ $rev->( 1, 'deployed' ) ], objects => { 'DaemonSet/cilium' =>
     sub { die "Kubernetes API error (get DaemonSet): 403 {\"reason\":\"Forbidden\"}\n" } } );
   eval { upgrade_cilium( %o ) };
   like( $@, qr{^Cannot read DaemonSet kube-system/cilium: .*403}, 'a 403 dies naming the read' );
   is_deeply( \@cmds, [], 'a 403: nothing ran on the host' );
 
-  my $deployed = helm_secret( revision => 1, status => 'deployed', chart_version => '1.20.0' );
   for my $case (
-    [ 'only cilium-config',      objects => { 'ConfigMap/cilium-config' => configmap( ipam => 'kubernetes' ) } ],
-    [ 'only the DaemonSet',      objects => { 'DaemonSet/cilium' => daemonset() } ],
-    [ 'only a deployed release', secrets => [ $deployed ] ],
-    [ 'only a failed upgrade over a deployed revision', secrets => [ $deployed,
+    [ 'only a deployed release', secrets => [ $rev->( 1, 'deployed' ) ] ],
+    [ 'a deployed release with cilium-config and DaemonSet', secrets => [ $rev->( 1, 'deployed' ) ],
+      objects => { 'ConfigMap/cilium-config' => $cm, 'DaemonSet/cilium' => $ds } ],
+    [ 'a failed upgrade over a deployed revision', secrets => [ $rev->( 1, 'deployed' ),
       helm_secret( revision => 2, status => 'failed', chart_version => '1.20.1' ) ] ],
   ) {
     my ( $name, @fake ) = @$case;
