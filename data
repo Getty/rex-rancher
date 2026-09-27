@@ -1,0 +1,23 @@
+---
+class: standard
+created: 2026-09-26T23:32:47Z
+id: 76
+priority: low
+status: backlog
+tags:
+- skill
+- docs
+title: 'rex-rancher-core-Skill: Uninstall-Modul, cluster_cidr-Kante und Rex::Commands::Fs-Falle
+  nachtragen'
+updated: 2026-09-27T05:12:35Z
+---
+
+Sammelkarte aus k67/k71/k73 (Worker-Hinweise, 2026-09-27):
+- Modultabelle: Zeile für Rex::Rancher::Uninstall (uninstall_node, uninstall_cmd, uninstall_failure, check_cilium_residue, cilium_residue) -- k71.
+- "Options that have sharp edges": cluster_cidr auf einem etablierten Server (Dienst aktiv oder server/token) stirbt bei Abweichung, gelesen aus config.yaml + config.yaml.d -- k67.
+- Falle: Rex::Commands::Fs exportiert chmod/stat/unlink in Server.pm; ein nackter Aufruf läuft auf dem REMOTE-Host. Lokal: CORE::chmod etc. -- k73.
+- Install-Guards in Reihenfolge: check_cilium_residue -> check_version_skew -> check_established_cluster_cidr (Server); remove_bare_containerd_template vor start_verb -- k71/k67/k72.
+
+Done: Skill aktualisiert (manage-skills: rex-rancher-core ist hier owned).
+
+2026-09-27 Nachtrag aus k82 (Worker): rex-rancher-core SKILL.md ~Zeile 92 sagt noch 'dies on pending-upgrade/pending-rollback'. Seit k82: install_cilium und upgrade_cilium sterben direkt nach dem Release-Read, VOR dem Host, bei pending-upgrade, pending-rollback und pending-install über einer deployten Revision (_refuse_stuck_release); pending-install ohne deployte Revision wird weiter purged und neu installiert.
