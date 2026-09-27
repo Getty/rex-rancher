@@ -290,12 +290,17 @@ subtest 'release action' => sub {
   is( $act->( $rel->( chart_version => undef ) ), 'upgrade', 'unreadable payload: upgrade, never noop' );
   is( $act->( $rel->( status => 'failed' ) ), 'upgrade', 'failed upgrade: upgrade again' );
   is( $act->( $rel->( status => 'failed', has_deployed => 0 ) ), 'reinstall', 'failed first install: reinstall' );
+  is( eval { $act->( $rel->( status => 'pending-install', has_deployed => 0 ) ) } // $@, 'reinstall',
+    'pending first install: reinstall' );
   is( $act->( $rel->( status => $_ ) ), 'reinstall', "$_: reinstall" )
-    for qw( pending-install uninstalling uninstalled );
+    for qw( uninstalling uninstalled );
   for my $st (qw( pending-upgrade pending-rollback )) {
     eval { $act->( $rel->( status => $st ) ) };
     like( $@, qr/stuck in $st.*sh\.helm\.release\.v1\.cilium\.v3/s, "$st: dies naming the secret" );
   }
+  eval { $act->( $rel->( status => 'pending-install' ) ) };
+  like( $@, qr/stuck in pending-install.*sh\.helm\.release\.v1\.cilium\.v3/s,
+    'pending-install over a deployed revision: dies naming the secret, never reinstall (k82)' );
   my $pool = { %$want, ipam => { mode => 'cluster-pool' } };
   eval { $act->( $rel->(), undef, $pool ) };
   like( $@, qr/runs ipam\.mode kubernetes, the requested values ipam\.mode cluster-pool.*Redeploy.*mode => 'kubernetes'/s,
@@ -801,6 +806,72 @@ subtest 'upgrade_cilium without a deployed release dies before the host (k66, k7
     is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], ['upgrade'], $name.': cilium upgrade ran' );
     is_deeply( \@crds, ['v1.6.1'], $name.': Gateway API CRDs applied' );
     ok( $files{'/tmp/cilium-values-rke2.yaml'}, $name.': values file written' );
+  }
+};
+
+# -----------------------------------------------------------------------------
+# k82: install_cilium over a release with a Helm operation pending dies as
+# upgrade_cilium does, before the CLI, the Gateway API CRDs or the values
+# file reach host or cluster -- a pending install over a deployed revision
+# included, which a reinstall would purge together with the deployed
+# revision and the pod network it carries. A pending install without a
+# deployed revision (an interrupted first install) is removed and installed
+# again, as before.
+# -----------------------------------------------------------------------------
+
+subtest 'install_cilium over a stuck release dies before the host (k82)' => sub {
+  my @crds;
+  no warnings 'redefine';
+  local *Rex::Rancher::Cilium::_ensure_gateway_api_crds = sub { push @crds, $_[1]; 1 };
+  use warnings 'redefine';
+
+  my %o   = ( distribution => 'rke2', kubeconfig => '/kc', gateway_api => 1, gateway_api_version => 'v1.6.1' );
+  my $rev = sub { helm_secret( revision => $_[0], status => $_[1], chart_version => '1.20.0' ) };
+  my %running = ( 'ConfigMap/cilium-config' => configmap( ipam => 'cluster-pool', 'cluster-pool-ipv4-cidr' => '10.0.0.0/8' ),
+                  'DaemonSet/cilium'        => daemonset() );
+
+  for my $case (
+    [ 'a pending install over a deployed revision', \%o, [ $rev->( 1, 'deployed' ), $rev->( 2, 'pending-install' ) ], 'pending-install', 2 ],
+    [ 'a pending install over deployed and superseded', \%o,
+      [ $rev->( 1, 'superseded' ), $rev->( 2, 'deployed' ), $rev->( 3, 'pending-install' ) ], 'pending-install', 3 ],
+    [ 'a pending upgrade over a deployed revision',  \%o, [ $rev->( 1, 'deployed' ), $rev->( 2, 'pending-upgrade' ) ], 'pending-upgrade', 2 ],
+    [ 'a pending rollback over a deployed revision', \%o, [ $rev->( 1, 'deployed' ), $rev->( 2, 'pending-rollback' ) ], 'pending-rollback', 2 ],
+    # k3s without k8s_service_host: the hanging operation is the message,
+    # not the missing host that follows from it.
+    [ 'k3s without a host, a pending install over a deployed revision', { distribution => 'k3s', kubeconfig => '/kc' },
+      [ $rev->( 1, 'deployed' ), $rev->( 2, 'pending-install' ) ], 'pending-install', 2 ],
+  ) {
+    my ( $name, $opts, $secrets, $status, $n ) = @$case;
+
+    $api = FakeAPI->new( secrets => $secrets, objects => \%running );
+    eval { upgrade_cilium( %$opts ) };
+    my $upgrade = $@;
+
+    @cmds = (); %files = (); @crds = ();
+    $api = FakeAPI->new( secrets => $secrets, objects => \%running );
+    eval { install_cilium( %$opts ) };
+    like( $@, qr{^Helm release cilium is stuck in \Q$status\E \(revision $n\): .*delete Secret sh\.helm\.release\.v1\.cilium\.v$n in kube-system and re-run}s,
+      $name.': dies saying a Helm operation hangs, naming the Secret' );
+    is( $@, $upgrade, $name.': with the message of upgrade_cilium' );
+    is_deeply( \@cmds, [], $name.': nothing ran on the host (no CLI, no cilium uninstall, install or upgrade)' );
+    is_deeply( \@crds, [], $name.': no Gateway API CRDs applied' );
+    is_deeply( \%files, {}, $name.': no values file written' );
+    is_deeply( $api->{deleted}, [], $name.': no release Secret deleted' );
+  }
+
+  # No deployed revision: nothing works that a purge could take down.
+  for my $case (
+    [ 'a pending first install',             [ $rev->( 1, 'pending-install' ) ] ],
+    [ 'a pending install over a failed one', [ $rev->( 1, 'failed' ), $rev->( 2, 'pending-install' ) ] ],
+  ) {
+    my ( $name, $secrets ) = @$case;
+    @cmds = (); %files = (); @crds = ();
+    $api = FakeAPI->new( secrets => $secrets, objects => \%running );
+    ok( eval { install_cilium( %o ); 1 }, $name.': installs' ) or diag $@;
+    is_deeply( [ map { /cilium (\w+)/ } cilium_cmds() ], [ 'uninstall', 'install' ], $name.': uninstall, then install' );
+    is_deeply( [ sort @{ $api->{deleted} } ], [ sort map { 'Secret/'.$_->{name} } @$secrets ],
+      $name.': every release Secret removed' );
+    like( $files{'/tmp/cilium-values-rke2.yaml'}, qr/^  mode: cluster-pool$/m, $name.': on the running cluster-pool' );
   }
 };
 

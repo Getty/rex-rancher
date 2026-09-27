@@ -97,12 +97,12 @@ differing: C<cilium upgrade>.
 =item * C<failed> with an earlier revision still C<deployed> (a failed
 upgrade): C<cilium upgrade> again.
 
-=item * C<failed> with no C<deployed> revision (a failed first install),
-C<pending-install>, C<uninstalling> or C<uninstalled>: the stale release is
-removed (C<cilium uninstall>, then its Helm release Secrets) and Cilium is
-installed fresh. No working Cilium exists in these states, so nothing
-running is taken down. A Secret already gone (404) is fine; any other API
-error deleting one dies before the install.
+=item * C<failed> or C<pending-install> with no C<deployed> revision (a
+failed or interrupted first install), C<uninstalling> or C<uninstalled>:
+the stale release is removed (C<cilium uninstall>, then its Helm release
+Secrets) and Cilium is installed fresh. No working Cilium exists in these
+states, so nothing running is taken down. A Secret already gone (404) is
+fine; any other API error deleting one dies before the install.
 
 =item * an upgrade that would change C<ipam.mode> (the release sets one
 explicitly and the requested values differ): dies before C<cilium upgrade>,
@@ -111,10 +111,11 @@ redeploy the cluster, or pass the deployed mode in C<helm_values>.
 (With the running configuration below, this only fires when release and
 ConfigMap disagree.)
 
-=item * C<pending-upgrade> or C<pending-rollback>: dies. An earlier run was
-interrupted or another is still running, and the deployed revision still
-carries the pod network; the message names the Secret to delete once no
-other deploy is running.
+=item * C<pending-upgrade> or C<pending-rollback>, or C<pending-install>
+over a C<deployed> revision: dies before the host is touched, with the
+message of L</upgrade_cilium>. An earlier run was interrupted or another is
+still running, and the deployed revision still carries the pod network; the
+message names the Secret to delete once no other deploy is running.
 
 =back
 
@@ -369,6 +370,7 @@ sub install_cilium {
 
   my $api     = $o->{kubeconfig} ? _api($o->{kubeconfig}) : undef;
   my $release = $api ? _read_release($api) : undef;
+  _refuse_stuck_release($release);
 
   # A Cilium on the cluster keeps its IPAM mode, pool, k8sServiceHost and
   # operator replicas unless the caller asked for them -- whatever the
@@ -868,6 +870,8 @@ sub _release_action {
 
   return 'install' unless $release;
 
+  _refuse_stuck_release($release);
+
   my $status = $release->{status};
 
   if ($status eq 'deployed') {
@@ -887,15 +891,30 @@ sub _release_action {
     return 'upgrade';
   }
 
+  # A pending install gets here only without a deployed revision (an
+  # interrupted first install): _refuse_stuck_release died on the others.
   return 'reinstall'
     if $status eq 'pending-install'
     || $status eq 'uninstalling'
     || $status eq 'uninstalled';
 
-  _die_release_stuck($release)
-    if $status eq 'pending-upgrade' || $status eq 'pending-rollback';
-
   die "Helm release " . RELEASE_NAME . " is in unexpected state '$status'\n";
+}
+
+# A pending upgrade or rollback, or a pending install over a deployed
+# revision (Helm itself does not produce one): a Helm operation hangs over
+# the revision that carries the pod network, and a reinstall would purge
+# that revision with the rest. So this dies instead, in install_cilium and
+# upgrade_cilium right after the release is read, before the host is
+# touched. A pending install without a deployed revision is an interrupted
+# first install and passes.
+sub _refuse_stuck_release {
+  my ($release) = @_;
+  return unless $release;
+  my $status = $release->{status};
+  _die_release_stuck($release)
+    if $status eq 'pending-upgrade' || $status eq 'pending-rollback'
+    || ( $status eq 'pending-install' && $release->{has_deployed} );
 }
 
 # Helm refuses any operation on a release while another one is pending on
@@ -1004,16 +1023,14 @@ sub _read_running {
 # CLI, the Gateway API CRDs and the values file are in place, so this dies
 # before the host is touched, before the running Cilium is read, and before
 # a k3s k8sServiceHost check that would only report a consequence. A pending
-# upgrade or rollback dies as in install_cilium; a pending install over a
-# deployed revision is pending all the same. A failed upgrade over a
+# upgrade or rollback, or a pending install over a deployed revision, dies
+# as in install_cilium (_refuse_stuck_release). A failed upgrade over a
 # deployed revision upgrades again.
 sub _require_deployed_release {
   my ($release) = @_;
   my $status = $release ? $release->{status} : '';
 
-  _die_release_stuck($release)
-    if $status eq 'pending-upgrade' || $status eq 'pending-rollback'
-    || ( $status eq 'pending-install' && $release->{has_deployed} );
+  _refuse_stuck_release($release);
 
   return if $release && $release->{has_deployed};
 

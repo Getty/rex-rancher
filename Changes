@@ -34,6 +34,15 @@ Revision history for Rex-Rancher
     delete. A failed upgrade over a deployed revision is upgraded again.
     On k3s without k8s_service_host this is now the message instead of the
     k8s_service_host one.
+  - install_cilium with a kubeconfig no longer removes Helm release cilium
+    when it is stuck in pending-install over a deployed revision (cilium
+    uninstall, then every revision Secret including the deployed one, took
+    the pod network down with it); it dies instead, with the message
+    upgrade_cilium gives, naming the Secret to delete. pending-upgrade and
+    pending-rollback now also die there before the Cilium CLI is installed,
+    the Gateway API CRDs are applied or the values file is written, not
+    only after. A pending install with no deployed revision is still
+    removed and installed fresh.
   - New wait and wait_duration (seconds, default 600) options for
     install_cilium/upgrade_cilium: wait until the cilium DaemonSet and
     cilium-operator are ready, or die naming their state; an API error
