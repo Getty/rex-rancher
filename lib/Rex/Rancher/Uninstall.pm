@@ -216,6 +216,10 @@ uninstall: NAMES -- reboot the host ...>), with that on stderr.
 L</uninstall_warnings> picks the warnings out of the output,
 L</uninstall_failure> turns a failed outcome into a message.
 
+C<rke2-uninstall.sh> also removes C</etc/rancher/node>, the node password
+with it; the K3s uninstall scripts keep it. For joining the same cluster
+again afterwards, see L</uninstall_node>.
+
 =cut
 
 sub uninstall_cmd {
@@ -328,6 +332,16 @@ installed on it again, or L<Rex::Rancher::Server/install_server> and
 L<Rex::Rancher::Agent/install_agent> refuse it (see
 L</check_cilium_residue>). Running it on a host with nothing installed
 changes nothing and returns C<1>.
+
+Joining the host to the same cluster again afterwards, under the same node
+name: C<rke2-uninstall.sh> removes C</etc/rancher/node>, and the node
+password in it, so the new RKE2 registers with a new password, which the
+cluster refuses (C<Node password rejected>) while it keeps the old one's
+hash in the secret C<kube-system/NODE.node-password.rke2>. Delete the node
+from the cluster, which takes that secret with it, or the secret itself,
+before the host joins again. Nothing here does that. The K3s uninstall
+scripts leave C</etc/rancher/node> in place: a K3s node rejoins with the
+password it had.
 
 =cut
 

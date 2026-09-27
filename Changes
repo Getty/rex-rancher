@@ -227,6 +227,12 @@ Revision history for Rex-Rancher
     only when the file holds nothing but that PATH line; a file an admin
     added anything to stays untouched. K3s has no such file. New
     Rex::Rancher::Distribution->env_files.
+  - POD: uninstall_node and uninstall_cmd now note that rke2-uninstall.sh
+    removes /etc/rancher/node, so rejoining the same cluster under the same
+    node name needs the Node, or secret kube-system/NODE.node-password.rke2,
+    deleted first (the cluster otherwise refuses the new password with
+    "Node password rejected"); the K3s uninstall scripts keep the file, so a
+    K3s node rejoins with the password it had.
 
 0.002     2026-09-24 20:39:38Z
   - Cilium is the only CNI and replaces kube-proxy unless cilium => 0: rke2
