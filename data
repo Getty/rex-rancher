@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-09-27T16:30:21Z
+created: 2026-09-25T17:46:20Z
+id: 60
+priority: low
+started: 2026-09-25T17:46:38Z
+status: done
+title: 'prepare_node: timezone ungequotet/ungeprueft in Shell'
+updated: 2026-09-27T16:30:21Z
+---
+
+Aus #55-Nachlauf: timezone geht ungequotet und ungeprueft in Shell-Kommandos (wie vorher locale). Vor dem Host-Zugriff validieren (Area/City-Muster bzw. gegen /usr/share/zoneinfo), sauber quoten.
+
+Commit 10ef178. Shape check before host, single-quoted. Zone existence not checked (timedatectl auto_die 0), documented.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): live bestätigt -> done. OCP übergibt timezone UTC. Die Formprüfung vor dem Host und das gequotete timedatectl set-timezone liefen über Rex::LibSSH auf Debian 13 (ocpt, A) und Ubuntu 24.04 (otoh, A und B); die Deploys waren grün. Ob die Zone existiert, wird bewusst nicht geprüft (dokumentiert).
