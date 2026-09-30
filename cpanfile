@@ -1,9 +1,9 @@
 requires 'perl', '5.014004';
 requires 'HTTP::Tiny';
-requires 'IO::K8s', '1.108';
+requires 'IO::K8s', '1.109';
 requires 'IO::Socket::SSL';
 requires 'JSON::MaybeXS';
-requires 'Kubernetes::REST', '1.108';
+requires 'Kubernetes::REST', '1.109';
 requires 'Module::Runtime';
 requires 'Moo';
 requires 'namespace::autoclean';
