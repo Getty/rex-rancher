@@ -1,0 +1,23 @@
+---
+class: standard
+completed: 2026-09-30T22:49:47Z
+created: 2026-09-25T19:49:11Z
+id: 63
+priority: low
+started: 2026-09-25T22:18:19Z
+status: done
+title: Skew-Check auch gegen gestoppten Dienst / alte Binary
+updated: 2026-09-30T22:49:47Z
+---
+
+Aus #56: Skew-Regeln vergleichen nur gegen den laufenden Prozess. Ein gestoppter Dienst mit alter Binary auf der Platte wird nicht geprueft (z.B. Node nach Crash, dann Re-Run mit >1 Minor-Sprung). Installierte Binary-Version als Fallback-Referenz nutzen.
+
+Commit d336335. Stopped service: installed binary is the reference; no binary = fresh.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): rke2 v1.36.4, frischer Bootstrap + Worker-Join mit kubeconfig: die Agent-Versionsprüfung meldet 'Control plane runs v1.36.4+rke2r1'. Der Fall gestoppter Dienst / alte Binary wurde nicht gezielt getroffen.
+
+Release-Audit (kubernetes-ocp-c3, 2026-09-27): stays in review. Today's LIVE note covers only the general skew check (fresh bootstrap + join); the card's own fix (installed binary as fallback reference for a STOPPED service) was not exercised. Needs a run that actually hits a stopped service with an old binary on disk before this can go done.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Wie schon notiert nicht getroffen. Live-Schritt (ocpt-cp, RKE2): systemctl stop rke2-server, dann install_server mit einem Pin >1 Minor entfernt oder als Downgrade -> stirbt vor dem Installer mit der installierten Binary als Referenz; die Binary bleibt unverändert.
+
+2026-09-30 22:49 Release-Manager: done. Code in main (d336335), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
