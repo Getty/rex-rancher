@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-09-30T22:49:34Z
+created: 2026-09-25T17:36:28Z
+id: 56
+priority: high
+started: 2026-09-25T19:37:25Z
+status: done
+title: 'restart_reasons: Toolkit-Upgrade und ungepinnte rke2-Version loesen Control-Plane-Restart
+  aus'
+updated: 2026-09-30T22:49:34Z
+---
+
+Aus Code-Review 2026-09-25 (#49):
+1. ctime-Check auf nvidia-container-runtime startet rke2 nach jedem Toolkit-Paket-Upgrade neu. containerd ruft die Runtime pro Container-Create auf; ein Binary-Upgrade braucht keinen containerd-Restart, nur die Registrierung (Drop-in/Config) -> ctime-Trigger streichen.
+2. Ohne version installiert curl|sh die neueste rke2; restart_reasons sieht den Versionsunterschied und startet einen laufenden Control-Plane neu = stilles Upgrade durch blossen Re-Run. Maintainer-Entscheidung offen: ohne Pin Binary-Aenderung nur warnen (kein Restart) vs. restart.
+
+Point 1 done in 295a45b (runtime ctime trigger removed). Point 2 (unpinned version) awaits maintainer.
+
+Maintainer-Entscheidung 2026-09-25 (Punkt 2): Binary-Version != laufende Version: gleiche Minor (Patch-Update) -> restart, egal ob gepinnt. +1 Minor -> restart nur mit explizit gepinnter version, ohne Pin laut warnen (kein Restart). >1 Minor-Sprung oder Downgrade -> abbrechen BEVOR installiert wird. Agent nie auf neuere Minor als die Server (pruefbar nur mit kubeconfig, in rancher_deploy_agent optional). Grund: K8s-Skew-Policy (Server 1 Minor/Schritt, Server vor Agents, kubelet nie neuer als apiserver, kein Downgrade). KillMode=process: Pods ueberleben restart. Langfristig: system-upgrade-controller (eigenes Ticket).
+
+Point 2 done in 3cdd6d2 (+ POD fix 110346d). Target version unpinned via channel redirect on host (update.rke2.io / update.k3s.io); checked before install and again against installed binary before restart. Any downgrade (incl. patch) aborts. Agent: new kubeconfig option, control_plane_version = lowest control-plane kubelet. Pushed.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Live lief: die Agent-Prüfung gegen die Control Plane über kubeconfig ('Control plane runs v1.36.4+rke2r1' bzw. '... v1.36.4+k3s1', A). FEHLT: Alle Läufe waren gepinnt und liefen auf gleicher Version. Die Kanal-Auflösung auf dem Host (ungepinnt, update.rke2.io/update.k3s.io) und die Übergänge Patch/Minor/Downgrade liefen nie. Live-Schritt (ocpt, RKE2): (1) frischer Cluster auf v1.36.(n-1) gepinnt, Re-Bootstrap mit v1.36.n gepinnt -> Installation plus genau ein Restart (MainPID wechselt); (2) Re-Run ohne version und ohne hold_running -> Kanal-Ziel im Log, bei neuerer Minor Warnung ohne Restart; (3) Pin mit Downgrade oder >1 Minor -> stirbt vor dem Installer, die Binary bleibt. Optional (otoh): nvidia-container-toolkit per apt upgraden, Re-Run -> kein Restart deswegen.
+
+2026-09-30 22:49 Release-Manager: done. Code in main (295a45b 3cdd6d2 110346d), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
