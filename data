@@ -1,0 +1,46 @@
+---
+class: standard
+completed: 2026-09-30T22:51:10Z
+created: 2026-09-26T23:47:37Z
+depends_on:
+- 77
+id: 78
+priority: high
+started: 2026-09-27T00:09:26Z
+status: done
+tags:
+- pipeline
+- rke2
+- k3s
+- escalated-from:kubernetes-ocp#196
+title: Vorprüfungen (cidr, Skew, Cilium-Reste) in rancher_deploy_server/agent vor
+  prepare_node ziehen
+updated: 2026-09-30T23:26:18Z
+---
+
+Maintainer-Entscheidung 2026-09-27 (über kubernetes-ocp-c3): In rancher_deploy_server/agent laufen die Prüfungen cluster-cidr (k67), Versions-Skew (inkl. hold_running, k77) und Cilium-Reste (k71) direkt nach _check_connection und vor prepare_node/GPU-Setup. install_server/install_agent behalten ihre eigenen Prüfungen für direkte Aufrufer.
+Done: Kein Host-Schreibzugriff (prepare_node, GPU), wenn eine der drei Prüfungen stirbt; Tests; POD.
+
+2026-09-27 00:17 Umsetzung (Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-ad649c8c623c01694, Branch worktree-agent-ad649c8c623c01694, Stand main 4f806f5 per ff): Die Prüfungen liegen in je einer gemeinsamen Funktion, preflight_server(%opts) in Server.pm und preflight_agent(%opts) in Agent.pm. Beide sind öffentlich, nicht exportiert, dokumentiert und lesen nur. Reihenfolge Server: reine Optionen (distribution, install_method, cluster_cidr), check_cilium_residue, held_version (hold_running), check_version_skew, check_established_cluster_cidr. Agent: reine Optionen, _control_plane_version über kubeconfig, check_cilium_residue, held_version, check_version_skew mit server_version. Rückgabe: {version, install_method, cluster_cidr|server_version}. install_server/install_agent rufen sie als Erstes auf (keine zweite Kopie). rancher_deploy_* rufen sie direkt nach _check_connection und vor prepare_node/GPU mit derselben Optionsliste auf, die install_* bekommen (einmal gebaut, damit die gateway_api-Warnung nicht doppelt kommt). Agent: Die CP-Version liegt vor prepare_node vor (lokale API über kubeconfig_file, kein Host nötig), wird also vorgezogen. Entscheidung doppelt: Keine interne Skip-Option; install_* prüft erneut. Gründe: Dazwischen laufen prepare_node und GPU-Setup (Treiber, evtl. reboot), install_* muss den Host so prüfen, wie er dann ist; eine interne Option wäre ein Schlüssel im öffentlichen Options-Hash, mit dem ein Rexfile die Prüfungen abschalten könnte. Kosten: nur Lesezugriffe und doppelte Logzeilen (hold_running-Zeile, bei ungepinnt ggf. Channel-Info/Warnung, Residue-Probe-Warnung). Nebeneffekt: install_method artifact ohne version stirbt jetzt auch vor prepare_node. Tests: neu t/deploy-preflight.t (22), ohne Fix 21/21 rot; angepasst t/distribution.t (prepare_node-Index ignoriert die Leseschritte der Vorprüfung) und t/version-skew.t (preflight_agent gestubt, kubeconfig geht auch an ihn). prove -lr t/: 34 Dateien, 737 Tests grün. Unverified live: alles. Offen ist vor allem, ob die Vorprüfung vor prepare_node auf einem frischen Host ohne Pakete (curl) sauber durchläuft; check_version_skew fragt den Channel nur, wenn schon rke2/k3s da ist.
+
+2026-09-27 00:17 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-ad649c8c623c01694, Branch worktree-agent-ad649c8c623c01694 (ff auf main 4f806f5)
+
+Committed fea3843 nach Rebase auf main (6e4be92); main folgt per Fast-Forward durch den Orchestrator. Rebase-Konflikt in Changes (k75-Eintrag Rex::GPU 0.002 neben dem k78-Eintrag): beide Bullets behalten. lib/Rex/Rancher.pm und t/distribution.t haben automatisch gemergt (Reihenfolge geprüft: _check_distribution -> _check_gpu_module -> ... -> _check_connection -> preflight_* -> prepare_node, stimmt in beiden rancher_deploy_*). Zusätzlich musste t/gpu-module-version.t (k75, nicht im ursprünglichen Diff) angepasst werden: preflight_server/preflight_agent dort als No-Op gestubbt, sonst brach die feste @ran-Indexerwartung ('the pipeline goes on') durch die neuen Vorprüfungs-Lesezugriffe zwischen check_connection und prepare_node -- rein mechanisch, keine Logikaenderung, in denselben Commit gefaltet. prove -lr t/: vor Rebase 34 Dateien/737 Tests grün, nach Rebase zunaechst 35/890 mit 8 roten Tests in t/gpu-module-version.t, nach dem Stub-Fix 35 Dateien/890 Tests grün. Unverified live.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): preflight_server/preflight_agent liefen live vor prepare_node; OCP ruft sie direkt auf. rancher_deploy_server/agent selbst hat OCP NICHT benutzt – die Verdrahtung dort ist live nicht belegt.
+
+Release-Audit (kubernetes-ocp-c3, 2026-09-27): stays in review. Today's LIVE note confirms preflight_server/preflight_agent themselves ran (OCP calls them directly), but the card's actual claim -- the preflight checks wired into rancher_deploy_server/rancher_deploy_agent ahead of prepare_node/GPU -- was not exercised, since OCP does not call rancher_deploy_*. High-priority pipeline-order change; needs a rancher_deploy_* live run before done.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Unverändert: preflight_* liefen live (A), die Verdrahtung in rancher_deploy_* nicht. Live-Schritt (ocpt): rancher_deploy_server und rancher_deploy_agent (z. B. eg/lan.Rexfile auf ocpt umgebogen) einmal normal, dann mit einer Verletzung (abweichendes cluster_cidr am laufenden Server oder Cilium-Reste) -> stirbt vor prepare_node, ohne apt-Lauf, ohne Hostname- und ohne sysctl.d-Änderung.
+
+2026-09-30 22:51 Release-Manager: done. Code in main (fea3843), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
+
+
+
+LIVE 2026-10-01 (Hub perl-developer), rex-rancher a0d997d + rex-gpu HEAD, eg/lan.Rexfile, RKE2 v1.36.4+rke2r1, Debian 13:
+- rancher_deploy_server normal auf ocpt-cp (10.5.10.20): OK, Node Ready, Cilium 1.20.0 ausgerollt.
+- rancher_deploy_server mit Verletzung (LAN_CLUSTER_CIDR=10.44.0.0/16 gegen laufendes 10.42.0.0/16): stirbt VOR prepare_node ('Refusing to install rke2 with cluster-cidr 10.44.0.0/16 ... config.yaml is unchanged and nothing was installed.'); kein apt-Lauf, /etc/hostname, /etc/sysctl.d und apt-history unverändert (mtime-Vergleich).
+- rancher_deploy_agent normal (join_agent) auf ocpt-w (10.5.10.21): OK, Node Ready.
+- rancher_deploy_agent mit Verletzung (LAN_VERSION=v1.33.4+rke2r1 = Downgrade): stirbt vor prepare_node ('Refusing to install rke2 v1.33.4+rke2r1: ... downgrade ... Nothing was installed'); Host unverändert.
+=> Verdrahtung der Preflights in rancher_deploy_* live belegt. Cluster ocpt bleibt stehen (kubeconfig reuben:~/.kube/lan-rke2.yaml) für die übrigen k88-Schritte.
+Beobachtung: install_cilium meldet 'Cilium 1.20.0 ready' 2 s nach cilium install, DaemonSet war da 0/1 (rollte danach sauber aus) -- 'ready' heißt hier nicht 'Pods bereit'.
