@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-30T22:48:53Z
+created: 2026-09-25T03:25:23Z
+id: 46
+priority: medium
+started: 2026-09-25T03:55:51Z
+status: done
+title: 'rke2: Re-Run heilt mit Rex::GPU 0.001 eingerichteten Node nicht (kein Restart)'
+updated: 2026-09-30T22:48:53Z
+---
+
+Aus #40: Rex::GPU 0.002 entfernt das alte config.toml.tmpl, startet aber den Dienst bewusst nicht neu (NVIDIA.pm:1260-1283). k3s heilt (Server.pm:615 restart), rke2 nicht (Server.pm:573 systemctl start --no-block = no-op bei laufender Unit). Node behaelt kaputte containerd-Config (ohne SystemdCgroup) bis manueller Restart. Entscheiden: restart wenn Config geaendert, oder laut warnen. Nur live verifizierbar.
+
+Commit c86c9ec. Rex::GPU 0.002 gives no signal; Server::_start_verb reads containerd config.toml: bare 0.001 shape + template gone + service active -> one restart --no-block with warn; template still present -> warn with manual command; else unchanged (rke2 start, k3s restart). t/containerd-stale.t. Live-only: needs a node really set up with 0.001.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Nicht getroffen: Kein Node in A/B war mit Rex::GPU 0.001 eingerichtet, kein Bare-Template, keine Bare-config.toml. Live-Schritt (ocpt-cp mit laufendem OCP-RKE2, danach dasselbe auf K3s unter /var/lib/rancher/k3s): /var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl mit nur 'version = 2' + imports (Rex::GPU-0.001-Form) schreiben, rke2-server neu starten (config.toml ist dann bare, ohne SystemdCgroup), dann OCP-Re-Bootstrap -> Log 'Removing .../config.toml.tmpl: it holds only imports and version = 2 ...', genau ein Restart mit Warnung, danach rendert rke2 config.toml wieder mit SystemdCgroup = true; ein zweiter Re-Bootstrap startet nicht neu. (Deckt k46 zusammen mit k72 ab.)
+
+2026-09-30 22:48 Release-Manager: done. Code in main (c86c9ec), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
