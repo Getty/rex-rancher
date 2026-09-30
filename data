@@ -1,0 +1,37 @@
+---
+class: standard
+completed: 2026-09-30T22:50:56Z
+created: 2026-09-26T23:11:35Z
+id: 75
+priority: low
+started: 2026-09-26T23:59:45Z
+status: done
+tags:
+- gpu
+- containerd
+title: 'gpu_setup mit Rex::GPU 0.001 schreibt das Bare-Template bei jedem Lauf neu:
+  Rex::GPU >= 0.002 verlangen?'
+updated: 2026-09-30T22:50:56Z
+---
+
+Nebenbefund aus k72 (rex-rancher-worker, 2026-09-27). cpanfile: recommends Rex::GPU 0.002. Mit Rex::GPU 0.001 und gpu_setup => 1 schreibt gpu_setup das Bare-Template config.toml.tmpl bei jedem Lauf neu; seit k72 entfernen install_server/install_agent es jedes Mal vor dem Start wieder (kein Restart-Loop). Auf rke2 kommt die NVIDIA-Runtime dann nur aus rke2s eigener PATH-Erkennung, und nvidia_runtime_path ist bei gpu_setup => 1 aus.
+
+Frage an Maintainer: bei gpu_setup => 1 Rex::GPU >= 0.002 zur Laufzeit verlangen (die vor dem Host), statt 0.001 still zu tolerieren? Rex::GPU ist Getty-authored: Pin nur auf die letzte released CPAN-Version.
+
+Maintainer 2026-09-27 (über kubernetes-ocp-c3): bei gpu_setup => 1 zur Laufzeit Rex::GPU >= 0.002 verlangen und vor dem Host sterben.
+
+2026-09-27 00:06 Umgesetzt (Maintainer-Entscheidung 2026-09-27): neu _check_gpu_module(%opts) in lib/Rex/Rancher.pm, in rancher_deploy_server und rancher_deploy_agent direkt nach _check_distribution, also vor _check_connection und prepare_node. Greift nur bei _gpu_steps{setup}. Lädt Rex::GPU per eval-require und prüft Rex::GPU->VERSION('0.002'). Mögliche Meldungen: 'not installed' / 'could not be loaded: <Fehler>' (installiert, aber z.B. eine Abhängigkeit fehlt) / 'Rex::GPU <Version|without a version> is installed, and gpu_setup needs 0.002 or later'. Alle mit Hinweis auf Rex-GPU >= 0.002 bzw. gpu_setup => 0 und '; nothing was done on the host', ohne Zeilennummer. Die Prüfung läuft rein lokal, kein Befehl auf dem Host. _gpu_setup_if_requested: eigene Lade-Prüfung entfernt. Es gibt keine direkten Aufrufer (private, nur die zwei rancher_deploy_*, auch kubernetes-ocp ruft es nicht), und beide prüfen vorher unter derselben _gpu_steps-Bedingung. Eine zweite Prüfung dort hätte nach prepare_node fälschlich 'nothing was done on the host' gemeldet. cpanfile unverändert (recommends Rex::GPU 0.002; 0.002 ist laut cpanm --info released). POD: Option gpu, Einleitung von rancher_deploy_server, Satz 'dies before the host is touched' beim Agent, DESCRIPTION, 'GPU hardware support' (0.002 als älteste akzeptierte Version) und der Absatz 'Earlier Rex::GPU versions'. Tests: neu t/gpu-module-version.t (153 Tests; server/agent x rke2/k3s; fehlend, 0.001, ohne VERSION, nicht ladbar -> die, @ran leer, gpu_setup nicht aufgerufen; 0.002/0.003 akzeptiert; gpu_setup => 0 und ohne gpu mit 0.001 -> Rex::GPU nicht geladen). Gegen HEAD-Rancher.pm rot: 76/153 fehlgeschlagen. Angepasst: t/gpu-steps.t (Fake-Rex::GPU bekommt VERSION 0.002), t/agent-steps.t und t/distribution.t (_check_gpu_module no-op-gefakt). Diese beiden hätten sonst nur mit einem echt installierten Rex::GPU bestanden; geprüft mit einem @INC-Hook, der Rex::GPU verbirgt. prove -lr t/: 33 Dateien, 817 Tests grün, mit und ohne installiertes Rex::GPU. Live unverifiziert: ein GPU-Deploy mit Rex::GPU 0.002 (citilan).
+
+Also found (nicht angefasst, Scope war Prüfung + Aufrufstellen + GPU-POD): (1) README.md Zeile 69 nennt Rex::GPU 0.002 noch 'the recommended version' und erwähnt die Mindestversion bzw. das frühe Sterben nicht. (2) Skill rex-rancher-core, Pipeline-Schritt 3, beschreibt noch 'eval { require Rex::GPU } and die with an install hint if it is absent' in _gpu_setup_if_requested; die Prüfung sitzt jetzt vor dem Host in _check_gpu_module und verlangt >= 0.002.
+
+2026-09-27 00:06 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-aacb831d9baa6717a, Branch worktree-agent-aacb831d9baa6717a (auf 87fb6c1). Geändert: lib/Rex/Rancher.pm, t/gpu-steps.t, t/agent-steps.t, t/distribution.t; neu t/gpu-module-version.t. prove -lr t/ 817/817 grün (offline, kein Deploy-Beweis).
+
+2026-09-27 00:16 Committed 09a058c (rebased onto local main at 3039398; main since advanced to 4f806f5 via parallel cards k79/k77/k70 — fast-forward is the orchestrator's job). prove -lr t/: 34 files, 868 tests, green. Unverified live (GPU: citilan).
+
+Orchestrator: rebased auf 4f806f5 (konfliktfrei) -> 6e4be92, auf main und gepusht. Unverified live (GPU: citilan).
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): NICHT live getroffen (OCP nutzt gpu_setup nicht).
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Nicht getroffen: OCP nutzt weder gpu_setup noch rancher_deploy_*; auf otoh lief nur OCPs eigener GPU-Pfad. Live-Schritt (GPU-Host otoh oder citilan): rancher_deploy_server mit gpu => 1 (gpu_setup Standard) und installiertem Rex::GPU 0.002 -> die Prüfung lässt durch, gpu_setup läuft; mit Rex::GPU 0.001 im @INC -> stirbt vor jedem Host-Befehl mit '... nothing was done on the host'.
+
+2026-09-30 22:50 Release-Manager: done. Code in main (6e4be92), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
