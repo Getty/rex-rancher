@@ -1,0 +1,36 @@
+---
+class: standard
+completed: 2026-09-30T22:50:01Z
+created: 2026-09-26T04:45:57Z
+id: 66
+priority: low
+started: 2026-09-26T22:41:13Z
+status: done
+tags:
+- cilium
+- upgrade
+- escalated-from:kubernetes-ocp#191
+title: 'upgrade_cilium: sterben, bevor der Host angefasst wird, wenn gar kein Cilium
+  läuft'
+updated: 2026-09-30T22:50:01Z
+---
+
+Aus kubernetes-ocp k191 (Review des 0.003-Umbaus). upgrade_cilium (Cilium.pm ~460-486) installiert die CLI auf dem Node, wendet die Gateway-API-CRDs clusterweit an (_ensure_gateway_api_crds) und schreibt die Values-Datei, und erst dann scheitert `cilium upgrade`, wenn kein Cilium läuft. OCP hatte bis 0.002 einen eigenen Guard (_live_cilium ... or die "no Cilium") samt Test und hat ihn mit dem Umbau auf die Lib fallen lassen. Erreichbar in OCP über `ocp update --component cilium`.
+
+Done: upgrade_cilium stirbt mit klarer Meldung, bevor irgendetwas geschrieben oder angewendet wird, wenn weder kube-system/cilium-config noch das DaemonSet noch ein deployter Helm-Release existiert; Test.
+
+2026-09-26 22:49 Umgesetzt (Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-ad44f2b53d87c65ab, Branch worktree-agent-ad44f2b53d87c65ab, nicht committet). lib/Rex/Rancher/Cilium.pm: _read_running setzt present=1, wenn ConfigMap kube-system/cilium-config oder DaemonSet kube-system/cilium existiert (dieselben _get_optional-Lesungen, kein zusaetzlicher API-Call). Neu _require_running($running, $release): stirbt, wenn weder present noch $release->{has_deployed}. upgrade_cilium liest das Release einmal in $release, ruft _require_running direkt nach _read_running, also vor _adopt_running/_settle_version/_require_k8s_service_host und vor CLI/CRDs/Values/cilium upgrade. Damit gewinnt die Meldung 'kein Cilium' auf k3s ohne k8s_service_host vor der Meldung zum fehlenden Host. Meldung: 'upgrade_cilium found no Cilium on the cluster: no ConfigMap kube-system/cilium-config, no DaemonSet kube-system/cilium, and no Helm release cilium | Helm release cilium has no deployed revision (<status>). Nothing to upgrade: install it with install_cilium'. API-Fehler ausser 404 sterben weiter in _get_optional und _read_release, bevor der Guard greift. install_cilium bleibt unveraendert (ignoriert present). POD von upgrade_cilium: ein Satz. Changes nicht angefasst.
+
+2026-09-26 22:49 Tests: t/cilium.t neuer Subtest k66 mit 40 Checks. Ohne Cilium (nichts, nur failed, nur pending-install, nur pending-upgrade): stirbt mit der Meldung; keine Host-Befehle (auch kein 'cilium version --client'), keine CRDs, keine Values-Datei. k3s ohne Host und ohne Cilium: die Meldung 'kein Cilium' gewinnt. 403 auf das DaemonSet stirbt als 'Cannot read DaemonSet', nicht als 'kein Cilium'. Laeuft wie bisher durch: nur ConfigMap, nur DaemonSet, nur deployter Release, fehlgeschlagenes Upgrade ueber deployter Revision. Reproduziert gegen das Modul aus HEAD: 21 von 40 Checks rot. Angepasst: 'read the running Cilium' erwartet present=>1; die zweite Haelfte von 'upgrade_cilium: k3s keeps the running k8sServiceHost' nutzt jetzt einen deployten Release ohne DaemonSet, damit sie weiter die k8s_service_host-Meldung prueft. prove -lr t/: Files=26, Tests=474, PASS. Das beweist Kompilation und reine Logik, nichts ueber ein Deploy. Unverified live: der Nachweis kommt ueber den OCP-Vendor-/Live-Test (ocp update --component cilium gegen einen Cluster ohne Cilium und gegen einen mit).
+
+2026-09-26 22:49 Also found (nicht in Scope, nicht angefasst): (1) _read_running autovivifiziert ein undef $release ueber eval { $release->{config}{operator}{replicas} } zu {config=>{operator=>{}}}. Das folgende $release->{status} eq 'deployed' wirft dann 'Use of uninitialized value in string eq' (Cilium.pm, Bedingung zu $running{version}). Das trifft jeden install_cilium mit kubeconfig auf einem frischen Cluster, also Warnrauschen auf STDERR bei rancher_deploy_server; im Testlauf bei HEAD 16x. Fix waere ein Guard '$release &&' vor dem eval. (2) upgrade_cilium ruft _release_action nicht auf. pending-upgrade/pending-rollback ueber einer deployten Revision passiert den Guard, und cilium upgrade scheitert erst nach CLI/CRDs/Values an Helms 'another operation in progress'. install_cilium stirbt dort frueh. (3) Laut Spezifikation reicht auch nur ConfigMap oder nur DaemonSet ohne Helm-Release. Dann scheitert cilium upgrade (helm upgrade ohne --install) aber wahrscheinlich spaet mit 'has no deployed releases'. Offene Frage: Soll upgrade_cilium ohne Release (oder mit Release nur in failed/pending-install) generell auf install_cilium verweisen?
+
+2026-09-26 22:49 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-ad44f2b53d87c65ab, Branch worktree-agent-ad44f2b53d87c65ab. Geaendert: lib/Rex/Rancher/Cilium.pm (_read_running present, neu _require_running, upgrade_cilium ruft es vor _adopt_running; POD-Satz) und t/cilium.t (Subtest k66, zwei Tests angepasst). prove -lr t/: 26 Dateien, 474 Tests, PASS. Das beweist nur Kompilation und Logik. Unverified live, Nachweis ueber den OCP-Vendor-/Live-Test. Changes nicht angefasst, Vorschlag im Bericht.
+
+Committed bcbdc15 auf Branch worktree-agent-ad44f2b53d87c65ab (Basis 4398f44); main folgt per Fast-Forward durch den Orchestrator. Unverified live.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): NICHT live getroffen (upgrade_cilium ohne Revision).
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Nicht getroffen: upgrade_cilium lief in A/B nie. Den k66-Guard hat k70 durch _require_deployed_release ersetzt, der Beleg kommt also über den k70-Schritt. Live-Schritt (ocpt mit laufendem OCP-Cluster, gehört zu OCP k206): upgrade_cilium auf einem Cluster ohne Cilium-Release (RKE2 nach install_server, vor install_cilium) -> stirbt mit dem Verweis auf install_cilium, ohne Host-Befehl (keine CLI-Installation, keine Values-Datei, keine Gateway-API-CRDs); auf dem laufenden Cluster (ocp update --component cilium) läuft das Upgrade durch.
+
+2026-09-30 22:49 Release-Manager: done. Code in main (bcbdc15 4f806f5), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
