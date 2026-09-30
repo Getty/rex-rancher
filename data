@@ -1,0 +1,34 @@
+---
+class: standard
+completed: 2026-09-30T22:50:43Z
+created: 2026-09-26T23:11:30Z
+id: 74
+priority: low
+started: 2026-09-26T23:48:44Z
+status: done
+tags:
+- containerd
+- registries
+title: 'update_registries: Restart rendert Rex::GPU-0.001-Bare-Template erneut'
+updated: 2026-09-30T22:50:43Z
+---
+
+Nebenbefund aus k72 (rex-rancher-worker, 2026-09-27). update_registries startet über restart_services_cmd neu, ohne remove_bare_containerd_template aufzurufen. Auf einem Node, der seit Rex::GPU 0.001 nie wieder durch install_server/install_agent lief, rendert dieser Restart das Bare-Template (imports + version = 2) erneut: die neuen registries.yaml-Mirrors greifen dann nicht (config.toml ohne Mirrors).
+
+Done: update_registries entfernt ein Bare-Template vor dem Restart wie die install-Pfade (k72), oder eine begründete Entscheidung dagegen; Test.
+
+Maintainer 2026-09-27: in 0.003.
+
+2026-09-26 23:52 Fix: update_registries (Server.pm) ruft nach write_registries und vor restart_services_cmd $dist->remove_bare_containerd_template auf; die Methode ist generisch über containerd_dir, gilt also für rke2 und k3s gleich. Distribution.pm unverändert. Auf dem Host: nur cat + rm -f über den Exec-Kanal, identisch auf Debian, Rocky und SFTP-losem Hetzner; kein Template bedeutet ein cat und sonst nichts. rm scheitert: die vor dem Restart, registries.yaml ist dann schon geschrieben (in POD so dokumentiert). Test t/update-registries.t (neu): zuerst rot, 8/11 fehlgeschlagen; nach dem Fix 11/11. prove -lr t/: 32 Dateien, 663 Tests, grün. Das beweist nur Befehle und Reihenfolge, nicht dass rke2/k3s danach eine config.toml mit Mirrors rendert: live unverifiziert. Also found: (1) Auf einem Agent-Node nennt die Die-Meldung des gescheiterten rm den Server-Service ('rke2-server was not (re)started'), weil update_registries new_for ohne role baut. Stimmt formal, ist aber unvollständig; nicht angefasst, da sonst Distribution.pm betroffen wäre. (2) run restart_services_cmd mit auto_die => 0 schluckt es, wenn beide Units nicht restarten, und loggt trotzdem 'containerd restarted'. Vorbestehend, nicht in Scope.
+
+2026-09-26 23:52 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-aacb831d9baa6717a, Branch worktree-agent-aacb831d9baa6717a. Geändert: lib/Rex/Rancher/Server.pm (update_registries + POD), neu t/update-registries.t. prove -lr t/ 663/663 grün (offline, kein Deploy-Beweis).
+
+2026-09-26 23:58 Committed 65c45ab (Remove the bare containerd template before update_registries restarts too); main folgt per Fast-Forward durch den Orchestrator. Unverified live.
+
+Orchestrator: rebased auf fb166fb (konfliktfrei) -> 87fb6c1, auf main und gepusht. Unverified live.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): NICHT live getroffen (update_registries lief nicht).
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Nicht getroffen: OCP ruft update_registries nicht auf. Live-Schritt (ocpt-cp, RKE2): Bare-Template wie bei k72 hinlegen und rendern lassen, dann Rex::Rancher::Server::update_registries direkt aufrufen -> das Template wird vor dem Restart entfernt, und config.toml bzw. hosts.toml tragen danach die Mirrors aus registries.yaml.
+
+2026-09-30 22:50 Release-Manager: done. Code in main (87fb6c1), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
