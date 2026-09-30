@@ -1,0 +1,41 @@
+---
+class: standard
+completed: 2026-09-30T22:50:29Z
+created: 2026-09-26T22:57:04Z
+id: 72
+priority: high
+started: 2026-09-26T22:57:43Z
+status: done
+tags:
+- containerd
+- gpu
+- rke2
+- k3s
+- escalated-from:kubernetes-ocp#196
+title: Altes Bare-Clobber-containerd-Template vor dem (Neu-)Start entfernen
+updated: 2026-09-30T22:50:29Z
+---
+
+Aus kubernetes-ocp k196 (Maintainer 2026-09-27, Punkt R2).
+
+Heute: Distribution.pm erkennt die gerenderte Form (is_bare_template_output ~1112, _stale_containerd_restart ~952) und sagt bei noch vorhandenem agent/etc/containerd/config.toml.tmpl nur "Remove it". Rex::GPU kennt die Form als _is_rke2_clobber_tmpl (Rex::GPU NVIDIA.pm ~1288). OCP-Vorbild (nur lesen): ~/dev/kubernetes-ocp/share/Rexfile ~728-794 (_legacy_containerd_template, _is_legacy_containerd_template, _legacy_containerd_template_paths, cleanup_legacy_containerd_template): Entscheidung nach Inhalt, nie nach Pfad; ein fremdes Template (z. B. mit {{ template "base" . }}) bleibt unangetastet.
+
+Done: install_server und install_agent entfernen config.toml.tmpl vor dem (Neu-)Start, wenn sein Inhalt genau die Bare-Form ist (imports + version = 2, sonst nichts), und sagen es im Log; ein fremdes Template bleibt (mit Hinweis). rke2 und k3s (/var/lib/rancher/<dist>/agent/etc/containerd/config.toml.tmpl). Danach greift die bestehende Restart-Logik, sodass config.toml neu gerendert wird. Offline-Tests; POD. OCP behält nur seine Nur-Lese-Probe für die Drift-Erkennung.
+
+2026-09-26 23:02 Start (Worktree agent-a41ea125a28b41534, Basis bcbdc15, Baseline prove -lr t/: 26 Dateien / 474 Tests grün). Plan: neue Distribution-Methode remove_bare_containerd_template (cat + is_bare_template_output + rm -f, alles Exec-Kanal; rm-Fehler -> die), aufgerufen in Server::_install und Agent::_enable_service direkt vor start_verb, also im gemeinsamen Start-Pfad, nicht am Anfang von install_server/install_agent (k67/k71). _stale_containerd_restart: Warnzweig 'Template noch da' wird im Pipeline-Pfad falsch (dort liegt danach nur noch ein fremdes Template) -> anpassen.
+
+2026-09-26 23:09 Umgesetzt. (1) Neue Methode Rex::Rancher::Distribution->remove_bare_containerd_template: liest <containerd_dir>/config.toml.tmpl mit 'cat … 2>/dev/null' (auto_die 0; cat scheitert = kein Template = No-op), entscheidet per is_bare_template_output (derselbe enge Match wie Rex::GPU _is_rke2_clobber_tmpl), entfernt mit 'rm -f … 2>&1' und stirbt bei rm-Fehler laut ('Could not remove …, SERVICE was not (re)started'), vorher Warn-Log 'Removing …: it holds only imports and version = 2 …'. Fremdes Template: Info 'Keeping …', kein die. Alles Exec-Kanal, kein SFTP. Basisklasse über containerd_dir, gilt damit für rke2 und k3s gleich. (2) Aufruf in Server::_install nach verify_installed_version und in Agent::_enable_service vor start_verb, also nicht am Anfang von install_server/install_agent. (3) _stale_containerd_restart: 'test -e' durch cat + is_bare ersetzt. Nach (2) sieht der Pipeline-Pfad dort nur noch ein fremdes Template, und der alte Warnzweig behauptete dann fälschlich 'holds only imports and version = 2 … Remove it'. Jetzt gilt: config.toml bare und Template weg ODER durch ein anderes ersetzt -> einmal restart (wenn aktiv), mit eigener Warnung. Bare-Template noch da (nur bei direktem start_verb-Aufruf erreichbar) -> Warnung wie bisher, verweist auf remove_bare_containerd_template. Log-Text im Fall 'gone' bleibt unverändert. (4) POD: remove_bare_containerd_template, start_verb, Server 'RKE2 installation' + 'K3s installation', Agent DESCRIPTION. (5) Tests: neu t/containerd-bare-template.t (34), rke2/k3s × Server/Agent über install_server/install_agent: bare -> vor Start entfernt + geloggt + restart; OCP-Form ohne Newline -> entfernt; frischer Node -> entfernt, normaler Start; fremd ({{ template "base" . }}) -> bleibt + Hinweis; Zusatzdirektive -> bleibt; kein Template -> No-op; rm scheitert -> die, kein systemctl start. Gegen die alte lib rot (24 von 28 Szenario-Subtests + Methodentest, nur die No-op-Fälle grün). t/containerd-stale.t: Fake auf cat umgestellt, 2 neue Fälle (anderes Template, aktiv/inaktiv). prove -lr t/: 27 Dateien, 524 Tests, PASS (Baseline 26/474). dzil build + author-pod-syntax grün. Unverified live: dass rke2/k3s nach Entfernen + Restart ihre eigene config.toml rendern und rm auf einem echten Node greift. Die Suite beweist nur Kompilierung und die Entscheidungslogik.
+
+2026-09-26 23:09 Also found (nicht umgesetzt, Board rex-rancher, Entscheidung beim Dispatcher): (a) update_registries startet über restart_services_cmd neu, ohne ein Bare-Template zu entfernen. Auf einem Node, der nie wieder durch install_server/install_agent lief, rendert dieser Restart das Template erneut, und die neuen Mirrors greifen nicht (config.toml ohne config_path). (b) Rex::GPU 0.001 (unter dem recommends 0.002) mit gpu_setup => 1 schreibt das Bare-Template bei jedem Lauf neu. Es wird jetzt jedes Mal vor dem Start entfernt, einen Restart-Loop gibt es nicht. Die NVIDIA-Runtime kommt dann auf rke2 nur aus rke2s eigener PATH-Erkennung, und nvidia_runtime_path ist bei gpu_setup => 1 aus. Zu erwägen: Rex::GPU >= 0.002 verlangen, wenn gpu_setup läuft. (c) Entscheidung: Der Match ist strukturell (is_bare_template_output: beliebiger imports-Wert, Kommentare/Leerzeilen egal), also etwas weiter als OCPs byte-genauer Vergleich. Das ist so gewollt und passt zu Rex::GPUs Heal.
+
+2026-09-26 23:10 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a41ea125a28b41534, Branch worktree-agent-a41ea125a28b41534. Geändert: lib/Rex/Rancher/{Distribution,Server,Agent}.pm, t/containerd-stale.t, neu t/containerd-bare-template.t (untracked, muss mit ins Commit). Changes nicht angefasst. prove -lr t/: 27 Dateien / 524 Tests PASS. Unverified live.
+
+Committed 74167e0a9f96b2f743b8151924184c4f934543d9 auf Branch worktree-agent-a41ea125a28b41534 (rebased auf main 339a76c); main folgt per Fast-Forward durch den Orchestrator. Unverified live.
+
+Commit-Body per --amend auf Hausbreite (~72 Zeichen) umgebrochen, Inhalt/Betreff/Dateien/Trailer unverändert. Neue SHA: 98b5e5fdabaf13b36586a01d6d66ae8ea7df13b2 (ersetzt 74167e0a9f96b2f743b8151924184c4f934543d9), weiterhin auf Branch worktree-agent-a41ea125a28b41534, main unangetastet, nicht gepusht. prove -lr t/: 28 Dateien / 544 Tests PASS.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): NICHT live getroffen (kein Bare-Template auf den OCP-Hosts).
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Nicht getroffen: In A/B lief nur der No-op-Pfad (kein Template vorhanden), keine 'Removing'-/'Keeping'-Zeile. Live-Schritt (ocpt-cp mit laufendem OCP-RKE2, danach dasselbe auf K3s unter /var/lib/rancher/k3s): /var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl mit nur 'version = 2' + imports (Rex::GPU-0.001-Form) schreiben, rke2-server neu starten (config.toml ist dann bare, ohne SystemdCgroup), dann OCP-Re-Bootstrap -> Log 'Removing .../config.toml.tmpl: it holds only imports and version = 2 ...', genau ein Restart mit Warnung, danach rendert rke2 config.toml wieder mit SystemdCgroup = true; ein zweiter Re-Bootstrap startet nicht neu. Zusätzlich ein fremdes Template (z. B. mit {{ template "base" . }}) -> 'Keeping ...', keine Löschung.
+
+2026-09-30 22:50 Release-Manager: done. Code in main (98b5e5f), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
