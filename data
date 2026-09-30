@@ -1,0 +1,22 @@
+---
+class: standard
+completed: 2026-09-30T22:49:20Z
+created: 2026-09-25T17:36:23Z
+id: 55
+priority: medium
+started: 2026-09-25T17:36:53Z
+status: done
+title: Review-Fixes prepare_node (#42)
+updated: 2026-09-30T22:49:20Z
+---
+
+Aus Code-Review 2026-09-25:
+1. _enable_locale_cmd: $line ungequotet in '...', Regex maskiert nur '.'; de_DE.utf8 haengt 'de_DE.utf8 utf8' an statt die UTF-8-Zeile zu aktivieren -> Charset normalisieren (utf8->UTF-8) wie locale.gen es schreibt, sauber quoten/validieren.
+2. Ticket #42 sagt: chrony-Fehler 'nicht fatal', OCP best-effort. Library stirbt, wenn auch timesyncd nicht aktiv (Rocky: gibt es meist nicht) -> laut warnen statt sterben, wie spezifiziert.
+3. POD verspricht timesyncd-Fallback, den es auf RHEL-Familie nicht gibt -> praezisieren.
+
+Commit cdc069a. Charset normalized as locale.gen spells it, malformed locale rejected before host touched, NTP failure = loud warning, POD timesyncd Debian/Ubuntu only.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Live lief: Locale-Normalisierung und gequotetes locale.gen-Enable mit en_US.UTF-8 auf Debian 13/Ubuntu 24.04 (A, B); de_DE.utf8 -> UTF-8 ist reine String-Logik (offline getestet). FEHLT: NTP-Ausfall = Warnung statt die (Host-Befehle, nie gelaufen). Live-Schritt (ocpt-w, im Anschluss an den k42-Schritt): zusätzlich systemd-timesyncd maskieren, prepare_node -> WARN 'NO TIME SYNCHRONIZATION IS ACTIVE on this node', der Lauf geht weiter.
+
+2026-09-30 22:49 Release-Manager: done. Code in main (cdc069a), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
