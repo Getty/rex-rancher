@@ -1,0 +1,35 @@
+---
+class: standard
+completed: 2026-09-30T22:51:38Z
+created: 2026-09-27T00:04:04Z
+id: 82
+priority: medium
+started: 2026-09-27T05:00:12Z
+status: done
+tags:
+- cilium
+- helm
+title: 'install_cilium: pending-install über deployter Revision würde purgen (Pod-Netz
+  weg)'
+updated: 2026-09-30T22:51:38Z
+---
+
+Nebenbefund aus k70 (rex-rancher-worker, 2026-09-27). _release_action liefert "reinstall" für pending-install auch dann, wenn eine deployte Revision existiert; _purge_release führt dann cilium uninstall aus und löscht alle Revision-Secrets inkl. der deployten -- das Pod-Netz wäre weg. Normales Helm erreicht diesen Zustand nicht; upgrade_cilium stirbt dort seit k70 bereits (als "stuck").
+
+Done: install_cilium behandelt pending-install über deployter Revision wie pending-upgrade (stirbt vor dem Host, gleiche Meldung via _die_release_stuck); Test.
+
+2026-09-27 Maintainer-Entscheidung (über kubernetes-ocp-c3): Ja, in 0.003. install_cilium purgt bei pending-install über einer deployten Revision nicht, sondern stirbt vor dem Host, mit demselben Wortlaut wie upgrade_cilium.
+
+2026-09-27 05:04 Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a191923aa1f160f27, Branch worktree-agent-a191923aa1f160f27 (auf fea3843). Befund: install_cilium ruft _release_action erst nach CLI-Installation, Gateway-API-CRDs und Values-Datei; auch pending-upgrade/pending-rollback sterben dort heute also erst NACH dem Host-Zugriff (die k70-Notiz 'install_cilium stirbt dort frueh' stimmt nur relativ zu cilium upgrade). Plan: ein gemeinsamer Helper _refuse_stuck_release (pending-upgrade, pending-rollback, pending-install ueber deployter Revision -> _die_release_stuck), in install_cilium direkt nach _read_release, in _require_deployed_release und _release_action. Damit sterben alle drei Stuck-Faelle in install_cilium vor dem Host, mit dem Wortlaut von upgrade_cilium. pending-install ohne deployte Revision bleibt reinstall.
+
+2026-09-27 05:11 Umgesetzt (nicht committet). lib/Rex/Rancher/Cilium.pm: neuer Helper _refuse_stuck_release($release) stirbt ueber _die_release_stuck bei pending-upgrade, pending-rollback und pending-install MIT deployter Revision; aufgerufen in install_cilium direkt nach _read_release (vor _read_running, Adoption, Versions-/k8s_service_host-Pruefung, CLI, CRDs, Values), in _require_deployed_release (upgrade_cilium, ersetzt die dortige Inline-Bedingung) und in _release_action (dort entfiel die alte pending-upgrade/rollback-Zeile). pending-install OHNE deployte Revision bleibt reinstall (purge + install). Nebenwirkung, bewusst: pending-upgrade/pending-rollback sterben in install_cilium jetzt ebenfalls vor dem Host (vorher erst nach CLI-Installation, Gateway-API-CRDs und Values-Datei, gleicher Wortlaut); fuer alle drei Stuck-Faelle gewinnt die Stuck-Meldung jetzt auch vor ipam-/Versions-/k8s_service_host-Fehlern. POD install_cilium: Reinstall-Item (pending-install nur ohne deployte Revision) und Stuck-Item (+ pending-install ueber deployter Revision, stirbt vor dem Host mit der Meldung von upgrade_cilium). t/cilium.t: neuer Subtest k82 (38 Checks: 5 Stuck-Faelle inkl. k3s ohne Host je 6 Checks -- Meldung, byte-gleich mit upgrade_cilium, keine Host-Befehle, keine CRDs, keine Values-Datei, kein Secret geloescht; 2 Faelle pending-install ohne deployte Revision -> uninstall+install, alle Secrets geloescht, cluster-pool); release-action-Subtest: pending-install mit has_deployed stirbt, ohne -> reinstall. Gegen HEAD rot: 20 von 38 k82-Checks + 1 release-action-Check (HEAD loescht Secret v2 UND v1=deployed). Mutanten (7) alle getoetet. prove -lr t/: Files=35, Tests=891, PASS, 0 'uninitialized' in cilium.t. Das belegt Kompilation und reine Logik, nichts ueber ein Deploy. UNVERIFIED LIVE: der Pfad (pending-install ueber deployter Revision) ist in OCP nie live getroffen worden; Helm erzeugt ihn normal nicht.
+
+2026-09-27 05:11 Also found (nicht angefasst, fuer den Koordinator): (1) .claude/skills/rex-rancher-core/SKILL.md Z. 92 sagt noch 'dies on pending-upgrade/pending-rollback' -- nach k82 auch pending-install ueber deployter Revision, und jetzt vor dem Host; Skill ist Hardlink, Aenderung gehoert dem Skill-Owner. (2) _release_action liefert 'reinstall' fuer uninstalling/uninstalled auch bei has_deployed (z.B. uninstall nach fehlgeschlagenem Upgrade: Label deployed auf aelterer Revision bleibt). Dort hat helm uninstall die Workloads bereits entfernt bzw. entfernt sie gerade, Purge ist vermutlich richtig; nur zur Kenntnis. (3) Die k70-Notiz 'install_cilium stirbt dort frueh' war ungenau: vor k82 starb install_cilium bei pending-upgrade/rollback erst nach CLI, CRDs und Values -- mit k82 behoben.
+
+2026-09-27 05:11 Done: install_cilium stirbt bei pending-install ueber deployter Revision (und nun auch bei pending-upgrade/rollback) vor dem Host mit dem Wortlaut von upgrade_cilium (_refuse_stuck_release -> _die_release_stuck); pending-install ohne deployte Revision purgt und installiert weiter. Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a191923aa1f160f27, Branch worktree-agent-a191923aa1f160f27 (auf fea3843), commit-ready: lib/Rex/Rancher/Cilium.pm, t/cilium.t. Test rot gegen HEAD, gruen danach; prove -lr t/ 35 Dateien/891 Tests PASS (nur Kompilation+Logik). Unverified live. Changes nicht angefasst.
+
+2026-09-27 05:34 Committed 8998326 (Refuse install_cilium over a pending Helm release before the host) on worktree-ocp-c3-round3. Stays in review: unverified live (the pending-install-over-deployed path is not something Helm produces normally; no OCP/citilan run has hit it).
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Live lief nur der Durchlauf: install_cilium auf frischem otoh-Cluster in B (5a885af, ohne Release, der Guard lässt durch). Die Verweigerung selbst lief nie. Live-Schritt (ocpt mit laufendem OCP-Cluster, gehört zu OCP k206): auf das deployte Release ein neues Revision-Secret mit status=pending-install legen -> install_cilium stirbt vor dem Host mit der Meldung von upgrade_cilium; kein 'cilium uninstall', das deployte Secret bleibt, das Pod-Netz bleibt stehen; danach das Test-Secret löschen.
+
+2026-09-30 22:51 Release-Manager: done. Code in main (8998326), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
