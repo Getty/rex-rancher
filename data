@@ -1,0 +1,23 @@
+---
+class: standard
+completed: 2026-09-30T22:48:40Z
+created: 2026-09-24T21:49:35Z
+id: 44
+priority: low
+started: 2026-09-25T03:21:10Z
+status: done
+tags:
+- ocp
+- agent
+- escalated-from:kubernetes-ocp#155
+title: 'install_agent: Fehlermeldung nennt die Join-Adresse nicht'
+updated: 2026-09-30T22:48:40Z
+---
+
+kubernetes-ocp k185 (live verifiziert): wird der Agent nicht aktiv, nennt OCPs Meldung neben Zustand und Journal auch die Join-URL ("It joins the cluster via https://...:9345 -- check that this node can reach that address"). Der haeufigste Grund ist eine unerreichbare Server-Adresse (falsche/private IP). Rex::Rancher::Server::_wait_for_service kennt den Server nicht. OCP haengt den Hinweis nach k155 selbst an das die() von install_agent an; schoener waere es in der Library (z.B. optionaler hint-Parameter fuer _wait_for_service, von install_agent mit server befuellt).
+
+Commit 980d812. _wait_for_service hint, install_agent passes join URL (rke2+k3s). HA server join deliberately without hint. Live-only: unreachable join address shows hint.
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Nicht getroffen: Alle Joins in A/B gingen durch. Live-Schritt (ocpt-w, RKE2 und K3s): install_agent mit server auf eine unerreichbare Adresse (z. B. https://10.5.10.99:9345 bzw. :6443) -> nach dem Service-Wait stirbt es mit 'It joins the cluster via https://10.5.10.99:... -- check that this node can reach that address' über dem Journal-Ende.
+
+2026-09-30 22:48 Release-Manager: done. Code in main (980d812), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
