@@ -1,0 +1,33 @@
+---
+class: standard
+completed: 2026-09-30T22:50:15Z
+created: 2026-09-26T22:50:48Z
+id: 70
+priority: low
+started: 2026-09-26T23:58:09Z
+status: done
+tags:
+- cilium
+- upgrade
+title: 'upgrade_cilium: hängendes Release und Cilium ohne Helm-Release scheitern erst
+  spät bei cilium upgrade'
+updated: 2026-09-30T22:50:15Z
+---
+
+Nebenbefund aus k66 (rex-rancher-worker, 2026-09-27). (a) upgrade_cilium ruft _release_action nicht: ein Release in pending-upgrade/pending-rollback über einer deployten Revision passiert den k66-Guard, und cilium upgrade scheitert erst nach CLI, CRDs und Values an Helms "another operation in progress" (install_cilium stirbt dort früh). (b) Nach k66-Spezifikation reicht auch nur ConfigMap oder nur DaemonSet ohne Helm-Release; cilium upgrade ist ein Helm-Upgrade ohne --install und scheitert dann vermutlich spät mit "has no deployed releases". Frage an Maintainer/OCP: Soll upgrade_cilium ohne deployten Release generell früh auf install_cilium verweisen und bei pending-* früh sterben?
+
+Done: Entscheidung getroffen; falls ja, früher Tod vor jedem Host-Zugriff; Test.
+
+Maintainer 2026-09-27 (über kubernetes-ocp-c3): in 0.003. Ohne deployte Helm-Revision früh auf install_cilium verweisen (auch wenn ConfigMap/DaemonSet da sind), bei pending-* früh sterben, beides vor jedem Host-Zugriff.
+
+2026-09-27 00:03 Done as decided 2026-09-27 (coordinator). Cilium.pm: _require_running replaced by _require_deployed_release($release), which upgrade_cilium calls right after _read_release, before _read_running. It checks pending-upgrade/pending-rollback first and dies through a new shared helper _die_release_stuck, which _release_action now uses as well (install_cilium and upgrade_cilium give byte-identical messages; the test compares them). Then, without a deployed revision (no release, failed first install, pending-install, uninstalling, uninstalled, even with cilium-config/DaemonSet present), it dies pointing to install_cilium; when a release exists, the message says install_cilium removes what is left and installs again. A failed upgrade over a deployed revision still upgrades. pending-install OVER a deployed revision (a state Helm should not produce) goes to stuck, following the maintainer's rule that pending-* means a Helm operation hangs. $running->{present} removed: nobody used it anymore. POD of upgrade_cilium updated. t/cilium.t: k66 subtest rewritten (a: 8 cases, b: 4 cases, same message install vs upgrade, 403 on the DaemonSet without a release -> missing release wins, 403 with deployed release -> dies as itself, k3s without host, 3 upgrade cases), every die case checks no host commands, no CRDs, no values file. The k3s-host upgrade test got a deployed release. Red against HEAD's Cilium.pm; prove -lr t/ green: 31 files, 653 tests, 0 'uninitialized'. Unverified live: upgrade_cilium against a real cluster (kubernetes-ocp). Also found (not touched, for the coordinator): install_cilium's _release_action returns 'reinstall' for pending-install even when has_deployed, and _purge_release then deletes every revision Secret incl. the deployed one after 'cilium uninstall'. Unreachable with normal Helm (pending-install exists only on a first install), but if it ever occurs it takes down the pod network; upgrade_cilium now dies stuck there instead.
+
+2026-09-27 00:03 commit-ready im Worktree /home/getty/dev/rex-rancher/.claude/worktrees/agent-a274f9b66d92af0ab, Branch worktree-agent-a274f9b66d92af0ab (auf fb166fb). lib/Rex/Rancher/Cilium.pm (_require_deployed_release, _die_release_stuck, present entfernt, POD upgrade_cilium) + t/cilium.t. prove -lr t/ grün: 31 Dateien, 653 Tests. Nicht committet, Changes unberührt.
+
+2026-09-27 00:14 Committed 4f806f5 (rebased onto local main 3039398, was fab3b7c on fb166fb -- no conflicts, only Changes touched by both sides, k66/k70 entry and the others coexist); main follows per Fast-Forward durch den Orchestrator. prove -lr t/ green: 33 files, 715 tests. Unverified live.
+
+2026-09-27 LIVE (kubernetes-ocp-c3; OCP vendored main fea3843): NICHT live getroffen (upgrade_cilium bei pending-*).
+
+2026-09-27 LIVE-Triage (Auftrag kubernetes-ocp-e5; A = OCP live-486716a mit rex-rancher fea3843, B = live-486716a-rr5a885 mit 5a885af): bleibt in review. Nicht getroffen: upgrade_cilium lief in A/B nie, und kein Release war pending. Live-Schritt (ocpt mit laufendem OCP-Cluster, gehört zu OCP k206): (a) wie k66: kein deployter Release -> stirbt vor dem Host mit Verweis auf install_cilium; (b) das neueste Revision-Secret sh.helm.release.v1.cilium.vN auf status=pending-upgrade labeln -> upgrade_cilium UND install_cilium sterben vor dem Host mit derselben Meldung, die das Secret nennt; danach das Label zurücksetzen.
+
+2026-09-30 22:50 Release-Manager: done. Code in main (4f806f5), prove -lr t gruen (35 Dateien, 897 Tests, main a0d997d). Offen war nur der Live-Nachweis des Fehler-/Verweigerungspfads; der Schritt steht jetzt gebuendelt auf k88 (Live-Nachweise der Fehlerpfade).
