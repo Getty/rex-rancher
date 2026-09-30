@@ -1,0 +1,40 @@
+---
+class: standard
+created: 2026-09-30T22:47:46Z
+id: 88
+priority: medium
+status: backlog
+tags:
+- live
+- ocp
+title: Live-Nachweise der Fehlerpfade
+updated: 2026-09-30T23:26:22Z
+---
+
+Sammelkarte fuer die offenen Live-Nachweise aus k42 k43 k44 k46 k51 k55 k56 k63 k66 k70 k72 k74 k75 k78 k79 k82 (alle 2026-10-01 auf done: Code in main, prove -lr t gruen, Durchlaufpfade live ueber kubernetes-ocp belegt). Offen sind nur die Fehler-/Verweigerungspfade, die OCP nie trifft. Schritte aus der LIVE-Triage 2026-09-27 (kubernetes-ocp-e5); Details auf den Ursprungskarten.
+
+ocpt-w (Debian 13):
+1. k42 + k55 NTP-Fallback: systemd-timesyncd stoppen (NTPSynchronized=no), chrony per apt-Pin (Pin-Priority -1) uninstallierbar machen, prepare_node -> 'chrony install failed (...), falling back to systemd-timesyncd' und 'Using systemd-timesyncd for NTP'. Danach timesyncd zusaetzlich maskieren, prepare_node -> WARN 'NO TIME SYNCHRONIZATION IS ACTIVE on this node', Lauf geht weiter.
+2. k44 Join-Hinweis: install_agent (RKE2 und K3s) mit server auf unerreichbarer Adresse (https://10.5.10.99:9345 bzw. :6443) -> stirbt nach dem Service-Wait mit 'It joins the cluster via https://10.5.10.99:... -- check that this node can reach that address' ueber dem Journal-Ende.
+3. k79 Uninstall-Warnungen (auch otoh moeglich): uninstall_cmd ohne tc (/usr/sbin/tc voruebergehend wegbenennen) bzw. ohne vollstaendiges iptables-save/-restore-Backend -> 'rex-rancher-uninstall-warning: ...' ueber uninstall_warnings, Exit bleibt 0.
+
+ocpt-cp (laufendes OCP-RKE2, danach K3s unter /var/lib/rancher/k3s):
+4. k46 + k72 Bare-Template: agent/etc/containerd/config.toml.tmpl nur mit 'version = 2' + imports (Rex::GPU-0.001-Form) schreiben, rke2-server neu starten (config.toml bare, ohne SystemdCgroup), OCP-Re-Bootstrap -> 'Removing .../config.toml.tmpl: it holds only imports and version = 2 ...', genau ein Restart mit Warnung, config.toml wieder mit SystemdCgroup = true; zweiter Re-Bootstrap startet nicht neu. Zusaetzlich fremdes Template (mit {{ template "base" . }}) -> 'Keeping ...', keine Loeschung.
+5. k74 update_registries: Bare-Template wie in 4. hinlegen und rendern lassen, dann Rex::Rancher::Server::update_registries direkt -> Template vor dem Restart entfernt, config.toml/hosts.toml tragen die Mirrors aus registries.yaml.
+6. k51 upgrade_cilium ohne kubeconfig direkt aufrufen -> stirbt mit der kubeconfig-Meldung, kein Host-Befehl (kein 'cilium version --client', mtime von /usr/local/bin/cilium und Values-Datei unveraendert). Offline in t/cilium.t vollstaendig; ob das reicht, entscheidet der Maintainer.
+7. k56 Versionsuebergaenge (RKE2): (a) Cluster auf v1.36.(n-1) gepinnt, Re-Bootstrap mit v1.36.n gepinnt -> Installation plus genau ein Restart (MainPID wechselt); (b) Re-Run ohne version und ohne hold_running -> Kanal-Ziel (update.rke2.io) im Log, bei neuerer Minor Warnung ohne Restart; (c) Pin mit Downgrade oder >1 Minor -> stirbt vor dem Installer, Binary bleibt. Optional otoh: nvidia-container-toolkit per apt upgraden, Re-Run -> kein Restart deswegen.
+8. k63 gestoppter Dienst: systemctl stop rke2-server, dann install_server mit Pin >1 Minor entfernt oder Downgrade -> stirbt vor dem Installer mit der installierten Binary als Referenz; Binary unveraendert.
+
+ocpt (Cluster mit laufendem Cilium; gehoert zu OCP k206):
+9. k43 (a) K3s: install_cilium ueber dem laufenden Cilium OHNE k8s_service_host -> 'already deployed with the requested values, nothing to do', kein k8s_service_host-die (Host aus der DaemonSet-Env KUBERNETES_SERVICE_HOST). (b) ensure_gateway_api_crds (OCP update_gateway_api) mit noch nicht angewendeter Version >= v1.6.1 -> 'Applying Gateway API CRDs ...' und 'Restarting cilium-operator so it picks up the Gateway API CRDs', Operator-Pod rollt.
+10. k66 + k70 upgrade_cilium ohne deployten Release (RKE2 nach install_server, vor install_cilium) -> stirbt vor dem Host mit Verweis auf install_cilium (keine CLI-Installation, keine Values-Datei, keine Gateway-API-CRDs); auf laufendem Cluster (ocp update --component cilium) laeuft das Upgrade durch. Dann neuestes Revision-Secret sh.helm.release.v1.cilium.vN auf status=pending-upgrade labeln -> upgrade_cilium UND install_cilium sterben vor dem Host mit derselben Meldung, die das Secret nennt; Label zuruecksetzen.
+11. k82 auf das deployte Release ein neues Revision-Secret mit status=pending-install legen -> install_cilium stirbt vor dem Host mit der Meldung von upgrade_cilium; kein 'cilium uninstall', deploytes Secret und Pod-Netz bleiben; Test-Secret danach loeschen.
+12. k78 rancher_deploy_server und rancher_deploy_agent (z. B. eg/lan.Rexfile auf ocpt umgebogen) einmal normal, dann mit Verletzung (abweichendes cluster_cidr am laufenden Server oder Cilium-Reste) -> stirbt vor prepare_node, ohne apt-Lauf, ohne Hostname- und sysctl.d-Aenderung. Die Verdrahtung in rancher_deploy_* ist live nie gelaufen (OCP ruft preflight_* direkt) -- wichtigster Punkt dieser Karte.
+
+GPU-Host (otoh oder citilan):
+13. k75 rancher_deploy_server mit gpu => 1 (gpu_setup Standard) und Rex::GPU >= 0.002 -> Pruefung laesst durch, gpu_setup laeuft; mit Rex::GPU 0.001 im @INC -> stirbt vor jedem Host-Befehl mit '... nothing was done on the host'.
+
+Done: jeder Schritt live gelaufen und das Ergebnis hier notiert (Host, rex-rancher-Commit, Logzeile); ein Befund, der vom erwarteten Verhalten abweicht, wird eigene Karte.
+
+
+Schritt 12 (k78) ERLEDIGT 2026-10-01 -- Details auf k78. Cluster ocpt (ocpt-cp + ocpt-w, RKE2 v1.36.4) steht jetzt für die Schritte 4-11 bereit.
