@@ -1,5 +1,7 @@
 Revision history for Rex-Rancher
 
+{{$NEXT}}
+
 0.003     2026-10-01 04:03:18Z
   - install_cilium with a kubeconfig no longer prints "Use of uninitialized
     value" on a cluster without a Cilium Helm release (every fresh

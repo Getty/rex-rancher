@@ -5,7 +5,7 @@ package Rex::Rancher;
 use v5.14.4;
 use warnings;
 
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 
 use Rex::Rancher::Node;
 use Rex::Rancher::Server;

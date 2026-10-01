@@ -1,7 +1,7 @@
 # ABSTRACT: Take RKE2/K3s and Cilium's datapath off a host, and refuse to install over what Cilium left
 
 package Rex::Rancher::Uninstall;
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 use v5.14.4;
 use warnings;
 

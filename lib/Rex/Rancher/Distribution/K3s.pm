@@ -1,7 +1,7 @@
 # ABSTRACT: K3s: paths, services and installer
 
 package Rex::Rancher::Distribution::K3s;
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 use v5.14.4;
 use Moo;
 use JSON::MaybeXS;
