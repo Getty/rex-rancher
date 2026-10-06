@@ -231,6 +231,21 @@ parsed dies too, with its name. A server not set up yet is not checked.
 
 Node labels applied at join time, as an arrayref of C<key=value> strings.
 
+=item C<kubeconfig_mode>
+
+File mode of the kubeconfig the server writes on the node
+(C</etc/rancher/rke2/rke2.yaml>, K3s: C</etc/rancher/k3s/k3s.yaml>), as a
+string of a zero and three octal digits such as C<'0640'>, written as
+C<write-kubeconfig-mode> to C<config.yaml> on RKE2 and K3s alike. Anything
+else dies before the host is touched, a number included: the Perl literal
+C<0640> is the number 416. Default: nothing written, so the distribution's
+own C<0600 root:root> applies.
+
+That file holds the cluster admin's client certificate and key: with a mode
+others can read (C<'0644'>), every local account on the server node is
+cluster admin. Nothing in Rex::Rancher needs more than the default;
+L</get_kubeconfig> and the Cilium CLI read the file as root.
+
 =item C<registries>
 
 Private registry mirror configuration. Written to C<registries.yaml> in the
@@ -321,6 +336,7 @@ sub install_server {
   my $method       = $checked->{install_method};
   my $cluster_cidr = $checked->{cluster_cidr};
   my $version      = $checked->{version};
+  my $kubeconfig_mode = $checked->{kubeconfig_mode};
   my $hold         = $opts{hold_running};
   my $cilium       = exists $opts{cilium} ? $opts{cilium} : 1;
   my $token        = _resolve_token($dist, $opts{token});
@@ -338,7 +354,7 @@ sub install_server {
 
   # Write config.yaml
   _write_config($dist, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable, $cluster_cidr);
+    $node_name, $disable, $cluster_cidr, $kubeconfig_mode);
 
   # Write registries.yaml if configured
   if ($registries) {
@@ -360,7 +376,8 @@ sub install_server {
 =method preflight_server(%opts)
 
   my $checked = Rex::Rancher::Server::preflight_server(%opts);
-  # { version => ..., install_method => 'script', cluster_cidr => ... }
+  # { version => ..., install_method => 'script', cluster_cidr => ...,
+  #   kubeconfig_mode => ... }
 
 Everything L</install_server> checks before it writes or installs, with the
 same options and in the same order, and nothing else: it only reads the
@@ -372,7 +389,7 @@ exported.
 =over
 
 =item 1. the pure option checks: C<distribution>, C<install_method> (with
-C<version>), C<cluster_cidr>;
+C<version>), C<cluster_cidr>, C<kubeconfig_mode>;
 
 =item 2. Cilium datapath state an earlier cluster left on a host without
 RKE2 or K3s (L<Rex::Rancher::Uninstall/check_cilium_residue>), the first
@@ -392,7 +409,8 @@ under C<hold_running>, else C<version>;
 
 Dies as L</install_server> would. Returns a hashref: the C<version> this run
 installs (held, pinned, or C<undef> for the stable channel), the
-C<install_method> and the C<cluster_cidr> (C<undef> when not given).
+C<install_method>, the C<cluster_cidr> and the C<kubeconfig_mode> (each
+C<undef> when not given).
 
 =cut
 
@@ -405,6 +423,7 @@ sub preflight_server {
   my %checked = (
     install_method => scalar Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version}),
     cluster_cidr   => scalar Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr}),
+    kubeconfig_mode => scalar Rex::Rancher::Options->check_kubeconfig_mode($opts{kubeconfig_mode}),
   );
   # The first read of the host: Cilium state an earlier cluster left on a host
   # without RKE2/K3s would hang every image pull of this install (k71).
@@ -754,7 +773,7 @@ sub _generate_token {
 
 sub _build_server_config {
   my ($dist, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable, $cluster_cidr) = @_;
+    $node_name, $disable, $cluster_cidr, $kubeconfig_mode) = @_;
 
   my %config = (
     'token' => $token,
@@ -782,6 +801,12 @@ sub _build_server_config {
   $config{server} = $server if $server;
   $config{'node-name'} = $node_name if $node_name;
 
+  # Only when asked for: unwritten, rke2.yaml / k3s.yaml get the
+  # distribution's own 0600, which the cluster admin's key in them wants. A
+  # string, so that YAML::PP quotes it: an unquoted 0644 is the number 420 to
+  # the distributions' YAML reader.
+  $config{'write-kubeconfig-mode'} = "$kubeconfig_mode" if defined $kubeconfig_mode;
+
   if ($tls_san) {
     my @sans = ref $tls_san eq 'ARRAY' ? @{$tls_san} : split(/,/, $tls_san);
     $config{'tls-san'} = \@sans;
@@ -797,11 +822,11 @@ sub _build_server_config {
 
 sub _write_config {
   my ($dist, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable, $cluster_cidr) = @_;
+    $node_name, $disable, $cluster_cidr, $kubeconfig_mode) = @_;
 
   my $config =
     _build_server_config($dist, $token, $server, $tls_san, $node_labels, $cilium,
-      $node_name, $disable, $cluster_cidr);
+      $node_name, $disable, $cluster_cidr, $kubeconfig_mode);
 
   my $config_file = $dist->config_file;
   Rex::Logger::info("Writing config to $config_file");

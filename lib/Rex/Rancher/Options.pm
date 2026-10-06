@@ -43,6 +43,25 @@ sub check_cluster_cidr {
   return $cidr;
 }
 
+=method check_kubeconfig_mode
+
+  Rex::Rancher::Options->check_kubeconfig_mode($mode);
+
+Returns C<$mode> when it is a file mode written as a string of a zero and
+three octal digits (C<'0640'>), C<undef> for C<undef>, and dies otherwise.
+The leading zero is required so that only a string passes: the Perl literal
+C<0640> is the number 416, which would read as another mode.
+
+=cut
+
+sub check_kubeconfig_mode {
+  my ( $self, $mode ) = @_;
+  return unless defined $mode;
+  die "kubeconfig_mode must be an octal file mode as a string such as '0640', "
+    . "got '$mode'\n" unless !ref $mode && $mode =~ /\A0[0-7]{3}\z/;
+  return "$mode";
+}
+
 =method check_ipam_mode
 
   Rex::Rancher::Options->check_ipam_mode($mode);
@@ -75,6 +94,7 @@ sub check_ipam_mode {
 
   my $method = Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version});
   my $cidr   = Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr});
+  my $kcmode = Rex::Rancher::Options->check_kubeconfig_mode($opts{kubeconfig_mode});
   my $mode   = Rex::Rancher::Options->check_ipam_mode($opts{ipam_mode});
 
 =head1 DESCRIPTION

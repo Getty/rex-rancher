@@ -302,6 +302,15 @@ it, with a warning naming both.
 
 Node labels to apply, as an arrayref of C<key=value> strings.
 
+=item C<kubeconfig_mode>
+
+File mode of the kubeconfig the server writes on the node (C<rke2.yaml> /
+C<k3s.yaml>), as a string such as C<'0640'>, written as
+C<write-kubeconfig-mode> to C<config.yaml> on RKE2 and K3s alike; anything
+else dies before the node is prepared. Default: the distribution's own
+C<0600 root:root>, which keeps the cluster admin's key in that file from the
+node's other accounts. See L<Rex::Rancher::Server/install_server>.
+
 =item C<registries>
 
 Private registry mirror configuration hashref, written to C<registries.yaml>.
@@ -549,7 +558,7 @@ changed. These only read; C<install_agent> asks them again after node
 preparation and GPU setup.
 
 The server-only options have no effect on an agent and are ignored:
-C<tls_san>, C<disable>, C<cluster_cidr>, C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
+C<tls_san>, C<disable>, C<cluster_cidr>, C<kubeconfig_mode>, C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,
 C<cilium_helm_values>, C<gateway_api>, C<gateway_api_version>,
 C<gateway_api_channel>, C<k8s_service_host>, C<ipam_mode> and C<gpu_device_plugin>. Whether
 a K3s agent runs Flannel and kube-proxy or leaves both to Cilium follows the
