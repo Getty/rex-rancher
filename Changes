@@ -1,6 +1,10 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - The Cilium CLI install checks the release's .sha256sum before the binary
+    lands in /usr/local/bin, and aborts on a missing or wrong sum. Download
+    and unpacking run in a mktemp -d directory (removed afterwards, also on
+    failure) instead of fixed names in /tmp.
   - K3s servers are installed without --write-kubeconfig-mode=644:
     /etc/rancher/k3s/k3s.yaml, which holds the cluster admin's client
     certificate and key, gets K3s' own 0600 root:root, as rke2.yaml does.

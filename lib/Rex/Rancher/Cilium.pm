@@ -15,6 +15,7 @@ use Rex::Commands::File;
 use Rex::Commands::Gather;
 use Rex::Commands::Run;
 use Rex::Logger;
+use Rex::Rancher::Checksum;
 use Rex::Rancher::Distribution;
 use Rex::Rancher::Options;
 use YAML::PP;
@@ -732,11 +733,36 @@ sub _install_cilium_cli {
 
   my $url = "https://github.com/cilium/cilium-cli/releases/download/$cli_version/cilium-linux-$arch.tar.gz";
 
-  run "curl -fsSL '$url' -o /tmp/cilium-linux-$arch.tar.gz", auto_die => 1;
-  run "tar xzf /tmp/cilium-linux-$arch.tar.gz -C /tmp cilium", auto_die => 1;
-  run "mv /tmp/cilium /usr/local/bin/cilium", auto_die => 1;
-  run "chmod 755 /usr/local/bin/cilium", auto_die => 1;
-  run "rm -f /tmp/cilium-linux-$arch.tar.gz", auto_die => 0;
+  my $asset = "cilium-linux-$arch.tar.gz";
+
+  # Own directory: a predictable /tmp name is a symlink target for any
+  # local user, and the download runs as root.
+  my $dir = run "mktemp -d", auto_die => 1;
+  chomp $dir;
+  die "mktemp -d returned no usable directory: '$dir'\n" unless $dir =~ m{\A/\S+\z};
+
+  my $ok = eval {
+    run "curl -fsSL '$url' -o '$dir/$asset'", auto_die => 1;
+    run "curl -fsSL '$url.sha256sum' -o '$dir/$asset.sha256sum'", auto_die => 1;
+
+    my $sums   = run "cat '$dir/$asset.sha256sum'", auto_die => 1;
+    my $actual = run "sha256sum '$dir/$asset'", auto_die => 1;
+    # scalar(): both return empty on no match; in this list they must stay undef.
+    Rex::Rancher::Checksum->verify_sha256(
+      scalar(Rex::Rancher::Checksum->expected_sha256($sums, $asset)),
+      scalar(Rex::Rancher::Checksum->sha256_of($actual)),
+      $asset,
+    );
+    Rex::Logger::info("  $asset: sha256 verified");
+
+    run "tar xzf '$dir/$asset' -C '$dir' cilium", auto_die => 1;
+    run "mv '$dir/cilium' /usr/local/bin/cilium", auto_die => 1;
+    run "chmod 755 /usr/local/bin/cilium", auto_die => 1;
+    1;
+  };
+  my $err = $@;
+  run "rm -rf '$dir'", auto_die => 0;
+  die $err unless $ok;
 
   Rex::Logger::info("Cilium CLI $cli_version installed to /usr/local/bin/cilium");
 }
