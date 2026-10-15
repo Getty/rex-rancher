@@ -161,6 +161,14 @@ subtest 'the line: every step, in order' => sub {
     [ 'then the one at 100 removed, only with one at 0 there' =>
       'ip rule list 2>/dev/null | grep -qE "^0:[[:space:]].*lookup local"'
       . ' && ip rule del from all lookup local priority 100 2>/dev/null || true' ],
+    [ 'IPv6: the same tables drained, after the IPv4 lines' =>
+      'for t in 2004 2005; do while ip -6 rule del lookup $t 2>/dev/null; do :; done; done' ],
+    [ 'IPv6: the local lookup put back at priority 0 first' =>
+      'ip -6 rule list 2>/dev/null | grep -qE "^0:[[:space:]].*lookup local"'
+      . ' || ip -6 rule add from all lookup local priority 0 2>/dev/null || true' ],
+    [ 'IPv6: then the one at 100 removed, only with one at 0 there' =>
+      'ip -6 rule list 2>/dev/null | grep -qE "^0:[[:space:]].*lookup local"'
+      . ' && ip -6 rule del from all lookup local priority 100 2>/dev/null || true' ],
     [ 'outcome: a distribution binary still on PATH' =>
       'for b in rke2 k3s; do p=$(command -v $b 2>/dev/null) && still="$still $p"; done' ],
     [ '... fails the line' =>

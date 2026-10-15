@@ -1,6 +1,10 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - uninstall_node also removes Cilium's IPv6 ip rules (tables 2004/2005, the
+    local lookup moved to priority 100), after the IPv4 ones and with the same
+    tolerance: a host without IPv6 is unaffected. cilium_residue does not
+    report them.
   - fetch_kubeconfig, patch_kubeconfig_server and kubeconfig_server take
     host:port as the server address (cp:7443, [2001:db8::10]:7443); the port
     replaces the kubeconfig's. Before, cp:7443 produced a broken URL. Without

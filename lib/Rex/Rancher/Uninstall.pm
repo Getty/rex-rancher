@@ -188,6 +188,12 @@ C</run/cilium> with C<--one-file-system>;
 then the C<local> table lookup Cilium moved from priority C<0> to C<100>:
 put back at C<0> first, and the one at C<100> deleted only once a
 priority C<0> one is there, so the host never lacks a C<local> lookup.
+The same again for IPv6 (C<ip -6 rule>, same tables, same order, after the
+IPv4 rules). Rex::Rancher's own Cilium is IPv4-only; the IPv6 rules are
+there for what a dual-stack Cilium left, and are removed defensively. A host
+without IPv6 fails every C<ip -6> call quietly and is not affected. Only the
+rules go, not the routes in the tables, as for IPv4; L</cilium_residue> does
+not report IPv6 rules.
 
 =back
 
@@ -244,6 +250,14 @@ sub uninstall_cmd {
       . ' || ip rule add from all lookup local priority 0 2>/dev/null || true',
     'ip rule list 2>/dev/null | grep -qE "^0:[[:space:]].*lookup local"'
       . ' && ip rule del from all lookup local priority 100 2>/dev/null || true',
+    # The same for IPv6, after the IPv4 lines. Same tolerance: a host without
+    # IPv6 (no kernel support, ipv6.disable=1) fails every `ip -6` quietly.
+    'for t in ' . join(' ', $self->_cilium_ip_tables)
+      . '; do while ip -6 rule del lookup $t 2>/dev/null; do :; done; done',
+    'ip -6 rule list 2>/dev/null | grep -qE "^0:[[:space:]].*lookup local"'
+      . ' || ip -6 rule add from all lookup local priority 0 2>/dev/null || true',
+    'ip -6 rule list 2>/dev/null | grep -qE "^0:[[:space:]].*lookup local"'
+      . ' && ip -6 rule del from all lookup local priority 100 2>/dev/null || true',
     # Every step above is guarded, so without this the line exited 0
     # whatever happened -- a missing or failing uninstaller left rke2 in
     # place and read as a clean uninstall (kubernetes-ocp k175).
