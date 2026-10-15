@@ -1,6 +1,11 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - fetch_kubeconfig, patch_kubeconfig_server and kubeconfig_server take
+    host:port as the server address (cp:7443, [2001:db8::10]:7443); the port
+    replaces the kubeconfig's. Before, cp:7443 produced a broken URL. Without
+    a port nothing changes (the kubeconfig's 6443 is kept); an invalid port
+    dies.
   - The Cilium CLI install checks the release's .sha256sum before the binary
     lands in /usr/local/bin, and aborts on a missing or wrong sum. Download
     and unpacking run in a mktemp -d directory (removed afterwards, also on

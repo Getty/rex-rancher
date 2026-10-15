@@ -566,8 +566,9 @@ C<rke2> (default) or C<k3s>. Anything else dies before the host is read.
 =item C<server>
 
 The address the kubeconfig will reach the Kubernetes API at: a host name or
-an IPv4/IPv6 address, without scheme or port. It must be a name the API
-server certificate is made for (the node's own IPs and host name, or a
+an IPv4/IPv6 address, without scheme, optionally with a port (C<cp:7443>,
+C<[2001:db8::10]:7443>; the kubeconfig's own port, 6443, is kept without one).
+It must be a name the API server certificate is made for (the node's own IPs and host name, or a
 C<tls_san>), since the CA stays. Omitted, the kubeconfig keeps the loopback
 address the node wrote, which works only on the node itself (a C<Local>
 connection) or through a tunnel to its port 6443.
@@ -666,10 +667,13 @@ C<https://SERVER:PORT>, the port kept. Nothing else changes: the CA
 C<$server> must be a name the API server certificate is made for. A server
 URL that is not loopback (a configured C<bind-address>) is left alone.
 
-C<$server> is a host name or an IPv4/IPv6 address, without scheme or port;
-an IPv6 address is put in brackets (C<https://[2001:db8::10]:6443>), one
-already in brackets is taken as it is. Dies without C<$content> or
-C<$server>.
+C<$server> is a host name or an IPv4/IPv6 address, without scheme, with an
+optional port: C<cp>, C<cp:7443>, C<[2001:db8::10]:7443>. A port given
+replaces the one in the kubeconfig; without one the kubeconfig's is kept. An
+IPv6 address is put in brackets (C<https://[2001:db8::10]:6443>), one already
+in brackets is taken as it is; a port after an IPv6 address needs the
+brackets. Dies without C<$content> or C<$server>, or on an invalid port
+(not 1 to 65535) or address.
 
 =cut
 
@@ -680,9 +684,43 @@ sub patch_kubeconfig_server {
     unless defined $server && length $server;
 
   $server = '' . $server;    # a Rex server object names its host when stringified
-  $server = '[' . $server . ']' if defined inet_pton(AF_INET6, $server);
-  $content =~ s{https://(?:127\.0\.0\.1|\[::1\]):(\d+)}{https://$server:$1}g;
+  my ( $host, $port ) = split_server_address($server);
+  if ( defined $port ) {
+    $content =~ s{https://(?:127\.0\.0\.1|\[::1\]):\d+}{https://$host:$port}g;
+  }
+  else {
+    $content =~ s{https://(?:127\.0\.0\.1|\[::1\]):(\d+)}{https://$host:$1}g;
+  }
   return $content;
+}
+
+# "host", "host:port", "[v6]", "[v6]:port" or a bare v6 address into the host
+# as it goes into a URL (a v6 address bracketed) and the port, undef when
+# none was given. A malformed port or address dies.
+sub split_server_address {
+  my ($server) = @_;
+  my ( $host, $port );
+  if ( $server =~ /^\[([^\]]*)\](?::(.*))?$/s ) {
+    ( $host, $port ) = ( $1, $2 );
+    die "patch_kubeconfig_server: '$server' is not a valid server address\n"
+      unless defined inet_pton( AF_INET6, $host );
+    $host = '[' . $host . ']';
+  }
+  elsif ( defined inet_pton( AF_INET6, $server ) ) {
+    $host = '[' . $server . ']';
+  }
+  elsif ( $server =~ /^([^:\[\]]+)(?::(.*))?$/s ) {
+    ( $host, $port ) = ( $1, $2 );
+  }
+  else {
+    die "patch_kubeconfig_server: '$server' is not a valid server address\n";
+  }
+  if ( defined $port ) {
+    die "patch_kubeconfig_server: invalid port '$port' in server address '$server'\n"
+      unless $port =~ /^[0-9]{1,5}$/ && $port >= 1 && $port <= 65535;
+    $port += 0;
+  }
+  return ( $host, $port );
 }
 
 # The admin client certificate and key are in there: created 0600, and an
