@@ -19,6 +19,7 @@ and k3s differ in is one Moo object, `Rex::Rancher::Distribution`:
 | `Rex::Rancher::Cilium` | `install_cilium`, `upgrade_cilium`, `ensure_gateway_api_crds` | Cilium CLI + Helm values |
 | `Rex::Rancher::K8s` | `wait_for_api`, `deploy_nvidia_device_plugin`, `untaint_node` | local K8s API ops |
 | `Rex::Rancher::Distribution` (+ `::RKE2`, `::K3s`) | — (Moo, `new_for($name, role => 'server'\|'agent')`, class loaded via `use_module`) | per-distribution paths, service, installer lines, start verb, version skew, the host steps server and agent share; `cilium_helm_defaults`, `needs_k8s_service_host`, `gateway_api_crd_chart`, `live_verified`, `unknown_distribution` |
+| `Rex::Rancher::Uninstall` | `uninstall_node` | `uninstall_cmd` (the uninstaller one-liner incl. Cilium state: ip rules IPv4 and IPv6, `/run/cilium`), `uninstall_failure`, `check_cilium_residue` / `cilium_residue` (install guard: Cilium datapath state an earlier cluster left behind) |
 | `Rex::Rancher::Options` | — | pure option checks: `resolve_install_method`, `check_cluster_cidr` |
 | `Rex::Rancher::Checksum` | — | `expected_sha256`, `sha256_of`, `verify_sha256` for the artifact install |
 
@@ -89,8 +90,7 @@ version broke a real deploy:
 
 - **Cilium re-deploy** (`install_cilium`): with a local `kubeconfig` the Helm release
   Secrets are read and `_release_action` picks install / noop / upgrade / reinstall, or
-  dies on `pending-upgrade`/`pending-rollback` (the deployed revision still carries the
-  pod network). Only *without* `kubeconfig` does `cilium install` still run with
+  dies on a stuck release (see "Stuck Cilium release"). Only *without* `kubeconfig` does `cilium install` still run with
   `auto_die => 0` and swallow `/cannot re-use a name/i` as success — removing that makes
   every re-run without `kubeconfig_file` fail. `rancher_deploy_server` passes the
   kubeconfig only once `wait_for_api` answered.
@@ -106,6 +106,18 @@ version broke a real deploy:
   and the `apt-daily` timers are stopped first, then `apt-get update` runs with
   `-o DPkg::Lock::Timeout=120` and `auto_die => 0`. `DPkg::Lock::Timeout` covers only the
   dpkg lock, not the apt *frontend* lock that unattended-upgrades holds on a cold boot.
+- **Install guards, in order** (`install_server`, the first host read onwards):
+  `check_cilium_residue` → `check_version_skew` → `check_established_cluster_cidr`
+  (server only); `remove_bare_containerd_template` runs before `start_verb`. Agents have
+  the first two. They die before anything changes on the host — keep them ahead of the
+  installer.
+- **Stuck Cilium release** (`_refuse_stuck_release`): `install_cilium` and
+  `upgrade_cilium` die right after the release read, before the host is touched, on
+  `pending-upgrade`, `pending-rollback` and `pending-install` over a deployed revision.
+  `pending-install` without a deployed revision is still purged and reinstalled.
+- **Cilium CLI** (`_install_cilium_cli`): downloaded into a `mktemp -d` directory and
+  checked against the release's `.sha256sum` before it lands in `/usr/local/bin`; a
+  missing or wrong sum dies. Never go back to fixed `/tmp` names.
 - **Config writes** use `YAML::PP->new(boolean => 'JSON::PP')` so `disable-kube-proxy`
   and friends serialise as real YAML booleans, not `1`/`0` strings.
 
@@ -134,9 +146,20 @@ disabling the bundled CNI without installing Cilium leaves the cluster with no n
 - `tls_san` — accepts a string, comma-separated list, or arrayref; **the first entry
   doubles as the kubeconfig server address** in step 5. A missing/oddly-ordered `tls_san`
   produces a kubeconfig still pointing at `127.0.0.1`.
+- `cluster_cidr` — on an established server (service active, or `server/token` present)
+  a value that differs from the one in `config.yaml` + `config.yaml.d` dies
+  (`check_established_cluster_cidr`); changing it on a live cluster breaks pod routing.
+- `kubeconfig_server` — may carry a port (`cp:7443`, `[v6]:7443`); without one the
+  kubeconfig keeps its 6443. Split by `Rex::Rancher::Server::split_server_address`.
 - `kubeconfig_file` — its absence silently disables both the local save and the GPU
   device-plugin step, even under `gpu => 1`. Not an error, but say so if a user expects a
   file.
+
+## Local vs remote: Rex::Commands::Fs
+
+`Rex::Commands::Fs` exports `chmod`, `stat`, `unlink` … into `Server.pm`; a bare call
+runs on the **remote** host. For a file on the operator's machine (the saved kubeconfig)
+use `CORE::chmod`, `CORE::stat`, `CORE::unlink`.
 
 ## Conventions in this distribution
 
