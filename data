@@ -1,0 +1,36 @@
+---
+claimed_at: 2026-10-15T23:26:16Z
+claimed_by: coordinator-abbau
+class: standard
+completed: 2026-10-15T23:26:16Z
+created: 2026-10-06T19:50:54Z
+id: 89
+priority: medium
+started: 2026-10-15T22:21:46Z
+status: done
+tags:
+- security
+- cilium
+- download
+- review-2026-10-06
+title: Cilium-CLI wird ohne Prüfsumme und über feste Pfade in /tmp installiert
+updated: 2026-10-15T23:26:16Z
+---
+
+`lib/Rex/Rancher/Cilium.pm:716-741` (`_install_cilium_cli`):
+
+    run "curl -fsSL '$url' -o /tmp/cilium-linux-$arch.tar.gz", auto_die => 1;
+    run "tar xzf /tmp/cilium-linux-$arch.tar.gz -C /tmp cilium", auto_die => 1;
+    run "mv /tmp/cilium /usr/local/bin/cilium", auto_die => 1;
+
+1. **Keine Verifikation.** Das Binary wird als root nach `/usr/local/bin` gelegt und danach mit der Cluster-Admin-Kubeconfig ausgeführt (`_cilium_command`, `Cilium.pm:748-760`). Für rke2/k3s gibt es seit k13 den Artefakt-Weg mit sha256-Prüfung (`lib/Rex/Rancher/Checksum.pm`, `Distribution.pm:507`); die cilium-cli-Releases liefern zu jedem Tarball eine `.sha256sum`-Datei, die hier nicht geholt wird.
+2. **Vorhersagbare Namen in /tmp.** `curl -o` folgt einem vorhandenen Symlink: ein lokaler Benutzer, der `/tmp/cilium-linux-amd64.tar.gz` vorab als Symlink anlegt, lässt root eine beliebige Datei mit dem Tarball überschreiben. Der Artefakt-Weg nutzt dafür ein eigenes Verzeichnis.
+
+Fertig, wenn: Download und Entpacken in einem `mktemp -d`-Verzeichnis laufen, die `.sha256sum` des Releases geprüft wird (über die vorhandene Checksum-Klasse) und ein Offline-Test die erzeugten Kommandos sowie den Abbruch bei falscher Summe festhält.
+
+---
+Fleet review 2026-10-06 · kind: bug · confidence: verified
+
+2026-10-15 22:23 Cilium.pm _install_cilium_cli: mktemp -d dir, fetches <url>.sha256sum, verifies via Checksum before tar/mv, rm -rf always. New t/cilium-cli-install.t, prove -lr t green. Live-unverified: real release download + .sha256sum format.
+
+2026-10-15 23:25 Koordinator: geprüft (943 Tests grün, neue Tests gegen altes lib rot); Release-Format live gegen cilium-cli v0.20.1 geprüft (.sha256sum-Datei, expected_sha256 = sha256 des Tarballs). ff nach main.
