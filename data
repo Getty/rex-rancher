@@ -1,0 +1,28 @@
+---
+claimed_at: 2026-10-16T00:19:01Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-10-16T00:19:01Z
+created: 2026-10-16T00:14:30Z
+id: 90
+priority: medium
+started: 2026-10-16T00:15:07Z
+status: done
+tags:
+- uninstall
+- gpu
+- lab
+title: 'Uninstall: Reste des NVIDIA GPU Operators (/usr/local/nvidia, Operator-CDI-Specs)
+  entfernen'
+updated: 2026-10-16T04:52:39Z
+---
+
+Live 2026-10-16 (kubernetes-ocp Lab, crag/brain, #228): Nach dem Uninstall bleiben /usr/local/nvidia/toolkit und /var/run/cdi/{k8s.device-plugin.nvidia.com-gpu.json,management.nvidia.com-gpu.yaml} des GPU Operators liegen. Beim erneuten Join nimmt rke2 die Operator-Runtime schon beim Start (aus der übrig gebliebenen Toolkit-Konfiguration), auf crag mit crun 1.14.1 brachen dann alle GPU-Sandboxes ('OCI runtime create failed: unknown version specified'), 2 von 2; bereinigt 3 von 3 ok.
+Vorschlag (frank): lib/Rex/Rancher/Uninstall.pm:220 _leftover_paths um /usr/local/nvidia und die beiden Operator-Specs unter /var/run/cdi erweitern. NICHT entfernen: /etc/cdi (dort schreibt Rex::GPU bei gpu.toolkit:false eigene Specs), Host-Treiber, /usr/bin/nvidia-*.
+Fertig, wenn: Uninstall entfernt genau diese Pfade (nur wenn vorhanden, idempotent), Test, POD/Skill nennen sie.
+
+2026-10-16 00:16 Uninstall _leftover_paths += /usr/local/nvidia, the two /var/run/cdi operator specs (same rm -rf --one-file-system line); POD, skill, t/uninstall.t (exact line + negative test) updated; prove -lr -j2 t green (compile+string logic only). Unverified live. Changes entry missing - for release-manager.
+
+Committed 4762c83 (branch worktree-karr-90-gpu-operator-residue): uninstall_cmd removes /usr/local/nvidia + two CDI specs under /var/run/cdi; /etc/cdi stays; Changes entry; core skill row. prove -lr -j2 t green (37 files, 943 tests). Live open: uninstall + re-join on crag/brain via kubernetes-ocp with GPU Operator leftovers present.
+
+Live 2026-10-16 (ocplab, crag node rm): /usr/local/nvidia und die zwei Operator-CDI-Specs entfernt; /var/run/cdi/nvidia.yaml und /etc/cdi/management.nvidia.yaml unangetastet. Folgender Re-Join ohne Reste-Fehler.
