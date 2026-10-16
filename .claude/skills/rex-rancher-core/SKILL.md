@@ -19,7 +19,7 @@ and k3s differ in is one Moo object, `Rex::Rancher::Distribution`:
 | `Rex::Rancher::Cilium` | `install_cilium`, `upgrade_cilium`, `ensure_gateway_api_crds` | Cilium CLI + Helm values |
 | `Rex::Rancher::K8s` | `wait_for_api`, `deploy_nvidia_device_plugin`, `untaint_node` | local K8s API ops |
 | `Rex::Rancher::Distribution` (+ `::RKE2`, `::K3s`) | — (Moo, `new_for($name, role => 'server'\|'agent')`, class loaded via `use_module`) | per-distribution paths, service, installer lines, start verb, version skew, the host steps server and agent share; `cilium_helm_defaults`, `needs_k8s_service_host`, `gateway_api_crd_chart`, `live_verified`, `unknown_distribution` |
-| `Rex::Rancher::Uninstall` | `uninstall_node` | `uninstall_cmd` (the uninstaller one-liner incl. Cilium state: ip rules IPv4 and IPv6, `/run/cilium`), `uninstall_failure`, `check_cilium_residue` / `cilium_residue` (install guard: Cilium datapath state an earlier cluster left behind) |
+| `Rex::Rancher::Uninstall` | `uninstall_node` | `uninstall_cmd` (the uninstaller one-liner incl. Cilium state: ip rules IPv4 and IPv6, `/run/cilium`; GPU Operator leftovers `/usr/local/nvidia` + `/var/run/cdi/{k8s.device-plugin.nvidia.com-gpu.json,management.nvidia.com-gpu.yaml}`, never `/etc/cdi` or `/var/run/cdi` whole), `uninstall_failure`, `check_cilium_residue` / `cilium_residue` (install guard: Cilium datapath state an earlier cluster left behind) |
 | `Rex::Rancher::Options` | — | pure option checks: `resolve_install_method`, `check_cluster_cidr` |
 | `Rex::Rancher::Checksum` | — | `expected_sha256`, `sha256_of`, `verify_sha256` for the artifact install |
 

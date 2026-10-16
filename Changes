@@ -1,6 +1,10 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - uninstall_node also removes the NVIDIA GPU Operator's leftovers
+    (/usr/local/nvidia and its two CDI specs under /var/run/cdi); /etc/cdi
+    and the host driver stay. Before, a re-join took the operator runtime
+    from the leftover toolkit config.
   - uninstall_node also removes Cilium's IPv6 ip rules (tables 2004/2005, the
     local lookup moved to priority 100), after the IPv4 ones and with the same
     tolerance: a host without IPv6 is unaffected. cilium_residue does not

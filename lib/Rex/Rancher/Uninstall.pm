@@ -172,6 +172,14 @@ removed with C<--one-file-system>: a mount the uninstaller left below them
 (containerd's task mounts live in C</run/k3s>) is skipped, never recursed
 into;
 
+=item * what the NVIDIA GPU Operator leaves: C</usr/local/nvidia> (its
+toolkit) and its two CDI specs
+C</var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json> and
+C</var/run/cdi/management.nvidia.com-gpu.yaml>, in the same C<rm -rf>. Without
+them a re-join has rke2 take the operator's runtime from the leftover toolkit
+configuration at start. Not removed: C</etc/cdi> (Rex::GPU's own specs), the
+rest of C</var/run/cdi>, the host driver, C</usr/bin/nvidia-*>;
+
 =item * Cilium's datapath: the C<clsact> qdisc of every device carrying a
 Cilium tc program (with C<tc> installed, see below); the pins in
 C</sys/fs/bpf/cilium> and
@@ -430,7 +438,22 @@ sub _env_files_cmd {
 # /opt/cni/bin, on both distributions) and the runtime dir RKE2 and K3s share.
 # A stale cilium binary is not cosmetic: install_cilium keeps a CLI whose
 # version happens to match instead of installing the one asked for.
-sub _leftover_paths { qw( /usr/local/bin/cilium /opt/cni /run/k3s ) }
+#
+# And the NVIDIA GPU Operator's: its toolkit directory /usr/local/nvidia and
+# the two CDI specs it writes under /var/run/cdi. A re-join otherwise has
+# rke2 pick the operator's runtime from the leftover toolkit config at start
+# (kubernetes-ocp #228: every GPU sandbox failed on an old crun). Exactly
+# these files, not /var/run/cdi (other specs live there), not /etc/cdi
+# (Rex::GPU writes its own specs there with gpu.toolkit false), no host
+# driver, no /usr/bin/nvidia-*. Distribution-independent.
+sub _leftover_paths {
+  qw(
+    /usr/local/bin/cilium /opt/cni /run/k3s
+    /usr/local/nvidia
+    /var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json
+    /var/run/cdi/management.nvidia.com-gpu.yaml
+  )
+}
 
 # A warning is one line on stderr, starting with the marker, so that
 # uninstall_warnings finds it among whatever else the channel carries. The
