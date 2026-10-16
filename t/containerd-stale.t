@@ -65,6 +65,7 @@ my ( @log, @warn, %host );
     }
     if ( $cmd =~ m{^rm -f .*config\.toml\.tmpl} ) { delete $host{tmpl}; return '' }
     if ( $cmd =~ m{^systemctl is-active --quiet} ) { $? = $host{active} ? 0 : 768; return '' }
+    if ( $cmd =~ m{^systemctl restart \S+ 2>&1} && $host{restart_fails} ) { $? = 256; return "Job failed\n" }
     if ( $cmd =~ m{^systemctl is-active } ) { return "active\n" }
     if ( $cmd =~ m{^command -v rke2} ) { return "/usr/local/bin/rke2\n" }
     if ( $cmd =~ m{^test -f} ) { return "yes\n" }
@@ -128,6 +129,42 @@ is_deeply( [ grep { /^systemctl (?:start|restart)/ } @log ], [ 'systemctl restar
 Rex::Rancher::Agent::_enable_service( $D->new_for( 'rke2', role => 'agent' ), 'https://cp:9345' );
 is_deeply( [ grep { /^systemctl (?:start|restart)/ } @log ], [ 'systemctl start --no-block rke2-agent.service' ],
   'rke2 agent, native config: start, a running agent is left alone' );
+
+# k83: heal_bare_containerd_template, the public remedy for a running node
+# outside an install (kubernetes-ocp's drift remedy).
+subtest 'heal_bare_containerd_template' => sub {
+  my $heal = sub {
+    my ( %state ) = @_;
+    %host = %state;
+    ( @log, @warn ) = ();
+    my $d = $D->new_for('rke2', role => 'agent');
+    return ( $d->heal_bare_containerd_template, [ grep { /^(?:rm -f|systemctl restart)/ } @log ] );
+  };
+
+  my ( $r, $cmds ) = $heal->( config => $CLOBBER, active => 1, tmpl => $CLOBBER );
+  is_deeply( $r, { removed => 1, restarted => 1 }, 'bare template, stale config, running: removed and restarted' );
+  like( $cmds->[0], qr{^rm -f /var/lib/rancher/rke2/agent/etc/containerd/config\.toml\.tmpl}, 'removed first' );
+  is( $cmds->[1], 'systemctl restart rke2-agent.service 2>&1', 'then one blocking restart' );
+  is( scalar @$cmds, 2, 'nothing else' );
+
+  ( $r, $cmds ) = $heal->( config => $CLOBBER, active => 1 );
+  is_deeply( $r, { removed => 0, restarted => 1 }, 'template already gone, config still stale: restarted' );
+
+  ( $r, $cmds ) = $heal->( config => $CLOBBER, active => 0, tmpl => $CLOBBER );
+  is_deeply( $r, { removed => 1, restarted => 0 }, 'not running: removed, not started' );
+
+  ( $r, $cmds ) = $heal->( config => $NATIVE, active => 1 );
+  is_deeply( $r, { removed => 0, restarted => 0 }, 'healthy node: nothing' );
+  is_deeply( $cmds, [], 'and no command that changes anything' );
+
+  ( $r, $cmds ) = $heal->( config => $NATIVE, active => 1, tmpl => $BASE );
+  is_deeply( $r, { removed => 0, restarted => 0 }, 'somebody\'s own template: kept, nothing restarted' );
+
+  %host = ( config => $CLOBBER, active => 1, restart_fails => 1 );
+  eval { $D->new_for('rke2', role => 'agent')->heal_bare_containerd_template };
+  like( $@, qr/Could not restart rke2-agent\.service after removing the bare containerd template: Job failed/,
+    'a failed restart dies naming it' );
+};
 
 is_deeply( \@perl_warnings, [], 'no Perl warnings' );
 

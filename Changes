@@ -1,6 +1,13 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - New Rex::Rancher::Distribution->heal_bare_containerd_template for a
+    running node outside an install: removes Rex::GPU 0.001's bare
+    config.toml.tmpl and restarts a running service once when its
+    config.toml is still that template's output; returns
+    { removed, restarted }. remove_bare_containerd_template no longer says
+    "<service> was not (re)started" on its own -- install_server,
+    install_agent and update_registries still add it, where a start follows.
   - uninstall_node also removes the NVIDIA GPU Operator's leftovers
     (/usr/local/nvidia and its two CDI specs under /var/run/cdi); /etc/cdi
     and the host driver stay. Before, a re-join took the operator runtime

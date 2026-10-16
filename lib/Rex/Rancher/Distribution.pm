@@ -1338,9 +1338,51 @@ sub remove_bare_containerd_template {
   my $out = Rex::Commands::Run::run("rm -f $tmpl 2>&1", auto_die => 0);
   die "Could not remove $tmpl, the bare containerd template that replaces "
     . "${label}'s own containerd config: " . ( ( $out // '' ) =~ s/\s+\z//r ) . "\n"
-    . "$service was not (re)started.\n"
     unless $? == 0;
   return 1;
+}
+
+# remove_bare_containerd_template right before a (re)start of the service
+# (install_server, install_agent, update_registries): a failure there also
+# means that start did not happen, which the error says. Outside a start
+# (heal_bare_containerd_template) the sentence would mislead (k83).
+sub _remove_bare_template_before_start {
+  my ( $self ) = @_;
+  my $removed = eval { $self->remove_bare_containerd_template };
+  die $@ . $self->service . " was not (re)started.\n" unless defined $removed;
+  return $removed;
+}
+
+=method heal_bare_containerd_template
+
+  my $r = $dist->heal_bare_containerd_template;
+  # { removed => 1, restarted => 1 }
+
+For a node outside an install -- a drift remedy on a running cluster:
+L</remove_bare_containerd_template>, then, when a running L</service>'s
+C<config.toml> is still that template's output (the same check
+L</start_verb> makes), one C<systemctl restart> so it renders its own
+containerd config again. A service that is not running is not started: its
+next start renders a fresh one. Returns a hash with C<removed> and
+C<restarted> (each C<1> or C<0>); dies when the removal or the restart fails.
+
+Inside L<Rex::Rancher::Server/install_server> and
+L<Rex::Rancher::Agent/install_agent> this is not needed: they remove the
+template, and their start already restarts.
+
+=cut
+
+sub heal_bare_containerd_template {
+  my ( $self ) = @_;
+  my $removed = $self->remove_bare_containerd_template;
+  return { removed => $removed, restarted => 0 } unless $self->_stale_containerd_restart;
+
+  my $service = $self->service;
+  my $out = Rex::Commands::Run::run("systemctl restart $service 2>&1", auto_die => 0);
+  die "Could not restart $service after removing the bare containerd template: "
+    . ( ( $out // '' ) =~ s/\s+\z//r ) . "\n"
+    unless $? == 0;
+  return { removed => $removed, restarted => 1 };
 }
 
 =method restart_watch

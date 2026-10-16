@@ -506,7 +506,7 @@ sub update_registries {
 
   # Before the restart: it would render Rex::GPU 0.001's bare containerd
   # template again, which carries no registry mirrors. Dies if it cannot.
-  $dist->remove_bare_containerd_template;
+  $dist->_remove_bare_template_before_start;
 
   # Restart containerd to pick up new config: whichever unit this node runs.
   run $dist->restart_services_cmd, auto_die => 0;
@@ -893,7 +893,7 @@ sub _install {
   # Before the start decision: this start would render Rex::GPU 0.001's bare
   # containerd template again (start_verb restarts a running service whose
   # config.toml is still its output).
-  $dist->remove_bare_containerd_template;
+  $dist->_remove_bare_template_before_start;
 
   # Enable and start the service. --no-block: return immediately; RKE2 first
   # start pulls many images and exceeds systemctl's default 90s activation
