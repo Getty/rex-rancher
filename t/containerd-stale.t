@@ -66,7 +66,7 @@ my ( @log, @warn, %host );
     if ( $cmd =~ m{^rm -f .*config\.toml\.tmpl} ) { delete $host{tmpl}; return '' }
     if ( $cmd =~ m{^systemctl is-active --quiet} ) { $? = $host{active} ? 0 : 768; return '' }
     if ( $cmd =~ m{^systemctl restart \S+ 2>&1} && $host{restart_fails} ) { $? = 256; return "Job failed\n" }
-    if ( $cmd =~ m{^systemctl is-active } ) { return "active\n" }
+    if ( $cmd =~ m{^systemctl is-active } ) { return ( $host{state} // ( $host{active} ? "active" : "inactive" ) ) . "\n" }
     if ( $cmd =~ m{^command -v rke2} ) { return "/usr/local/bin/rke2\n" }
     if ( $cmd =~ m{^test -f} ) { return "yes\n" }
     return '';
@@ -88,6 +88,13 @@ my @case = (
   [ 'stale, template still there, running',   { config => $CLOBBER, active => 1, tmpl => $CLOBBER }, 'start', 'restart', qr/replaces (?:rke2|k3s)'s own containerd config.*Remove it \(remove_bare_containerd_template.* systemctl restart / ],
   [ 'stale, another template now, running',   { config => $CLOBBER, active => 1, tmpl => $BASE }, 'restart', 'restart', qr/bare config\.toml\.tmpl, which another template has replaced since; restarting \S+ so it renders that one/ ],
   [ 'stale, another template now, not running', { config => $CLOBBER, active => 0, tmpl => $BASE }, 'start', 'restart', undef ],
+  # k91: containerd 2.x exits on the bare config.toml, so the service never
+  # gets to active: it hangs in activating (Restart= loop) or ends failed.
+  # Either wants to run, so it is restarted once; inactive was stopped on
+  # purpose and stays as it is.
+  [ 'stale, template gone, activating',       { config => $CLOBBER, active => 0, state => 'activating' }, 'restart', 'restart', qr/is activating.*rendered from a config\.toml\.tmpl that is gone.*restarting/ ],
+  [ 'stale, template gone, failed',           { config => $CLOBBER, active => 0, state => 'failed' },     'restart', 'restart', qr/is failed.*rendered from a config\.toml\.tmpl that is gone.*restarting/ ],
+  [ 'stale, template gone, inactive',         { config => $CLOBBER, active => 0, state => 'inactive' },   'start',   'restart', undef ],
 );
 
 for my $c (@case) {
@@ -151,7 +158,15 @@ subtest 'heal_bare_containerd_template' => sub {
   is_deeply( $r, { removed => 0, restarted => 1 }, 'template already gone, config still stale: restarted' );
 
   ( $r, $cmds ) = $heal->( config => $CLOBBER, active => 0, tmpl => $CLOBBER );
-  is_deeply( $r, { removed => 1, restarted => 0 }, 'not running: removed, not started' );
+  is_deeply( $r, { removed => 1, restarted => 0 }, "not running (inactive): removed, not started" );
+
+  # k91: the live case on containerd 2.x -- the bare config.toml kills
+  # containerd, so the agent hangs in activating or ends failed.
+  for my $state (qw( activating failed )) {
+    ( $r, $cmds ) = $heal->( config => $CLOBBER, active => 0, state => $state, tmpl => $CLOBBER );
+    is_deeply( $r, { removed => 1, restarted => 1 }, "$state: removed and restarted" );
+    is( $cmds->[1], 'systemctl restart rke2-agent.service 2>&1', "$state: one blocking restart" );
+  }
 
   ( $r, $cmds ) = $heal->( config => $NATIVE, active => 1 );
   is_deeply( $r, { removed => 0, restarted => 0 }, 'healthy node: nothing' );

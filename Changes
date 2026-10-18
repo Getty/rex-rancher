@@ -1,6 +1,12 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - heal_bare_containerd_template and start_verb also restart a service that
+    hangs in activating or ended failed when its config.toml is still Rex::GPU
+    0.001's bare template output: containerd 2.x exits on that config, so the
+    service never reaches active and was left alone (seen live on RKE2 v1.36.4,
+    where only the unit's own Restart= healed it). A service stopped on purpose
+    (inactive) is still not started. (k91)
   - New Rex::Rancher::Distribution->heal_bare_containerd_template for a
     running node outside an install: removes Rex::GPU 0.001's bare
     config.toml.tmpl and restarts a running service once when its

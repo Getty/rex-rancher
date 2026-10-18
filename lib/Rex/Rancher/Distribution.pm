@@ -1282,15 +1282,24 @@ sub _stale_containerd_restart {
   }
 
   Rex::Commands::Run::run("systemctl is-active --quiet $service", auto_die => 0);
-  # Not running: the start renders a fresh config.toml anyway.
-  return 0 unless $? == 0;
-  Rex::Logger::info( $has_tmpl
+  my $prefix = '';
+  unless ($? == 0) {
+    # containerd 2.x exits on that bare config.toml, so the service never gets
+    # to active: it hangs in activating (its Restart= loop) or ends failed
+    # (k91). Either one wants to run and is restarted once. Stopped on purpose
+    # (inactive): its next start renders a fresh config.toml anyway.
+    my $state = Rex::Commands::Run::run("systemctl is-active $service 2>/dev/null", auto_die => 0) // '';
+    $state =~ s/\s+//g;
+    return 0 unless $state eq 'activating' || $state eq 'failed';
+    $prefix = "$service is $state (containerd exits on its bare config); ";
+  }
+  Rex::Logger::info( $prefix . ( $has_tmpl
     ? "$dir/config.toml was rendered from Rex::GPU 0.001's bare config.toml.tmpl, "
       . "which another template has replaced since; restarting $service so it "
       . "renders that one"
     : "$dir/config.toml was rendered from a config.toml.tmpl that is gone "
       . "(Rex::GPU 0.001's); restarting $service so it regenerates its "
-      . "containerd config", 'warn');
+      . "containerd config" ), 'warn');
   return 1;
 }
 
@@ -1362,8 +1371,10 @@ For a node outside an install -- a drift remedy on a running cluster:
 L</remove_bare_containerd_template>, then, when a running L</service>'s
 C<config.toml> is still that template's output (the same check
 L</start_verb> makes), one C<systemctl restart> so it renders its own
-containerd config again. A service that is not running is not started: its
-next start renders a fresh one. Returns a hash with C<removed> and
+containerd config again. A service that hangs in C<activating> or ended
+C<failed> is restarted the same way: containerd 2.x exits on that bare
+config, so such a node never gets to C<active> (k91). A service stopped on
+purpose (C<inactive>) is not started: its next start renders a fresh one. Returns a hash with C<removed> and
 C<restarted> (each C<1> or C<0>); dies when the removal or the restart fails.
 
 Inside L<Rex::Rancher::Server/install_server> and
