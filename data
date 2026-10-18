@@ -1,0 +1,23 @@
+---
+class: standard
+completed: 2026-10-18T07:26:33Z
+created: 2026-10-18T07:24:45Z
+id: 91
+priority: medium
+started: 2026-10-18T07:26:33Z
+status: done
+tags:
+- containerd
+- gpu
+- lab
+title: 'Bare-Template geheilt, aber Dienst hängt: containerd 2.x stirbt an der bare
+  config.toml, _stale_containerd_restart startet nur einen aktiven Dienst'
+updated: 2026-10-18T16:05:51Z
+---
+
+Live-Befund A aus OCP-Lab-Runde 9 (2026-10-18, ocplab crag, RKE2 v1.36.4 / containerd 2.3, Karte #88 Schritt 4): Mit der bare config.toml (Rex::GPU 0.001s Template-Output) beendet sich containerd sofort ('containerd exited: exit status 1'), rke2-agent.service: Failed with result 'protocol', der Dienst hängt in activating (Auto-Restart-Schleife). _stale_containerd_restart (lib/Rex/Rancher/Distribution.pm) prüft 'systemctl is-active --quiet' und gibt 0 zurück, wenn der Dienst nicht läuft ('Not running: the start renders a fresh config.toml anyway'). heal_bare_containerd_template entfernt also das Template, startet aber nicht neu; geheilt hat nur systemds eigenes Restart= der rke2-Unit. Ein Dienst im Zustand failed (oder eine Unit ohne Restart=) bliebe stehen, bis jemand startet.
+Fertig, wenn: ein Dienst in activating oder failed bei bare config.toml und entferntem/ersetztem Template einmal neu gestartet wird (start_verb -> restart, heal -> restarted 1), mit Logzeile, die den Zustand nennt; inactive (absichtlich gestoppt) bleibt wie bisher unberührt; Test in t/containerd-stale.t für activating, failed und inactive.
+
+2026-10-18 07:26 Hub: Commit e2daeb0 auf main (nicht gepusht). _stale_containerd_restart liest bei nicht aktivem Dienst den Zustand: activating/failed → einmal restart mit Logzeile '<service> is <state> (containerd exits on its bare config); …', inactive bleibt. t/containerd-stale.t: activating/failed/inactive für start_verb (rke2+k3s) und heal (rot vor dem Fix). Suite 37/970 grün; OCP t/155,t/193,t/44,t/68 grün.
+
+2026-10-18 16:05 Live 2026-10-18 Lab-Runde 10 auf crag: 'rke2-agent.service is activating (containerd exits on its bare config); … restarting', heal removed=1 restarted=1, crag Ready, GPU-Pod läuft.
