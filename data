@@ -1,0 +1,48 @@
+---
+class: standard
+completed: 2026-10-21T05:10:16Z
+created: 2026-09-25T04:55:10Z
+id: 53
+priority: medium
+started: 2026-09-25T22:18:46Z
+status: done
+title: 'LAN-Testmaschine (GTX) als Live-Rig: eg-Rexfile reaktivieren'
+updated: 2026-10-21T05:10:16Z
+---
+
+Maintainer (2026-09-25): kein Hetzner-Server mehr, aber eine von zwei Maschinen mit Grafikkarte (GTX-Klasse) koennte Linux im LAN werden. Dann eg/hetzner-gpu.Rexfile pruefen und wiederverwenden bzw. zu einem generischen eg-Rexfile machen (LAN-IP als tls_san, kein Hetzner-Spezifisches). Abdeckbar: komplette Pipeline Single-Node rke2 UND k3s (k3s nie live gelaufen), prepare_node (#42), Re-Run-Idempotenz/Restart-Logik (#46 #49), Cilium install/upgrade inkl. IPAM-Erhalt und Abbruch ohne kubeconfig (#43 #51), cluster_cidr (#41), Agent-Join-Fehler (#44, zweite Maschine oder falsche Adresse), Distribution-Refactor (#48), GPU Single-Card: Rex::GPU-Klassifizierung Consumer-Karte, Treiber, containerd-Drop-in, Device-Plugin, nvidia.com/gpu. Nicht abdeckbar: Multi-GPU, HGX/NVSwitch/Fabric Manager, vGPU. Treiber-Branch haengt von der GTX-Generation ab (Maxwell/Pascal nur noch bis Branch 580). LibSSH ohne SFTP nachstellen (SFTP-Subsystem aus).
+
+Prep done: eg/lan.Rexfile, commit 1c220cb on worktree branch (cherry-pick pending). LAN_DIST rke2|k3s, LAN_GPU, tasks deploy/rerun/cilium_upgrade/join_agent/check; LAN_JOIN_URL provokes #44 hint. Live run still open (no machine yet). Machine prep: fresh Debian/Ubuntu/Rocky, root SSH key, comment out 'Subsystem sftp', port 6443 reachable (+9345 rke2 agent).
+
+eg/lan.Rexfile on main as f3862d6, pushed. Waiting for the LAN machine.
+
+2026-10-19 20:12 Koordinator 2026-10-19: Der Live-Run bleibt blockiert — die Flotte hat keine Maschine mit GTX-Klasse Consumer-GPU (die citilan-GPUs sind Datacenter-Karten für vLLM; sie decken den Consumer-Karten-/Branch-580-Pfad aus dem Karten-Body nicht ab). Offener Claim 'worker-lan' ist seit 2026-09-25 abgelaufen und wird freigegeben. Der Code-Rest ohne Hardware (Offline-Abdeckung für eg/lan.Rexfile, Live-Run-Checkliste) wird jetzt abgearbeitet; die Karte bleibt danach blockiert.
+
+2026-10-19 20:45 Code-Rest abgearbeitet (Offline-Teil), kein Live-Run, kein Commit.
+
+1) t/eg-lan-rexfile.t (neu): Offline-Abdeckung fuer eg/lan.Rexfile. Der Test laedt das Rexfile in einem Kindprozess (require, nicht do -- do schluckt den die) und ruft die Task-Bodies mit Recordern statt der Lib-Aufrufe (rancher_deploy_server/rancher_deploy_agent/upgrade_cilium/untaint_node/run). Geprueft: die Tasks aus dem Header (deploy, rerun, cilium_upgrade, join_agent, check) plus das interne join_token; der env-Vertrag (LAN_DIST nur rke2|k3s, alles andere stirbt mit "LAN_DIST must be rke2 or k3s"; LAN_GPU/LAN_AGENT_GPU default 0; LAN_SERVER als tls_san; LAN_JOIN_URL ueberschreibt die Join-URL; LAN_CILIUM_UPGRADE_TO Pflicht); die Wiring-Uebergaben der Optionen; die Control-Points des check-Tasks inkl. Token-Redaktion; nichts Hetzner-/SFTP-Spezifisches im Rig; zusaetzlich die echte rex-CLI-Taskliste (rex -f eg/lan.Rexfile -T). Der Test sagt im Kopf ausdruecklich, was er NICHT beweist (kein Host, keine Pipeline-Schritte, kein GPU-Pfad); der Live-Run-Teil ist mit Begruendung uebersprungen.
+
+2) eg/lan.RUNBOOK.md (neu): die Live-Run-Checkliste, eine Zeile pro Sub-Issue des Karten-Bodys (k41 cluster_cidr, k42 prepare_node, k43/k51 Cilium install/upgrade mit IPAM-Erhalt und Abbruch ohne kubeconfig, k44 Agent-Join mit falscher Adresse, k46/k49 Re-Run-Idempotenz und Restart-Logik, k48 Distribution-Refactor, GPU Single-Card mit Rex::GPU-Klassifizierung/Treiber/containerd-Drop-in/Device-Plugin/nvidia.com/gpu). Je Zeile: was auf der Maschine anzuschauen ist und was der Code + die Offline-Tests schon decken (mit t/-Dateinamen) -- der Rest ist "nur live" beweisbar. Dazu Machine-Prep, Laufreihenfolge fuer rke2/k3s/GPU/Agent und der LAN_JOIN_URL-Fehlerfall.
+
+3) eg/lan.Rexfile: eine Zeile im Header, die auf eg/lan.RUNBOOK.md verweist. Sonst unveraendert.
+
+Verifikation: prove -lr t/ gruen (38 Dateien, 980 Tests), prove -j4 -lr t/ zweimal gruen. Branch feature/k53-lan-offline, Basis = Spitze von local main (e2daeb0). Kein Commit, kein Push -- Commit und Karte auf done gehoeren dem Release-Manager.
+
+2026-10-19 20:52 2026-10-19 22:50 Hand-off an den Koordinator (Meldung ueber das Board, die Peer-Sitzung des Koordinators ist gerade mit einem geparkten Job busy und nimmt keine Direktnachricht an).
+
+Worktree: /home/getty/dev/rex-rancher/.claude/worktrees/k53
+Branch:   feature/k53-lan-offline (Basis = Spitze von local main, merge-base e2daeb0 == git rev-parse main; 0 Commits ahead)
+Dateien:  t/eg-lan-rexfile.t (neu), eg/lan.RUNBOOK.md (neu), eg/lan.Rexfile (+2 Kommentarzeilen im Header)
+Suite:    prove -lr t/ gruen (38 Dateien/980 Tests), prove -j4 -lr t/ zweimal gruen (39s/40s), dzil build sauber, dzil test gruen (39 Dateien/982 Tests)
+Karte:    Status in-progress, Claim rex-rancher-worker, Blocked 'waits for the LAN test machine (GTX-class consumer GPU) - no such machine in the fleet; code side ready, live run pending'. Bewusst nicht auf review/done.
+
+Wichtig fuer den ff: der Branch hat KEINE Commits, der Baum ist nur commit-ready. Vor dem ff muss der Release-Manager den Commit schneiden; erst danach ist 'git merge --ff-only feature/k53-lan-offline' nach local main moeglich. Vorgeschlagener Commit-Subject: 'karr #53: offline tests for eg/lan.Rexfile and the live-run checklist'. Changes-Eintrag (Vorschlag, der Release-Manager schreibt ihn): 'Offline tests for the LAN example Rexfile (eg/lan.Rexfile) and a runbook with the live-run checklist.' k62 unangetastet, keine neuen Karten, kein Cluster und keine Maschine angefasst.
+
+2026-10-19 21:12 2026-10-19 23:05 Koordinator: Der Offline-Teil ist gemerged. Commit 412527c 'karr #53: offline tests for eg/lan.Rexfile and the live-run checklist' auf local main (ff), enthaelt t/eg-lan-rexfile.t, eg/lan.RUNBOOK.md, eg/lan.Rexfile (Header-Verweis) und den Changes-Eintrag. Suite: prove -lr t/ -> 38 Dateien, 980 Tests PASS. Worktree und Branch feature/k53-lan-offline sind zurueckgebaut. Die Karte bleibt BLOCKIERT: der Live-Run braucht eine LAN-Testmaschine mit GTX-Klasse Consumer-GPU, die gibt es in der Flotte nicht. Der Claim des Workers ist freigegeben, die Karte haengt sichtbar in in-progress mit Blocked-Markierung und geht nicht auf done.
+
+2026-10-21 05:10 Koordinator: LIVE-LAUF GEMACHT (Gettys Freigabe, crag + otho-lab aus ocplab/citiai genommen). Server crag (Ubuntu 24.04.5, GeForce RTX 3090 = Consumer-Karte, Ampere), Agent otho-lab (Ubuntu 24.04.4), vom Hub mit rex-rancher main, SFTP auf beiden aus. Logs: Scratchpad der Hub-Sitzung (01–17-*.log).
+- rke2 v1.36.5 (Treiber 595 schon da -> Install übersprungen): deploy grün, check grün (cluster-cidr 10.44.0.0/16, swap off, Module, SFTP off, nvidia runtime drop-in), GPU-Pod nvidia-smi -L sieht die 3090. rerun: 1. Lauf FAIL (Neustart, Token-Format -> k92, gefixt b69ad08), 2. Lauf OK. k41: deploy mit 10.55.0.0/16 stirbt vor jeder Änderung, config.yaml byte-gleich. k43: Cilium 1.20.0 -> 1.20.3, Helm v2, IPAM-ConfigMap unverändert. k51: upgrade_cilium ohne kubeconfig stirbt vor Host-Zugriff (mtime cilium + values gleich). k44: falsche Adresse -> Meldung mit Adresse + Hinweis + Journal, aber erst nach 600 s (-> k93); richtige Adresse -> otho Ready. k42: swap/Module/sysctl/NTP auf beiden.
+- k3s v1.36.5 (Treiber + Toolkit vorher entfernt, nouveau-Blacklist weg = frischer Host): Rex::GPU installiert nvidia-driver-615-server + Toolkit, ein Reboot, nvidia.com/gpu=1, GPU-Pod grün. rerun mit k92-Fix: Token bleibt ('Reusing the cluster token in config.yaml'), k3s-Neustart nur durchs Installskript (by design). k41 stirbt sauber, k43 mit IPAM cluster-pool: Modus + Pool erhalten. k44 wie bei rke2. Agent-Join brauchte nach dem rke2-Abbau per rke2-uninstall.sh einen Reboot von otho: der Cilium-Restzustand-Schutz griff korrekt (nichts geschrieben, klare Meldung).
+- Nicht live: Maxwell/Pascal-Branch-580-Pfad (bräuchte ältere GTX), GPU auf dem Agent, Multi-GPU/HGX/vGPU (nie Teil der Karte).
+- Nebenfund rex-libssh #11 (Host-Key-Hinweis bei Connection refused), gefixt 6824fee.
+- Rückbau: k3s weg, sshd/Zeitzone/Locale zurück, beide neu gestartet, crag zurück im ocplab (frank-ocp, gleiche Pins), llama-a3b + skeid-live laufen wieder. crag hat jetzt Treiber 615-server statt 595-server. Runbook ergänzt 0a69484.
