@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-10-21T05:10:20Z
+id: 93
+priority: low
+status: backlog
+tags:
+- live-k53
+title: 'Agent-Join mit unerreichbarer Adresse: früh abbrechen statt 600 s warten'
+updated: 2026-10-21T05:10:20Z
+---
+
+Live-Fund aus #53 (2026-10-21): join mit LAN_JOIN_URL auf eine nicht existierende Adresse wartet die vollen 600 s ('did not become active within 600s (last state: activating)'), obwohl das Journal des Agents schon nach wenigen Sekunden 'Failed to validate connection to cluster at https://…:9345: failed to get CA certs' zeigt (rke2; bei k3s analog). Die Meldung am Ende ist gut (Adresse, Hinweis, Journal), nur spät.
+
+Idee: beim Warten das Journal mitlesen und nach N gleichen 'Failed to validate connection'-Zeilen (z. B. 60 s lang) mit derselben Meldung abbrechen. Vorsicht: ein Server, der gerade erst hochkommt, liefert anfangs denselben Fehler -- Schwelle nicht zu knapp. Maintainer-Entscheidung, ob gewollt (verwandt mit OCP #238, 120-s-Vorabprüfung).
