@@ -1,6 +1,6 @@
 Revision history for Rex-Rancher
 
-{{$NEXT}}
+0.004     2026-10-21 22:35:28Z
   - Requires IO::K8s 1.111 and Kubernetes::REST 1.110; recommends Rex::GPU
     0.004 and Rex::LibSSH 0.005.
   - A re-run of install_server without a token no longer restarts a server
