@@ -1,0 +1,24 @@
+---
+claimed_at: 2026-10-15T23:26:16Z
+claimed_by: coordinator-abbau
+class: standard
+completed: 2026-10-15T23:26:16Z
+created: 2026-09-26T23:47:51Z
+id: 81
+priority: low
+started: 2026-10-15T22:21:51Z
+status: done
+tags:
+- kubeconfig
+- escalated-from:kubernetes-ocp#196
+title: 'fetch_kubeconfig: Zieladresse mit Port (host:port)'
+updated: 2026-10-21T20:41:12Z
+---
+
+Maintainer-Entscheidung 2026-09-27: nach 0.003. patch_kubeconfig_server/fetch_kubeconfig (k73) nehmen server ohne Port; cp:7443 ergibt eine kaputte URL (wie vorher schon). server bleibt optional, kein Re-Export aus Rex::Rancher.
+
+2026-10-15 22:27 patch_kubeconfig_server/fetch_kubeconfig/kubeconfig_server take host:port ([v6]:port, bare v6 bracketed as before); port replaces kubeconfig's, no port = byte-identical (6443 kept); invalid port/address dies. Rancher.pm loopback warning and API-timeout message strip/handle the port. POD + Changes updated. Tests added to t/kubeconfig-fetch.t; prove -lr t green (943). Live open: a real deploy with a non-6443 server via kubernetes-ocp; tls_san/cert path untouched (tls_san entries are names, no ports).
+
+Koordinator: Randverhalten: '[name]' in Klammern ohne IPv6 stirbt jetzt (vorher durchgereicht, ungültige URL).
+
+2026-10-21 Koordinator, Live-Nachtrag: kubernetes-ocp ruft patch_kubeconfig_server (OCP::Rex) und fetch_kubeconfig (share/Rexfile) bei jedem apply ohne Port auf. Seit ocp-lab:4ebb059 (enthält f7a2bd7) lief der Pfad ohne Port live in allen Lab-Runden 6–10. Der host:port-Zweig wird von keinem Aufrufer genutzt, das ist ein reines Zusatz-Feature und kein Regressionsrisiko.
