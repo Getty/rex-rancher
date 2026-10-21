@@ -1,0 +1,22 @@
+---
+class: standard
+completed: 2026-10-21T05:10:19Z
+created: 2026-10-21T04:34:20Z
+id: 92
+priority: medium
+started: 2026-10-21T05:10:19Z
+status: done
+tags:
+- live-k53
+title: 'rerun nach erstem Deploy startet den Server neu: Token in config.yaml wechselt
+  vom rohen auf das K10-Format'
+updated: 2026-10-21T05:10:19Z
+---
+
+Live-Fund aus #53 (crag, rke2 v1.36.5, 2026-10-21): Der erste `rerun` nach einem Deploy ohne Token startet rke2-server neu (`FAIL: rke2-server was restarted`), der zweite nicht. Ursache: Beim ersten Deploy schreibt _resolve_token den frisch erzeugten rohen Token in config.yaml. Beim rerun liest _existing_server_token /var/lib/rancher/<dist>/server/token, und dort steht der Token im Format `K10<ca-hash>::server:<roh>`. config.yaml bekommt also einen anderen (gleichwertigen) Wert, mtime neu, restart_reasons meldet 'changed since it started: config.yaml'. Gilt für rke2 und k3s gleich.
+
+Fix: Wenn config.yaml schon einen Token hat, der dasselbe Geheimnis trägt wie server/token (gleich oder roher Teil nach '::server:'), den Wert aus config.yaml unverändert übernehmen.
+
+Done when: t/token.t deckt beide Formen für rke2 und k3s ab; live: Deploy + erster rerun auf crag ohne Neustart (OK: kept running).
+
+2026-10-21 05:10 Gefixt b69ad08 (rebased auf 1c03b9a), t/token.t +4 Subtests je Distribution, Gegenprobe gegen main-lib rot, Suite 38/988 grün. Live: k3s auf crag, erster rerun nach Deploy loggt 'Reusing the cluster token in /etc/rancher/k3s/config.yaml (same secret as …/server/token)', config.yaml unverändert; der k3s-Neustart dort kommt vom Installskript (by design). rke2-Gegenstück: der 2. rerun ohne Neustart zeigte dasselbe Verhalten ohne Fix.
