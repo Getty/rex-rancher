@@ -1,7 +1,7 @@
 # ABSTRACT: What RKE2 and K3s differ in, and the host steps they share
 
 package Rex::Rancher::Distribution;
-our $VERSION = '0.004';
+our $VERSION = '0.005';
 use v5.14.4;
 use Moo;
 use Module::Runtime qw( use_module );

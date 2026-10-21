@@ -1,7 +1,7 @@
 # ABSTRACT: Pure checks of install options, before anything touches the host
 
 package Rex::Rancher::Options;
-our $VERSION = '0.004';
+our $VERSION = '0.005';
 use v5.14.4;
 use warnings;
 
