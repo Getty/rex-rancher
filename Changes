@@ -1,6 +1,8 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - Requires IO::K8s 1.111 and Kubernetes::REST 1.110; recommends Rex::GPU
+    0.004 and Rex::LibSSH 0.005.
   - A re-run of install_server without a token no longer restarts a server
     on its first re-run: the first deploy writes the generated secret bare
     into config.yaml, the server keeps it as K10<ca-hash>::server:<secret> in
