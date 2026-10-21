@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-10-21T21:00:47Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-10-21T21:00:41Z
+created: 2026-10-21T20:51:00Z
+id: 94
+priority: high
+started: 2026-10-21T20:51:09Z
+status: done
+title: 'Tests: Preflight-Residue-Check läuft lokal (sh-Syntaxfehler im Testlauf)'
+updated: 2026-10-21T21:00:47Z
+---
+
+t/agent-steps.t und t/cilium-step.t faken check_cilium_residue nicht. Der Lese-Check läuft deshalb lokal, und Rex Exec::Local macht daraus "LC_ALL=C if …", was in sh mit "Syntax error: then unexpected" scheitert. Seit 0.003 so. Remote nicht betroffen (Shell::Bash: "LC_ALL=C ; export LC_ALL;"). Fix: in den Tests faken, kein lib-Change.
+
+2026-10-21 20:58 Cause wider than the card: preflight_server/preflight_agent leaked their host reads in 5 tests (agent-steps, cilium-step, gateway-api-rke2-chart, gpu-steps, kubeconfig-save), not only check_cilium_residue but check_version_skew (systemctl show MainPID, rke2/k3s --version) and check_established_cluster_cidr (systemctl is-active, test -e server/token) — found with a wrapper on Rex::Interface::Exec::Local::exec + CORE::GLOBAL::system/readpipe over the whole suite. On a dev box with rke2/k3s these would have read the real install (and could resolve the stable channel over the network).
+
+2026-10-21 20:58 Done, tests only (lib/ untouched): the 5 tests fake Rex::Rancher::Uninstall::check_cilium_residue (1), Rex::Rancher::Distribution::check_version_skew and ::check_established_cluster_cidr (return) = fresh host; the preflight's pure checks still run, the fakes record nothing in @ran, so every is_deeply order list is unchanged (preflight position stays in t/deploy-preflight.t). prove -lr t/: 38 files, 988 tests (same count as before), PASS, 0 'Syntax error'. Spy rerun: no rex local exec left. Remaining local processes, deliberate/Rex-internal, untouched: t/uninstall.t runs the uninstall line under /bin/sh -e against stubs (its purpose, rm stubbed + canary); t/eg-lan-rexfile.t's probe/rex CLI trigger Rex::Commands::Download's import-time 'which wget/curl' and rex CLI 'stty size'/'resize'. No Changes entry needed (tests only).
+
+2026-10-21 21:00 Committed as ae816d9 (tests only, no Changes entry)
