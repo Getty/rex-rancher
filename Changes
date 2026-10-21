@@ -1,6 +1,13 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - A re-run of install_server without a token no longer restarts a server
+    on its first re-run: the first deploy writes the generated secret bare
+    into config.yaml, the server keeps it as K10<ca-hash>::server:<secret> in
+    server/token, and the re-run wrote that long form into config.yaml --
+    the same token, but a changed file, so start_verb restarted the service.
+    When config.yaml already holds the same secret, its value is kept. Seen
+    live on crag with RKE2 v1.36.5. (k92)
   - The LAN example rig (eg/lan.Rexfile) gets offline test coverage and a
     runbook with the live-run checklist: t/eg-lan-rexfile.t covers the tasks,
     the environment contract and the control points, eg/lan.RUNBOOK.md the

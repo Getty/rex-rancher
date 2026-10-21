@@ -77,7 +77,11 @@ what the k3s runs covered is listed in L<Rex::Rancher::Distribution::K3s>.
 Shared secret used for node joining. If omitted, the token the server is
 already sealed with (C</var/lib/rancher/rke2/server/token>, K3s:
 C</var/lib/rancher/k3s/server/token>) is reused, so re-running
-C<install_server> on a live control plane never rotates its token. Only on a
+C<install_server> on a live control plane never rotates its token. The server
+keeps it there in the long form C<K10E<lt>ca-hashE<gt>::server:E<lt>secretE<gt>>;
+when C<config.yaml> already holds the same secret (bare or long), that value
+is kept as it is, so a re-run leaves C<config.yaml> unchanged and does not
+restart the server. Only on a
 fresh server (no such file) is a new one generated (up to 48 random
 alphanumeric characters, never fewer than 32).
 A passed C<token> always wins.
@@ -780,10 +784,42 @@ sub _resolve_token {
   return $given if defined $given;
   my $existing = _existing_server_token($dist);
   if (defined $existing) {
+    # The server keeps the token as K10<ca-hash>::server:<secret>, the first
+    # deploy wrote the bare secret into config.yaml. Same secret: keep what
+    # config.yaml has, or the re-run changes the file and restarts the server.
+    my $configured = _configured_token($dist);
+    if (defined $configured && _token_secret($configured) eq _token_secret($existing)) {
+      Rex::Logger::info("Reusing the cluster token in " . $dist->config_file
+        . " (same secret as " . $dist->server_token . ")");
+      return $configured;
+    }
     Rex::Logger::info("Reusing existing cluster token from " . $dist->server_token);
     return $existing;
   }
   return _generate_token();
+}
+
+# The secret part of a token: what follows "::<user>:" in the K10 form, the
+# token itself otherwise.
+sub _token_secret {
+  my ($token) = @_;
+  return $token =~ /\AK10[0-9a-f]+::[^:]+:(.+)\z/s ? $1 : $token;
+}
+
+# The token in config.yaml, if it holds one as a plain string. Anything else
+# -- no file, unreadable, not YAML, no or no string token -- is undef: the
+# caller then takes server/token, as before. Never the parser's message, it
+# may quote the token.
+sub _configured_token {
+  my ($dist) = @_;
+  my $out = run "cat " . $dist->config_file . " 2>/dev/null", auto_die => 0;
+  return unless $? == 0 && defined $out && length $out;
+  my $config = eval { YAML::PP->new->load_string($out) };
+  return unless ref $config eq 'HASH';
+  my $token = $config->{token};
+  return unless defined $token && !ref $token;
+  $token =~ s/\s+\z//;
+  return length $token ? $token : undef;
 }
 
 # Read over the exec channel (no SFTP). A missing or unreadable file means
