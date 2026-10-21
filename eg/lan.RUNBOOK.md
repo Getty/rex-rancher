@@ -6,10 +6,19 @@ an agent, optionally with a GTX-class consumer GPU. The rig is generic: the LAN
 address is the `tls_san`, the connection is LibSSH, and no SFTP subsystem is
 needed on the target.
 
-The live run needs a machine the fleet does not have yet (a GTX-class consumer
-card — the datacenter cards on citilan do not cover the consumer/branch-580
-path). This file is the checklist for that run. The code side of the rig is
+This file is the checklist for the live run. The code side of the rig is
 covered offline by `t/eg-lan-rexfile.t`.
+
+The run took place on 2026-10-21: server on an Ubuntu 24.04 host with a
+GeForce RTX 3090 (Ampere, consumer card), a second Ubuntu 24.04 host as agent,
+RKE2 v1.36.5 and K3s v1.36.5, Cilium 1.20.0 -> 1.20.3. Every row below passed;
+the RKE2 series with the driver already on the host, the K3s series from a
+host without driver and toolkit (Rex::GPU installed `nvidia-driver-615-server`
+and rebooted once). Not run live: the Maxwell/Pascal branch-580 path (needs an
+older GTX card) and a GPU on the agent. Two findings came out of it: the first
+`rerun` restarted the server (k92, fixed) and the wrong-address join reports
+only after the full 600 s wait, although the agent's journal shows the failed
+connection within seconds.
 
 ## Machine prep
 
