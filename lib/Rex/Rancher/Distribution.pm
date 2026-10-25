@@ -1543,7 +1543,8 @@ sub is_bare_template_output {
 =method wait_for_service
 
   $dist->wait_for_service;
-  $dist->wait_for_service(hint => 'It joins the cluster via ...');
+  $dist->wait_for_service(hint => 'It joins the cluster via ...',
+    unreachable_after => 120);
 
 Poll C<systemctl is-active> for the L</service> until it is C<active>
 (C<attempts>, default 60, every C<interval> seconds, default 10). C<failed>
@@ -1551,7 +1552,17 @@ dies at once, any other state is polled until the timeout, which dies too.
 Either die message carries the reason, then C<hint> if given, then the last
 50 lines of the unit's journal.
 
+While the unit is not active the journal is read along: when its trailing
+lines, for at least C<unreachable_after> seconds (default 120), are nothing
+but C<Failed to validate connection to cluster> (see L</join_failure_span>)
+-- the agent or joining server cannot reach its server address -- it dies at
+once with that reason instead of waiting out the timeout. Any other journal
+line in between starts the count over; C<0> turns the early exit off.
+
 =cut
+
+# A server that is only just coming up answers the same way for a while.
+use constant UNREACHABLE_AFTER => 120;
 
 sub wait_for_service {
   my ( $self, %args ) = @_;
@@ -1559,6 +1570,7 @@ sub wait_for_service {
   my $attempts = $args{attempts} // 60;
   my $interval = $args{interval} // 10;
   my $hint     = $args{hint};
+  my $limit    = $args{unreachable_after} // UNREACHABLE_AFTER;
 
   Rex::Logger::info("Waiting for $service to become active...");
 
@@ -1573,12 +1585,49 @@ sub wait_for_service {
     }
     die $self->_service_failure("is failed", $hint) if $state eq 'failed';
     Rex::Logger::info("  $service is " . ($state || 'unknown') . " ($i/$attempts)");
+    if ($limit > 0) {
+      my $recent = Rex::Commands::Run::run(
+        "journalctl -u $service -n 200 --no-pager -o short-unix", auto_die => 0);
+      my $span = $self->join_failure_span($recent);
+      die $self->_service_failure(
+        "cannot reach its server: the journal shows only 'Failed to validate "
+          . "connection to cluster' for ${span}s (last state: " . ($state || 'unknown') . ")",
+        $hint) if $span >= $limit;
+    }
     sleep $interval if $i < $attempts;
   }
 
   die $self->_service_failure(
     "did not become active within " . ($attempts * $interval) . "s (last state: "
       . ($state || 'unknown') . ")", $hint);
+}
+
+=method join_failure_span
+
+  my $seconds = $dist->join_failure_span($journal);
+
+Pure: C<$journal> is C<journalctl -o short-unix> output. How many seconds
+(first to last timestamp) it ends in an unbroken run of C<Failed to validate
+connection to cluster> lines (rke2 and k3s alike); C<0> when it does not end
+in one or the run is a single line. Any other line ends the run.
+
+=cut
+
+sub join_failure_span {
+  my ( $self, $journal ) = @_;
+  return 0 unless defined $journal;
+  my ( $first, $last );
+  for my $line ( split /\n/, $journal ) {
+    next unless $line =~ /\S/ && $line !~ /^-- /;    # "-- No entries --"
+    if ( $line =~ /^(\d+)(?:\.\d+)?\s.*Failed to validate connection to cluster/ ) {
+      $first //= $1;
+      $last = $1;
+    }
+    else {
+      ( $first, $last ) = ();
+    }
+  }
+  return defined $first ? $last - $first : 0;
 }
 
 sub _service_failure {

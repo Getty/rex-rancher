@@ -1,6 +1,13 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - An agent (or joining server) that cannot reach its server address no
+    longer waits out the full 600 s: while the unit is not active the
+    journal is read along, and once it has shown nothing but "Failed to
+    validate connection to cluster" for 120 s (rke2 and k3s alike) the wait
+    dies with the usual message -- address, hint, journal excerpt. Any other
+    journal line starts the count over; wait_for_service takes
+    unreachable_after to change the threshold, 0 to turn it off.
 
 0.004     2026-10-21 22:35:28Z
   - Requires IO::K8s 1.111 and Kubernetes::REST 1.110; recommends Rex::GPU

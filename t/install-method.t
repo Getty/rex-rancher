@@ -320,7 +320,7 @@ subtest 'wait_for_service: active' => sub {
   ok( dist('rke2')->wait_for_service( attempts => 5, interval => 0 ),
     'returns once active' );
   is( scalar( grep { /is-active/ } @cmds ), 3, 'polled until active' );
-  ok( !grep( /journalctl/, @cmds ), 'no journal on success' );
+  ok( !grep( /journalctl.* -n 50 /, @cmds ), 'no failure journal on success' );
 };
 
 subtest 'wait_for_service: failed dies with journal' => sub {
