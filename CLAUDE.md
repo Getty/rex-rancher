@@ -8,7 +8,8 @@ dedicated servers via `Rex::LibSSH`).
 ## Delegation
 
 Delegate behavior-relevant code to the right agent instead of touching it yourself —
-principle and lane are in `.claude/rules/rex-rancher-rules.md`.
+the principle is a shared house rule (skilletor bundle `getty-cpan-dist@getty`); lanes and
+hazards are in `.claude/rules/rex-rancher-rules.md`.
 
 | Task | Agent |
 |---|---|
@@ -18,7 +19,8 @@ principle and lane are in `.claude/rules/rex-rancher-rules.md`.
 The agents carry their skills via `briefing.skills` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
 `rex-rancher-core` is owned here, the rest are hardlinks (`manage-skills sync` after a
-clone). House rules and the delegation lock: `.claude/rules/rex-rancher-rules.md`.
+clone). Shared house rules and the delegation lock: skilletor bundle
+`getty-cpan-dist@getty`; repo-specific rules: `.claude/rules/rex-rancher-rules.md`.
 
 ## Build and test
 
@@ -32,4 +34,4 @@ There is no integration test; a pipeline change is only trustworthy after a real
 in practice through `kubernetes-ocp` (~/dev/kubernetes-ocp), which provisions via
 Rex::Rancher; GPU only on the citilan machine. There is no Hetzner test host any more
 (`eg/hetzner-gpu.Rexfile` is an example, not a test rig). `dzil release` is maintainer-only — see
-the rules file.
+the shared publish gate.

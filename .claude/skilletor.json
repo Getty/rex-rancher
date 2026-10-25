@@ -27,6 +27,9 @@
       "perl-io-k8s-kubernetes-classes@io-k8s-p5",
       "perl-release-dist-ini@getty",
       "rex@getty"
+    ],
+    "bundles": [
+      "getty-cpan-dist@getty"
     ]
   },
   "targets": [
