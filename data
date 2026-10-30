@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-10-30T23:40:31Z
+id: 96
+priority: medium
+status: backlog
+tags:
+- gpu
+- amd
+- config
+title: 'nonroot-devices: GPU-Devices für Non-root-Pods (RKE2/K3s-Agent-Option)'
+updated: 2026-10-30T23:40:31Z
+---
+
+Aus k95 (AMD-Device-Plugin): Das ROCm-Device-Plugin reicht /dev/kfd und /dev/dri/* per Kubelet-DeviceSpec durch; die Device-Nodes behalten die Host-Gruppen video/render. Non-root-Pods brauchen deshalb passende supplementalGroups oder containerd device_ownership_from_security_context=true. K3s bietet dafür die Agent-Option --nonroot-devices (k3s pkg/cli/cmds/agent.go); ob RKE2 denselben config.yaml-Key nonroot-devices kennt, ist UNVERIFIED (Quelle: Upstream-Recherche kubernetes-ocp-9c, 2026-10-31). Rex::Rancher hat heute keine generische config.yaml-Durchreichung. Zu klären: RKE2-Key gegen die RKE2-Doku prüfen; Option für install_server/install_agent (bool, Default aus) oder nur Doku. Gilt für NVIDIA-Pods ohne CDI ebenso. Kein Live-Test ohne Rücksprache (synapse gehört gerade dem OCP-Join-Test).
