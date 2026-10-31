@@ -16,12 +16,26 @@ use vars qw(@EXPORT);
 
 @EXPORT = qw(
   control_plane_version
+  deploy_amd_device_plugin
   deploy_nvidia_device_plugin
   wait_for_api
   untaint_node
 );
 
 use constant DEVICE_PLUGIN_VERSION => 'v0.17.0';
+
+# ROCm's Kubernetes device plugin, release v1.31.0.11 (2026-09-14):
+# https://github.com/ROCm/k8s-device-plugin/releases/tag/v1.31.0.11
+# The DaemonSets are built after the manifests at that tag:
+# https://github.com/ROCm/k8s-device-plugin/blob/v1.31.0.11/k8s-ds-amdgpu-dp.yaml
+# https://github.com/ROCm/k8s-device-plugin/blob/v1.31.0.11/k8s-ds-amdgpu-labeller.yaml
+# the device plugin's securityContext after the Helm chart of the same repo,
+# amd-gpu-helm 0.22.0 (values.yaml securityContext):
+# https://github.com/ROCm/k8s-device-plugin/releases/tag/amd-gpu-helm-0.22.0
+# Images on Docker Hub, amd64 only: rocm/k8s-device-plugin:<version> and
+# rocm/k8s-device-plugin:labeller-<version> (the manifests use them untagged
+# and as labeller-latest).
+use constant AMD_DEVICE_PLUGIN_VERSION => '1.31.0.11';
 
 =method wait_for_api(%opts)
 
@@ -146,27 +160,148 @@ sub deploy_nvidia_device_plugin {
 
   my $api = _api($kubeconfig);
 
-  my $ds = $api->new_object(DaemonSet =>
-    %{ _nvidia_device_plugin_daemonset_spec($version) });
+  _create_or_update($api, DaemonSet => _nvidia_device_plugin_daemonset_spec($version));
 
-  eval { $api->create($ds) };
-  if ($@) {
-    if ($@ =~ /already exist/i) {
-      Rex::Logger::info("  DaemonSet already exists, updating...");
-      my $existing = $api->get('DaemonSet', 'nvidia-device-plugin-daemonset',
-        namespace => 'kube-system');
-      $ds->metadata->resourceVersion($existing->metadata->resourceVersion);
-      $api->update($ds);
-    }
-    else {
-      die $@;
-    }
+  Rex::Logger::info("  DaemonSet applied, waiting for GPU resources...");
+  _wait_for_gpu_resource($api, 'nvidia.com/gpu');
+
+  Rex::Logger::info("NVIDIA device plugin ready");
+}
+
+=method deploy_amd_device_plugin(%opts)
+
+Deploy ROCm's Kubernetes device plugin for AMD GPUs
+(L<https://github.com/ROCm/k8s-device-plugin>) as a DaemonSet to
+C<kube-system> and wait for C<amd.com/gpu> capacity to appear on at least one
+node. The counterpart of L</deploy_nvidia_device_plugin>, run the same way:
+locally via L<Kubernetes::REST>, no C<kubectl> or SSH to the cluster.
+
+The DaemonSet is upstream's C<k8s-ds-amdgpu-dp.yaml> of the pinned release,
+with the image tag pinned instead of left out and the security context of
+upstream's Helm chart (C<amd-gpu-helm> 0.22.0) instead of a privileged
+container:
+
+=over
+
+=item * C<rocm/k8s-device-plugin:VERSION> with C<allowPrivilegeEscalation:
+false> and all capabilities dropped, the kubelet's C<device-plugins>
+directory and the host's C</sys> mounted.
+
+=item * C<nodeSelector> C<kubernetes.io/arch: amd64>, as upstream ships it
+(the images are amd64 only).
+
+=item * C<priorityClassName: system-node-critical> and a
+C<CriticalAddonsOnly> toleration.
+
+=back
+
+B<It runs on every amd64 node>, and on one without the C<amdgpu> driver
+loaded the plugin exits, so its pod there stays in C<CrashLoopBackOff>. On a
+cluster with such nodes pass C<affinity> (below).
+
+No runtime class, CDI or containerd change is involved: the plugin hands the
+kubelet C</dev/kfd> and the GPU's C</dev/dri/cardN> and C</dev/dri/renderDN>
+for the pods that request C<amd.com/gpu> (one resource per GPU; ROCm's
+C<single> naming), and the container images bring their own ROCm. The host
+needs the C<amdgpu> kernel driver (L<Rex::GPU>'s C<gpu_setup>, when it sets
+up AMD GPUs; see L<Rex::Rancher/GPU hardware support>). The device nodes keep
+their host owner and group (C<video>, C<render>), so a pod that does not run
+as root needs those groups as C<supplementalGroups>, or the nodes need K3s'
+and RKE2's C<nonroot-devices> option, which Rex::Rancher does not set.
+
+Every object already in the cluster is updated (C<resourceVersion> is
+fetched before the update), as in L</deploy_nvidia_device_plugin>. Then it
+polls up to 24 times (2-minute timeout) for C<amd.com/gpu> capacity in any
+node's C<status.capacity>; when none appears, a warning says so (no die),
+naming the API error of the last attempt if that one failed.
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+Optional options:
+
+=over
+
+=item C<version>
+
+Image tag of the device plugin, and of the node labeller as
+C<labeller-VERSION>. Default: C<1.31.0.11>.
+
+=item C<node_labeller>
+
+If true, also deploy upstream's node labeller (C<k8s-ds-amdgpu-labeller.yaml>
+of the same release): the ClusterRole C<cr-node-labeller> (C<get>, C<list>,
+C<watch>, C<update> on nodes), the ClusterRoleBinding C<labeller>, the
+ServiceAccount C<node-labeller-sa> and the DaemonSet
+C<amdgpu-labeller-daemonset> in C<kube-system>, which labels each node with
+its AMD GPUs' VRAM, compute unit and SIMD count, device ID, family and
+product name. It runs privileged with the host's C</dev> and C</sys>
+(read-only) mounted, as upstream's manifest has it: it opens the GPU's
+C</dev/dri> nodes. Default: C<0>; L<Rex::Rancher/rancher_deploy_server>
+deploys the plugin without it.
+
+=item C<affinity>
+
+A pod C<affinity> (hashref, as in a pod spec) for the plugin's DaemonSet and
+the labeller's, on top of the C<amd64> C<nodeSelector>. Default: none, which
+is upstream's behaviour (every amd64 node, see above). With Node Feature
+Discovery in the cluster, the AMD GPU nodes are those with one of its PCI
+labels for vendor C<1002>; the terms of C<nodeSelectorTerms> are alternatives:
+
+  # 0300 a Radeon, 0302 a 3D controller, 0380 an APU's GPU (e.g. gfx1151),
+  # 1200 an Instinct MI355X (other Instinct models unverified)
+  my @terms = map {
+    +{ matchExpressions => [{
+      key      => "feature.node.kubernetes.io/pci-${_}_1002.present",
+      operator => 'In',
+      values   => ['true'],
+    }] }
+  } qw( 0300 0302 0380 1200 );
+
+  deploy_amd_device_plugin(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity   => { nodeAffinity => {
+      requiredDuringSchedulingIgnoredDuringExecution => { nodeSelectorTerms => \@terms },
+    } },
+  );
+
+Anything but a hashref dies before the cluster is touched.
+
+=back
+
+  deploy_amd_device_plugin(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+
+=cut
+
+sub deploy_amd_device_plugin {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+  my $version    = $opts{version} // AMD_DEVICE_PLUGIN_VERSION;
+  my $affinity   = $opts{affinity};
+  die "affinity must be a hash reference (a pod spec's affinity)\n"
+    if defined $affinity && ref $affinity ne 'HASH';
+
+  Rex::Logger::info("Deploying AMD GPU device plugin $version...");
+
+  my $api = _api($kubeconfig);
+
+  _create_or_update($api, DaemonSet => _amd_device_plugin_daemonset_spec($version, $affinity));
+  if ($opts{node_labeller}) {
+    Rex::Logger::info("  Deploying the AMD GPU node labeller...");
+    _create_or_update($api, @$_) for _amd_node_labeller_specs($version, $affinity);
   }
 
   Rex::Logger::info("  DaemonSet applied, waiting for GPU resources...");
-  _wait_for_gpu_resource($api);
+  _wait_for_gpu_resource($api, 'amd.com/gpu');
 
-  Rex::Logger::info("NVIDIA device plugin ready");
+  Rex::Logger::info("AMD GPU device plugin ready");
 }
 
 =method untaint_node(%opts)
@@ -341,8 +476,176 @@ sub _nvidia_device_plugin_daemonset_spec {
   };
 }
 
+# ROCm's device plugin DaemonSet, upstream's k8s-ds-amdgpu-dp.yaml at the
+# release AMD_DEVICE_PLUGIN_VERSION names, with three changes: the image
+# carries the tag; the securityContext is the Helm chart's (amd-gpu-helm
+# 0.22.0), not privileged: the plugin reads /sys, writes its socket to the
+# kubelet's device-plugins directory and hands the kubelet the device nodes
+# (/dev/kfd, /dev/dri/cardN, /dev/dri/renderDN) to put into the pods without
+# opening them itself (the chart's extra /var/lib/amd-metrics-exporter mount
+# is for its -pulse health checks, not used here); and $affinity, if given,
+# is the pod affinity. A plain hashref like the NVIDIA one, so its shape is
+# unit-tested offline. The caller resolves the version default.
+sub _amd_device_plugin_daemonset_spec {
+  my ($version, $affinity) = @_;
+  return {
+    metadata => {
+      name      => 'amdgpu-device-plugin-daemonset',
+      namespace => 'kube-system',
+    },
+    spec => {
+      selector => {
+        matchLabels => { name => 'amdgpu-dp-ds' },
+      },
+      template => {
+        metadata => {
+          labels => { name => 'amdgpu-dp-ds' },
+        },
+        spec => {
+          restartPolicy     => 'Always',
+          nodeSelector      => { 'kubernetes.io/arch' => 'amd64' },
+          ( defined $affinity ? ( affinity => $affinity ) : () ),
+          priorityClassName => 'system-node-critical',
+          tolerations => [{
+            key      => 'CriticalAddonsOnly',
+            operator => 'Exists',
+          }],
+          containers => [{
+            image => "rocm/k8s-device-plugin:$version",
+            name  => 'amdgpu-dp-cntr',
+            securityContext => {
+              allowPrivilegeEscalation => \0,
+              capabilities             => { drop => ['ALL'] },
+            },
+            volumeMounts => [
+              { name => 'dp',  mountPath => '/var/lib/kubelet/device-plugins' },
+              { name => 'sys', mountPath => '/sys' },
+            ],
+          }],
+          volumes => [
+            { name => 'dp',  hostPath => { path => '/var/lib/kubelet/device-plugins' } },
+            { name => 'sys', hostPath => { path => '/sys' } },
+          ],
+        },
+      },
+    },
+  };
+}
+
+# The node labeller, upstream's k8s-ds-amdgpu-labeller.yaml at the same
+# release: [ kind => spec ] pairs in upstream's order. It stays privileged,
+# as there ("Needed for /dev"): the chart's unprivileged variant may not open
+# /dev/dri/* under runc's device cgroup, and the family and product-name
+# labels go through libdrm. Changes: the image is labeller-$version, not
+# labeller-latest, and so its imagePullPolicy Always is left out
+# (Kubernetes' default for a tag other than latest is IfNotPresent; a pinned
+# tag needs no pull on every pod start, which would tie each restart to
+# Docker Hub); the ClusterRoleBinding loses upstream's namespace: default,
+# which a cluster-scoped object does not have; $affinity, if given, is the
+# pod affinity, as for the plugin.
+sub _amd_node_labeller_specs {
+  my ($version, $affinity) = @_;
+  return (
+    [ ClusterRole => {
+      metadata => { name => 'cr-node-labeller' },
+      rules    => [{
+        apiGroups => [''],
+        resources => ['nodes'],
+        verbs     => [qw( watch get list update )],
+      }],
+    } ],
+    [ ClusterRoleBinding => {
+      metadata => { name => 'labeller' },
+      roleRef  => {
+        apiGroup => 'rbac.authorization.k8s.io',
+        kind     => 'ClusterRole',
+        name     => 'cr-node-labeller',
+      },
+      subjects => [{
+        kind      => 'ServiceAccount',
+        name      => 'node-labeller-sa',
+        namespace => 'kube-system',
+      }],
+    } ],
+    [ ServiceAccount => {
+      metadata => { name => 'node-labeller-sa', namespace => 'kube-system' },
+    } ],
+    [ DaemonSet => {
+      metadata => {
+        name      => 'amdgpu-labeller-daemonset',
+        namespace => 'kube-system',
+      },
+      spec => {
+        selector => {
+          matchLabels => { name => 'amdgpu-lr-ds' },
+        },
+        template => {
+          metadata => {
+            labels => { name => 'amdgpu-lr-ds' },
+          },
+          spec => {
+            serviceAccountName => 'node-labeller-sa',
+            nodeSelector       => { 'kubernetes.io/arch' => 'amd64' },
+            ( defined $affinity ? ( affinity => $affinity ) : () ),
+            priorityClassName  => 'system-node-critical',
+            tolerations => [{
+              key      => 'CriticalAddonsOnly',
+              operator => 'Exists',
+            }],
+            containers => [{
+              name       => 'amdgpu-lr-cntr',
+              image      => "rocm/k8s-device-plugin:labeller-$version",
+              workingDir => '/root',
+              command    => ['./k8s-node-labeller'],
+              args       => [qw( -vram -cu-count -simd-count -device-id -family -product-name )],
+              env        => [{
+                name      => 'DS_NODE_NAME',
+                valueFrom => { fieldRef => { fieldPath => 'spec.nodeName' } },
+              }],
+              # Upstream: privileged is needed for /dev.
+              securityContext => {
+                privileged   => \1,
+                capabilities => { drop => ['ALL'] },
+              },
+              volumeMounts => [
+                { name => 'sys', mountPath => '/sys', readOnly => \1 },
+                { name => 'dev', mountPath => '/dev' },
+              ],
+            }],
+            volumes => [
+              { name => 'sys', hostPath => { path => '/sys', type => 'Directory' } },
+              { name => 'dev', hostPath => { path => '/dev', type => 'Directory' } },
+            ],
+          },
+        },
+      },
+    } ],
+  );
+}
+
+# Create the $kind object $spec describes or, where it already exists, update
+# it with the cluster's resourceVersion (optimistic concurrency). Namespaced
+# or cluster-scoped as $spec's metadata has it.
+sub _create_or_update {
+  my ($api, $kind, $spec) = @_;
+  my $obj = $api->new_object($kind => %$spec);
+
+  return $obj if eval { $api->create($obj); 1 };
+  my $err = $@;
+  die $err unless $err =~ /already exist/i;
+
+  Rex::Logger::info("  $kind already exists, updating...");
+  my $namespace = $spec->{metadata}{namespace};
+  my $existing  = $api->get($kind, $spec->{metadata}{name},
+    ( defined $namespace ? ( namespace => $namespace ) : () ));
+  $obj->metadata->resourceVersion($existing->metadata->resourceVersion);
+  $api->update($obj);
+  return $obj;
+}
+
+# Poll for $resource (nvidia.com/gpu, amd.com/gpu) in any node's capacity.
 sub _wait_for_gpu_resource {
-  my ($api) = @_;
+  my ($api, $resource) = @_;
 
   # The error of the last attempt, if it failed: a 403 or a dead API reads
   # the same as a plugin that has not reported yet until the warning names it.
@@ -352,9 +655,9 @@ sub _wait_for_gpu_resource {
       my $nodes = $api->list('Node');
       for my $node (@{ $nodes->items }) {
         my $cap = $node->status->capacity;
-        if ($cap && $cap->{'nvidia.com/gpu'} && $cap->{'nvidia.com/gpu'} > 0) {
-          Rex::Logger::info("  [ok] nvidia.com/gpu: "
-            . $cap->{'nvidia.com/gpu'} . " on "
+        if ($cap && $cap->{$resource} && $cap->{$resource} > 0) {
+          Rex::Logger::info("  [ok] $resource: "
+            . $cap->{$resource} . " on "
             . $node->metadata->name);
           return 1;  # returns 1 as value of the eval block
         }
@@ -367,7 +670,7 @@ sub _wait_for_gpu_resource {
     sleep 5;
   }
 
-  Rex::Logger::info("  nvidia.com/gpu resource did not appear — check device plugin"
+  Rex::Logger::info("  $resource resource did not appear — check device plugin"
     . ( defined $last_error ? " (last API error: $last_error)" : '' ), "warn");
   return 0;
 }
@@ -387,13 +690,20 @@ sub _wait_for_gpu_resource {
     version    => 'v0.17.0',
   );
 
+  # Deploy ROCm's device plugin for AMD GPUs, with its node labeller,
+  # and wait for amd.com/gpu to appear
+  deploy_amd_device_plugin(
+    kubeconfig    => "$ENV{HOME}/.kube/mycluster.yaml",
+    node_labeller => 1,
+  );
+
   # Remove control-plane taints on a single-node cluster
   untaint_node(kubeconfig => "$ENV{HOME}/.kube/single.yaml");
 
 =head1 DESCRIPTION
 
 L<Rex::Rancher::K8s> provides Kubernetes API operations for L<Rex::Rancher>
-using L<Kubernetes::REST> and L<IO::K8s>. All four public functions run
+using L<Kubernetes::REST> and L<IO::K8s>. All five public functions run
 entirely on the B<local machine> against the cluster's HTTP API — no
 C<kubectl> binary is required anywhere, and no SSH connection to the cluster
 nodes is needed for these operations.
@@ -404,7 +714,8 @@ The module is used internally by L<Rex::Rancher/rancher_deploy_server> to:
 
 =item 1. Wait for the API server to respond after C<install_server> returns
 
-=item 2. Deploy the NVIDIA device plugin when C<gpu =E<gt> 1>
+=item 2. Deploy the NVIDIA device plugin, the AMD one, or both, when
+C<gpu =E<gt> 1> (which one: L<Rex::Rancher/GPU hardware support>)
 
 =back
 

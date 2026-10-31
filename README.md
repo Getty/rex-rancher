@@ -10,7 +10,7 @@ Handles the full lifecycle of a Rancher-based Kubernetes deployment from a Rex t
 - **Control plane installation** — RKE2 or K3s via official install scripts
 - **Agent/worker node joining** — joins nodes to an existing cluster
 - **Cilium CNI** — installs Cilium by default (`cilium => 0` keeps the distribution's own CNI) with kube-proxy replacement on RKE2 and K3s; optional Gateway API CRDs
-- **GPU support** — NVIDIA driver + Container Toolkit + CDI + device plugin (via [Rex::GPU](https://metacpan.org/pod/Rex::GPU))
+- **GPU support** — NVIDIA driver + Container Toolkit + CDI + device plugin (via [Rex::GPU](https://metacpan.org/pod/Rex::GPU)); AMD GPUs get ROCm's device plugin where Rex::GPU sets them up
 - **Registry mirrors** — configures `registries.yaml` for private pull-through caches
 - **Local kubeconfig management** — fetches and patches kubeconfig for external access
 
@@ -48,12 +48,12 @@ task 'deploy_agents', group => 'workers', sub {
 
 | Module | Purpose |
 |--------|---------|
-| `Rex::Rancher` | Top-level: `rancher_deploy_server`, `rancher_deploy_agent`, `rancher_scan_known_hosts` (re-exports `wait_for_api`, `untaint_node`, `deploy_nvidia_device_plugin`) |
+| `Rex::Rancher` | Top-level: `rancher_deploy_server`, `rancher_deploy_agent`, `rancher_scan_known_hosts` (re-exports `wait_for_api`, `untaint_node`, `deploy_nvidia_device_plugin`, `deploy_amd_device_plugin`) |
 | `Rex::Rancher::Server` | Control plane install, kubeconfig/token retrieval |
 | `Rex::Rancher::Agent` | Worker node join |
 | `Rex::Rancher::Node` | Node preparation (kernel, swap, modules) |
 | `Rex::Rancher::Cilium` | Cilium CNI installation |
-| `Rex::Rancher::K8s` | Local Kubernetes API ops (device plugin, readiness wait) |
+| `Rex::Rancher::K8s` | Local Kubernetes API ops (NVIDIA and AMD device plugins, readiness wait) |
 | `Rex::Rancher::Uninstall` | `uninstall_node`: RKE2/K3s uninstall plus Cilium datapath cleanup; the Cilium-leftover check `install_server`/`install_agent` run first |
 | `Rex::Rancher::Distribution` | What RKE2 and K3s differ in (`::RKE2`, `::K3s`), used by the modules above |
 
@@ -67,6 +67,8 @@ set connection => 'LibSSH';
 ```
 
 `Rex::GPU` 0.002 or later is required when using `gpu => 1` with the default `gpu_setup => 1`; an older, missing or unloadable `Rex::GPU` makes the deploy die before the host is touched. With `gpu_setup => 0` (e.g. the NVIDIA GPU Operator provides driver and toolkit) it is not needed, and `gpu_device_plugin => 0` skips the device plugin as well. With `Rex::GPU` 0.002, the GPU generation decides both whether a GPU gets a driver and which one: every Maxwell-or-newer GPU does, consumer and laptop cards (GeForce MX, GT 1030, GTX 9xx, laptop RTX) included, so a re-deploy with `gpu => 1` on such a node now installs the driver and, with `reboot => 1`, reboots it. Kepler and older GPUs are skipped with a warning; a Kepler-only node deploys without `nvidia.com/gpu`, and the device-plugin step ends with a warning. Conflicting GPU mixes such as V100 + B200 and a missing package source for the required driver make the deploy die after node preparation, before the driver or Kubernetes is installed; so does an NVIDIA vGPU guest (Azure NVadsA10 v5, AWS G6f, ...) without an already working licensed vGPU driver, even next to a passed-through GPU. HGX A100/H100/H200 nodes (NVSwitch) get NVIDIA Fabric Manager at exactly the driver's version; HGX B200/B300 get Fabric Manager plus the NVLink Subnet Manager `nvlsm`, `infiniband-diags`, `libibumad` and the `ib_umad` module, a warning on a kernel older than 5.17, and a warning if the fabric does not come up (OFED is not set up). Where no Fabric Manager or `nvlsm` source is known — Debian 11 or openSUSE with an NVSwitch, B200/B300 on an OS without an `nvlsm` source — the deploy dies at the same point, before any driver is installed. GB200/GB300 get an `nvidia-imex` hint — see "GPU hardware support" in the `Rex::Rancher` POD.
+
+AMD GPUs: released `Rex::GPU` (up to 0.005) only detects them, and with `gpu => 1` the deploy warns that they get neither driver nor device plugin, then goes on as before. A `Rex::GPU` that sets AMD GPUs up (it has `Rex::GPU->amd_class`) installs the `amdgpu` driver for the ROCm-capable ones that are not integrated; the deploy then runs ROCm's device plugin (`deploy_amd_device_plugin`, pinned to 1.31.0.11) and waits for `amd.com/gpu` — instead of the NVIDIA plugin on a host without an NVIDIA GPU, next to it on a host with both. Integrated ones — a Ryzen's Radeon (gfx1103 on a Hetzner AX42), APUs such as Ryzen AI Max (Strix Halo) — are set up only with `gpu_amd_integrated => 1`, which needs such a `Rex::GPU` or the deploy dies before the host is touched; without it they change nothing, like AMD GPUs that are not ROCm-capable. ROCm's plugin runs on every amd64 node and crash-loops where `amdgpu` is not loaded; `deploy_amd_device_plugin` takes an `affinity` for such clusters — see "AMD GPUs" in the `Rex::Rancher` POD.
 
 **Verifying a deploy:** `prove -lr t/` runs a compile check and offline unit tests only — there is no integration test. A pipeline change is only proven by a real deploy on a fresh node; [`eg/hetzner-gpu.Rexfile`](eg/hetzner-gpu.Rexfile) shows a complete one.
 

@@ -1,6 +1,20 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - With gpu => 1 and a Rex::GPU that sets up AMD GPUs (Rex::GPU->amd_class),
+    rancher_deploy_server deploys ROCm's k8s-device-plugin 1.31.0.11 and waits
+    for amd.com/gpu where gpu_setup set up an AMD GPU: instead of the NVIDIA
+    plugin on a host without an NVIDIA GPU, next to it on a mixed host. With
+    a Rex::GPU that does not, server and agent warn about the AMD GPUs left
+    without driver and plugin, and otherwise deploy as before.
+  - New option gpu_amd_integrated for rancher_deploy_server and
+    rancher_deploy_agent: integrated AMD GPUs (a Ryzen's Radeon, Strix Halo)
+    are set up too, passed to gpu_setup as amd_integrated; without it they
+    are left alone as before. With a Rex::GPU that does not set up AMD GPUs
+    it dies before the host is touched.
+  - New deploy_amd_device_plugin in Rex::Rancher::K8s, re-exported by
+    Rex::Rancher: unprivileged plugin DaemonSet, optional node labeller, and
+    an optional affinity for clusters with amd64 nodes without an AMD GPU.
   - An agent (or joining server) that cannot reach its server address no
     longer waits out the full 600 s: while the unit is not active the
     journal is read along, and once it has shown nothing but "Failed to

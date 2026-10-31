@@ -31,20 +31,23 @@ use vars qw(@EXPORT);
   wait_for_api
   untaint_node
   deploy_nvidia_device_plugin
+  deploy_amd_device_plugin
 );
 
 =method rancher_deploy_server(%opts)
 
 Full control plane deployment in a single call: prepare the node, optionally
 set up GPU support, install the Kubernetes distribution, wait for the API,
-install Cilium CNI, and deploy the NVIDIA device plugin.
+install Cilium CNI, and deploy the GPU device plugin.
 
 When C<gpu =E<gt> 1> is passed and L<Rex::GPU> 0.002 or later is installed, GPU detection
 and driver installation are performed automatically as step 2 before the
-cluster is brought up. After Cilium is running, the NVIDIA device plugin
+cluster is brought up. After Cilium is running, the GPU device plugin
 DaemonSet is deployed via the local Kubernetes API (no C<kubectl> required
-on the remote host) and the function waits for C<nvidia.com/gpu> resources
-to appear on the node.
+on the remote host) and the function waits for its resource
+(C<nvidia.com/gpu>, C<amd.com/gpu>) to appear on the node. Which plugin, by
+what step 2 detected: NVIDIA's as before, AMD's where L<Rex::GPU> set up an
+AMD GPU, see L</GPU hardware support>.
 
 Before step 1, right after the connection check, the host is asked
 everything L<Rex::Rancher::Server/install_server> would refuse it for, with
@@ -64,7 +67,7 @@ The full pipeline for a GPU server deployment:
 
 =item 1. C<prepare_node> — base packages, hostname, timezone, locale, NTP, swap off, kernel modules, sysctl
 
-=item 2. C<gpu_setup> (only with C<gpu =E<gt> 1>, unless C<gpu_setup =E<gt> 0>) — driver + toolkit + CDI + containerd config
+=item 2. C<gpu_setup> (only with C<gpu =E<gt> 1>, unless C<gpu_setup =E<gt> 0>) — NVIDIA: driver + toolkit + CDI + containerd config; AMD (a L<Rex::GPU> that sets it up): driver
 
 =item 3. C<install_server> — write config, run installer, wait for the service to be active, then for the kubeconfig file
 
@@ -76,7 +79,7 @@ save to C<kubeconfig_file>, wait for API with L<Rex::Rancher::K8s/wait_for_api>
 upgrade or leave Cilium alone according to its Helm release (read through the
 saved kubeconfig once the API answered; without one, plain C<cilium install>)
 
-=item 6. C<deploy_nvidia_device_plugin> (only with C<gpu =E<gt> 1> and C<kubeconfig_file>, unless C<gpu_device_plugin =E<gt> 0>)
+=item 6. C<deploy_nvidia_device_plugin> and/or C<deploy_amd_device_plugin> (only with C<gpu =E<gt> 1> and C<kubeconfig_file>, unless C<gpu_device_plugin =E<gt> 0>; which one: L</GPU hardware support>)
 
 =back
 
@@ -102,13 +105,14 @@ else dies before the host is touched.
 =item C<gpu>
 
 If true, detect GPUs and run the full GPU setup pipeline via L<Rex::GPU>
-before installing the Kubernetes distribution, and deploy the NVIDIA device
-plugin once the API answers. Requires L<Rex::GPU> 0.002 or later unless
+before installing the Kubernetes distribution, and deploy the GPU device
+plugin once the API answers (NVIDIA's, AMD's or both, see
+L</GPU hardware support>). Requires L<Rex::GPU> 0.002 or later unless
 C<gpu_setup =E<gt> 0>: with an older one, or none, the deploy dies before
 the host is touched, naming the installed version (0.001 writes a bare
 containerd C<config.toml.tmpl> on every run, which RKE2 and K3s render
 instead of their own containerd config). Default: C<0>; without it no GPU step runs and
-C<gpu_setup>/C<gpu_device_plugin> are ignored. Driver selection depends on the
+C<gpu_setup>/C<gpu_device_plugin>/C<gpu_amd_integrated> are ignored. Driver selection depends on the
 GPU generation, and some hardware/OS combinations make the deploy die instead
 — see L</GPU hardware support>.
 
@@ -119,6 +123,11 @@ container toolkit, CDI, containerd config). Default: C<1>. Pass C<0> when the
 NVIDIA GPU Operator (C<driver.enabled>, C<toolkit.enabled>) or the host image
 provides these; L<Rex::GPU> is then not loaded and need not be installed.
 On rke2, C<gpu_setup =E<gt> 0> also turns on C<nvidia_runtime_path>.
+Without C<gpu_setup> nothing is detected, so step 6 deploys the NVIDIA
+device plugin: an AMD host whose driver comes from elsewhere passes
+C<gpu_device_plugin =E<gt> 0> and calls
+L<Rex::Rancher::K8s/deploy_amd_device_plugin> itself (C<nvidia_runtime_path>
+does nothing there, as no C<nvidia-container-runtime> is on the host).
 
 =item C<nvidia_runtime_path>
 
@@ -131,10 +140,11 @@ for C<gpu =E<gt> 1, gpu_setup =E<gt> 0>, off otherwise. No effect on k3s.
 
 =item C<gpu_device_plugin>
 
-With C<gpu =E<gt> 1>: whether step 6 deploys the NVIDIA device plugin
-DaemonSet. Default: C<1>. Pass C<0> when the GPU Operator runs its own device
+With C<gpu =E<gt> 1>: whether step 6 deploys the GPU device plugin
+DaemonSet, NVIDIA's or AMD's or both (see L</GPU hardware support>).
+Default: C<1>. Pass C<0> when the GPU Operator runs its own device
 plugin (C<devicePlugin.enabled>) — two plugins would both advertise
-C<nvidia.com/gpu>. With C<gpu_setup =E<gt> 0> and this left on, the driver and
+C<nvidia.com/gpu> (or C<amd.com/gpu>). With C<gpu_setup =E<gt> 0> and this left on, the driver and
 the C<nvidia> runtime must already be on the host, or the plugin finds no GPU
 and the deploy ends with a warning.
 
@@ -144,7 +154,23 @@ If true, reboot the host after GPU driver installation and wait for it to
 come back before proceeding. Only meaningful when L<Rex::GPU>'s C<gpu_setup>
 runs (C<gpu =E<gt> 1> without C<gpu_setup =E<gt> 0>); otherwise it is ignored
 with a warning. Required on first deploy when C<nouveau> was previously
-loaded. Default: C<0>.
+loaded. A L<Rex::GPU> that sets up AMD GPUs reboots for them too, only after
+it installed the driver as a DKMS module. Default: C<0>.
+
+=item C<gpu_amd_integrated>
+
+With C<gpu =E<gt> 1>: set up integrated AMD GPUs as well, the ones
+L<Rex::GPU> reports as C<integrated> — the Radeon of a Ryzen CPU (gfx1103 on
+a Hetzner AX42) and APUs such as Ryzen AI Max (Strix Halo, gfx1151).
+L<Rex::GPU>'s C<gpu_setup> then gets C<amd_integrated =E<gt> 1> and installs
+the C<amdgpu> driver for those that are ROCm-capable, and step 6 deploys the
+AMD device plugin for them (see L</AMD GPUs>). Default: C<0>: an integrated
+AMD GPU gets neither driver nor device plugin, so a host with a Ryzen iGPU
+sees L<Rex::GPU>'s warning, plus an info line naming this option for a
+ROCm-capable one, and deploys as before; C<gpu_setup> is called without
+C<amd_integrated>. Needs a L<Rex::GPU> that sets up AMD
+GPUs; with one that does not, the deploy dies before the host is touched.
+Ignored with a warning with C<gpu_setup =E<gt> 0>.
 
 =item C<hostname>
 
@@ -203,7 +229,7 @@ from every node.
 =item C<kubeconfig_file>
 
 Local file path where the cluster kubeconfig is saved after the server is
-running. Required for the NVIDIA device plugin step to work. Optional — if
+running. Required for the device plugin step to work. Optional — if
 omitted no local kubeconfig is saved and device plugin deployment is skipped
 even when C<gpu =E<gt> 1>.
 
@@ -451,7 +477,10 @@ sub rancher_deploy_server {
   Rex::Rancher::Server::preflight_server(@install);
   prepare_node(%opts);
 
-  _gpu_setup_if_requested($distribution, %opts);
+  # What gpu_setup detected decides the device plugins of step 6; its
+  # warnings come now, before the install.
+  my $gpus    = _gpu_setup_if_requested($distribution, %opts);
+  my %plugins = _gpu_device_plugins($gpus, %opts);
 
   install_server(@install);
 
@@ -479,9 +508,9 @@ sub rancher_deploy_server {
   # cilium => 0: install_server kept Canal/Flannel, nothing to install here.
   install_cilium(%cilium_opts, $api_up ? ( kubeconfig => $local_kc ) : ()) if $cilium;
 
-  my %gpu_steps = _gpu_steps(%opts);
-  if ($gpu_steps{device_plugin} && $local_kc) {
-    deploy_nvidia_device_plugin(kubeconfig => $local_kc);
+  if ($local_kc) {
+    deploy_nvidia_device_plugin(kubeconfig => $local_kc) if $plugins{nvidia};
+    deploy_amd_device_plugin(kubeconfig => $local_kc)    if $plugins{amd};
   }
 
   Rex::Logger::info("$distribution server deployment complete");
@@ -494,9 +523,13 @@ support, install the Kubernetes agent, and join the existing cluster.
 
 The pipeline is shorter than L</rancher_deploy_server> — there is no
 Cilium installation or kubeconfig retrieval. GPU host setup via
-C<gpu =E<gt> 1> (and C<gpu_setup>, C<reboot>) works identically to the server
-case; there is no device plugin step, so C<gpu_device_plugin> has no effect
-here.
+C<gpu =E<gt> 1> (and C<gpu_setup>, C<reboot>, C<gpu_amd_integrated>) works
+identically to the server case, the warning about AMD GPUs a L<Rex::GPU> without AMD support leaves
+alone included; there is no device plugin step, so C<gpu_device_plugin> has
+no effect here. The worker's GPUs are advertised by the cluster-wide device
+plugin DaemonSet: the one L</rancher_deploy_server> deployed for its own
+GPUs, or one deployed with L<Rex::Rancher::K8s/deploy_nvidia_device_plugin>
+or L<Rex::Rancher::K8s/deploy_amd_device_plugin>.
 
 Options:
 
@@ -536,15 +569,16 @@ Optional.
 As for L</rancher_deploy_server>; passed to
 L<Rex::Rancher::Node/prepare_node>.
 
-=item C<gpu>, C<gpu_setup>, C<reboot>
+=item C<gpu>, C<gpu_setup>, C<reboot>, C<gpu_amd_integrated>
 
 As for L</rancher_deploy_server> (step 2).
 
 =back
 
 A missing C<server> or C<token>, a C<distribution> other than C<rke2> or
-C<k3s>, or C<gpu =E<gt> 1> (with C<gpu_setup>) without L<Rex::GPU> 0.002 or
-later, dies before the host is touched. As on the
+C<k3s>, C<gpu =E<gt> 1> (with C<gpu_setup>) without L<Rex::GPU> 0.002 or
+later, or C<gpu_amd_integrated> with a L<Rex::GPU> that does not set up AMD
+GPUs, dies before the host is touched. As on the
 server, an SFTP-less host needs the C<LibSSH> connection backend; without it
 the deploy dies before the first step with a hint to C<Rex::LibSSH>.
 
@@ -589,7 +623,10 @@ sub rancher_deploy_agent {
   Rex::Rancher::Agent::preflight_agent(@install);
   prepare_node(%opts);
 
-  _gpu_setup_if_requested($distribution, %opts);
+  # No device plugin step on an agent: only the warning about AMD GPUs a
+  # Rex::GPU without AMD support leaves alone, as on the server.
+  my $gpus = _gpu_setup_if_requested($distribution, %opts);
+  _gpu_device_plugins($gpus, %opts);
 
   install_agent(@install);
 
@@ -783,12 +820,22 @@ sub _check_gpu_module {
     die "gpu => 1 requested but Rex::GPU could not be loaded: "
       . ( $err =~ s/\s+\z//r ) . "\n$hint";
   }
-  return if eval { Rex::GPU->VERSION($min); 1 };
-  my $have = Rex::GPU->VERSION;
-  die "gpu => 1 requested but Rex::GPU "
-    . ( defined $have ? $have : 'without a version' ) . " is installed, and "
-    . "gpu_setup needs $min or later: older versions write a bare containerd "
-    . "config.toml.tmpl on every run. $hint";
+  unless (eval { Rex::GPU->VERSION($min); 1 }) {
+    my $have = Rex::GPU->VERSION;
+    die "gpu => 1 requested but Rex::GPU "
+      . ( defined $have ? $have : 'without a version' ) . " is installed, and "
+      . "gpu_setup needs $min or later: older versions write a bare containerd "
+      . "config.toml.tmpl on every run. $hint";
+  }
+
+  # gpu_amd_integrated asks for the integrated AMD GPUs too: a Rex::GPU
+  # without AMD support sets up no AMD GPU at all, so the explicit request
+  # cannot be met (rex-gpu k1).
+  return unless $opts{gpu_amd_integrated} && !_rex_gpu_sets_up_amd();
+  die "gpu_amd_integrated requested but Rex::GPU " . Rex::GPU->VERSION
+    . " does not set up AMD GPUs (it has no Rex::GPU->amd_class): install a "
+    . "Rex-GPU that does, or leave gpu_amd_integrated off; nothing was done "
+    . "on the host\n";
 }
 
 sub _gpu_setup_if_requested {
@@ -798,6 +845,8 @@ sub _gpu_setup_if_requested {
   if ($opts{gpu} && !$steps{setup}) {
     Rex::Logger::info("gpu_setup => 0: Rex::GPU not used, driver, toolkit and containerd config are left to the host or the GPU Operator");
     Rex::Logger::info("reboot is ignored with gpu_setup => 0", "warn") if $opts{reboot};
+    Rex::Logger::info("gpu_amd_integrated is ignored with gpu_setup => 0", "warn")
+      if $opts{gpu_amd_integrated};
   }
   return unless $steps{setup};
 
@@ -805,10 +854,93 @@ sub _gpu_setup_if_requested {
   # run under the same _gpu_steps condition before the host is touched.
   Rex::GPU->import();
 
-  Rex::GPU::gpu_setup(
+  # Its return value is what it detected (Rex::GPU 0.002 on), which
+  # _gpu_device_plugins reads. amd_integrated only when asked for: without
+  # gpu_amd_integrated the call is the one every Rex::GPU knows.
+  return scalar Rex::GPU::gpu_setup(
     containerd_config => $distribution,
     reboot            => ($opts{reboot} // 0),
+    ( $opts{gpu_amd_integrated} ? ( amd_integrated => 1 ) : () ),
   );
+}
+
+# Whether the loaded Rex::GPU sets up AMD GPUs in gpu_setup (driver, then
+# its check): amd_class, next to its nvidia_class and detect_class, is the
+# sign (rex-gpu k1). Asked by feature, not by version: no released Rex::GPU
+# has it, and the recommended version is not raised for it.
+sub _rex_gpu_sets_up_amd { Rex::GPU->can('amd_class') ? 1 : 0 }
+
+# Pure: which device plugins step 6 deploys. device_plugin is the
+# gpu_device_plugin switch (_gpu_steps), gpus what gpu_setup returned
+# (Rex::GPU's detect hashref; anything else, or nothing when gpu_setup did
+# not run, says nothing about the host), amd_setup whether that Rex::GPU sets
+# up AMD GPUs, amd_integrated the gpu_amd_integrated option. warn and info
+# hold what the pipeline logs as warnings and as info lines.
+#
+# Every host deploys as before but one with an AMD GPU Rex::GPU set up and a
+# Rex::GPU that sets AMD GPUs up: that one gets the AMD plugin too, and no
+# NVIDIA plugin when it has no NVIDIA GPU. Set up means what gpu_setup
+# installs the driver for (rex-gpu k1): ROCm-capable (compute true) and not
+# integrated (the Radeon of a Ryzen CPU: gfx1103 on a Hetzner AX42 is
+# ROCm-capable), an integrated one only with amd_integrated.
+# Other AMD GPUs change nothing: the NVIDIA plugin is a cluster-wide
+# DaemonSet a control plane deploys for later NVIDIA workers. A Rex::GPU
+# without AMD support sets none up, so it only warns.
+sub _gpu_vendor_plan {
+  my (%args) = @_;
+  my $plugin = $args{device_plugin} ? 1 : 0;
+  my $gpus   = $args{gpus};
+  my %plan   = ( nvidia => $plugin, amd => 0, warn => [], info => [] );
+  return \%plan unless ref $gpus eq 'HASH';
+
+  my @nvidia = ref $gpus->{nvidia} eq 'ARRAY' ? @{ $gpus->{nvidia} } : ();
+  my @amd    = ref $gpus->{amd}    eq 'ARRAY' ? @{ $gpus->{amd} }    : ();
+  return \%plan unless @amd;
+
+  unless ($args{amd_setup}) {
+    my $rex_gpu = 'Rex::GPU'
+      . ( defined $args{rex_gpu_version} ? " $args{rex_gpu_version}" : '' );
+    push @{ $plan{warn} }, "$rex_gpu does not set up AMD GPUs, so this deploy "
+      . "installs no driver and no amd.com/gpu device plugin for "
+      . join(', ', map { $_->{name} // 'AMD GPU' } @amd)
+      . " and goes on as without it. For a ROCm GPU, install a Rex-GPU that "
+      . "sets up AMD GPUs (it has Rex::GPU->amd_class), or provide the driver "
+      . "on the host and run deploy_amd_device_plugin";
+    return \%plan;
+  }
+
+  # Rex::GPU warns about an integrated GPU it leaves alone, naming its own
+  # amd_integrated; the option here is gpu_amd_integrated, and an
+  # amd_integrated passed to rancher_deploy_* is ignored without a word.
+  my @left = $args{amd_integrated} ? () : grep { $_->{compute} && $_->{integrated} } @amd;
+  push @{ $plan{info} }, join(', ', map { $_->{name} // 'AMD GPU' } @left)
+    . ( @left > 1
+      ? ' are integrated, ROCm-capable AMD GPUs left alone; pass gpu_amd_integrated => 1 to set them up'
+      : ' is an integrated, ROCm-capable AMD GPU left alone; pass gpu_amd_integrated => 1 to set it up' )
+    . " (gpu_setup's amd_integrated)" if @left;
+
+  return \%plan
+    unless grep { $_->{compute} && ( !$_->{integrated} || $args{amd_integrated} ) } @amd;
+  $plan{amd}    = $plugin;
+  $plan{nvidia} = 0 unless @nvidia;
+  return \%plan;
+}
+
+# The plan for this host from what _gpu_setup_if_requested returned, its
+# warnings and info lines logged.
+sub _gpu_device_plugins {
+  my ($gpus, %opts) = @_;
+  my %steps = _gpu_steps(%opts);
+  my $plan  = _gpu_vendor_plan(
+    device_plugin   => $steps{device_plugin},
+    gpus            => $gpus,
+    amd_setup       => _rex_gpu_sets_up_amd(),
+    amd_integrated  => $opts{gpu_amd_integrated} ? 1 : 0,
+    rex_gpu_version => Rex::GPU->VERSION,
+  );
+  Rex::Logger::info($_, 'warn') for @{ $plan->{warn} };
+  Rex::Logger::info($_)         for @{ $plan->{info} };
+  return %$plan;
 }
 
 sub _save_kubeconfig_locally {
@@ -956,7 +1088,8 @@ the automatic apt services), hostname, timezone, locale, NTP, swap off,
 kernel modules (br_netfilter, overlay), sysctl for Kubernetes networking.
 
 =item 2. B<GPU setup> (C<gpu =E<gt> 1>, unless C<gpu_setup =E<gt> 0>) — NVIDIA driver via DKMS, optional
-reboot, Container Toolkit, CDI specs, containerd runtime config. Handled by
+reboot, Container Toolkit, CDI specs, containerd runtime config; the
+C<amdgpu> driver for AMD GPUs with a L<Rex::GPU> that sets them up. Handled by
 L<Rex::GPU>.
 
 =item 3. B<Cluster bring-up> — write config (with C<cilium>, the
@@ -970,10 +1103,10 @@ distribution's own CNI in place) — Cilium CLI installed on the remote host,
 Cilium installed, upgraded or left alone with distribution-appropriate Helm
 values (kube-proxy replacement on both).
 
-=item 5. B<NVIDIA device plugin> (C<gpu =E<gt> 1> + C<kubeconfig_file>, unless
-C<gpu_device_plugin =E<gt> 0>) — DaemonSet
-applied via the Kubernetes API, wait for C<nvidia.com/gpu> capacity on the
-node. No C<kubectl> required anywhere.
+=item 5. B<GPU device plugin> (C<gpu =E<gt> 1> + C<kubeconfig_file>, unless
+C<gpu_device_plugin =E<gt> 0>) — NVIDIA's or ROCm's DaemonSet, or both,
+applied via the Kubernetes API, wait for C<nvidia.com/gpu> or C<amd.com/gpu>
+capacity on the node. No C<kubectl> required anywhere.
 
 =back
 
@@ -1006,8 +1139,9 @@ For fine-grained control, use the individual modules directly:
 =head2 GPU hardware support
 
 With C<gpu =E<gt> 1> (and C<gpu_setup> not switched off), driver choice and
-hardware checks are made by L<Rex::GPU>'s C<gpu_setup>; Rex::Rancher passes only the distribution and
-C<reboot>. L<Rex::GPU> 0.002 (the oldest version accepted) behaves as follows:
+hardware checks are made by L<Rex::GPU>'s C<gpu_setup>; Rex::Rancher passes only the distribution,
+C<reboot> and, with C<gpu_amd_integrated>, C<amd_integrated>. L<Rex::GPU> 0.002 (the oldest version accepted) behaves as
+follows for NVIDIA GPUs (AMD: L</AMD GPUs> below):
 
 =over
 
@@ -1086,6 +1220,48 @@ hostname, timezone, locale, swap, kernel modules and sysctl are already
 changed; no Kubernetes distribution has been
 installed yet. See L<Rex::GPU> for the details of detection and driver
 selection.
+
+=head2 AMD GPUs
+
+L<Rex::GPU> 0.002 to 0.005 detect AMD GPUs but set none up. A L<Rex::GPU>
+that does — recognised by its C<amd_class> method, not by its version —
+installs the C<amdgpu> driver in C<gpu_setup> for every AMD GPU it reports
+as ROCm-capable (C<compute> true) and not C<integrated>, and only warns
+about the others. An integrated one — the Radeon of a Ryzen CPU (gfx1103 on
+a Hetzner AX42 is ROCm-capable) or an APU such as Ryzen AI Max (Strix Halo);
+an Instinct MI300A is not one — is set up only with C<gpu_amd_integrated>.
+No runtime and no containerd change are involved for AMD. Step 6 follows
+what C<gpu_setup> set up:
+
+=over
+
+=item * B<An AMD GPU set up that way and no NVIDIA GPU>:
+L<Rex::Rancher::K8s/deploy_amd_device_plugin> and the wait for
+C<amd.com/gpu>, and B<no> NVIDIA device plugin. A cluster that also has
+NVIDIA workers deploys that one itself with
+L<Rex::Rancher::K8s/deploy_nvidia_device_plugin>.
+
+=item * B<NVIDIA GPUs and an AMD GPU set up that way>: both plugins,
+NVIDIA's first, each with its wait.
+
+=item * B<Every other host> — no GPU, NVIDIA GPUs only, AMD GPUs that are
+not ROCm-capable, integrated ones without C<gpu_amd_integrated>, or a
+L<Rex::GPU> without AMD support — gets the NVIDIA device plugin exactly as
+before. It is a cluster-wide DaemonSet, there for later NVIDIA workers as
+well.
+
+=item * B<A L<Rex::GPU> without AMD support> on a host with an AMD GPU of
+any kind: a warning names the AMD GPUs, which get neither driver nor device
+plugin, and the deploy goes on as before — server and agent alike. With
+C<gpu_amd_integrated> it dies instead, before the host is touched.
+
+=back
+
+ROCm's device plugin runs on every amd64 node and crash-loops on one
+without the C<amdgpu> driver. For a cluster with such nodes, pass
+C<gpu_device_plugin =E<gt> 0> and deploy it with an C<affinity> (see
+L<Rex::Rancher::K8s/deploy_amd_device_plugin>). Without C<gpu_setup> nothing
+is detected and the NVIDIA plugin is deployed (see C<gpu_setup> above).
 
 =head1 SEE ALSO
 
