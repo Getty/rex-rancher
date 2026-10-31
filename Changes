@@ -31,6 +31,14 @@ Revision history for Rex-Rancher
     an older cluster before creating anything. Its GPUs show as
     ResourceSlices of driver gpu.amd.com, not as amd.com/gpu; a node runs
     either this or the device plugin.
+  - New deploy_amd_metrics_exporter and remove_amd_metrics_exporter in
+    Rex::Rancher::K8s (not re-exported by Rex::Rancher): ROCm's
+    device-metrics-exporter v1.5.3 as its Helm chart deploys it with the
+    default values, in kube-system and on amdgpu nodes of your choosing
+    (affinity option; amd64 only), metrics at /metrics on port 5000 with
+    the prefix amd_. Runs next to the device plugin or the DRA driver.
+    Upstream supports Instinct and Radeon AI, not APUs or consumer Radeons.
+    No ServiceMonitor.
   - An agent (or joining server) that cannot reach its server address no
     longer waits out the full 600 s: while the unit is not active the
     journal is read along, and once it has shown nothing but "Failed to

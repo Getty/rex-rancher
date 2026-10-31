@@ -5,6 +5,7 @@ our $VERSION = '0.005';
 use v5.14.4;
 use warnings;
 
+use JSON::MaybeXS qw( JSON );
 use Kubernetes::REST::Kubeconfig;
 use Rex::Logger;
 use Rex::Rancher::Distribution;
@@ -19,10 +20,12 @@ use vars qw(@EXPORT);
   control_plane_version
   deploy_amd_device_plugin
   deploy_amd_dra_driver
+  deploy_amd_metrics_exporter
   deploy_amd_node_labeller
   deploy_nvidia_device_plugin
   remove_amd_device_plugin
   remove_amd_dra_driver
+  remove_amd_metrics_exporter
   remove_amd_node_labeller
   wait_for_api
   untaint_node
@@ -61,6 +64,22 @@ use constant AMD_RESOURCE_NAMINGS => qw( single mixed );
 # v1.0.1's fix for amdgpu 6.19.14 and later: the image tag is always spelled
 # out. docker.io/rocm/k8s-gpu-dra-driver is amd64 only.
 use constant AMD_DRA_DRIVER_VERSION => 'v1.0.1';
+
+# ROCm's device metrics exporter, release v1.5.3 (2026-10-07, commit
+# 3b3c7f0bd5c0ec0bf00b9960d1b736258b7190eb):
+# https://github.com/ROCm/device-metrics-exporter/releases/tag/v1.5.3
+# https://github.com/ROCm/device-metrics-exporter/commit/3b3c7f0bd5c0ec0bf00b9960d1b736258b7190eb
+# The objects are built after its Helm chart at that tag, as it renders with
+# its default values:
+# https://github.com/ROCm/device-metrics-exporter/tree/v1.5.3/helm-charts
+# and the config.json after the packaged chart of the release, which alone
+# carries it (git has no helm-charts/config.json; the Makefile's helm-lint
+# writes it from example/config-gpu.json):
+# https://rocm.github.io/device-metrics-exporter/charts/device-metrics-exporter-charts-v1.5.3.tgz
+# (sha256 c653e9918a1f1d4d2021e775d3e2b3c953d686fcffd55f865e7562f5b76a7634, as
+# the repository's index.yaml has it). The tag carries a v, as the chart's
+# image tag does. docker.io/rocm/device-metrics-exporter is amd64 only.
+use constant AMD_METRICS_EXPORTER_VERSION => 'v1.5.3';
 
 =method wait_for_api(%opts)
 
@@ -767,6 +786,206 @@ sub remove_amd_dra_driver {
   }
 }
 
+=method deploy_amd_metrics_exporter(%opts)
+
+Deploy ROCm's device metrics exporter for AMD GPUs
+(L<https://github.com/ROCm/device-metrics-exporter>), the objects upstream's
+Helm chart installs with its default values, in this order: the
+ServiceAccount, the ClusterRole and its ClusterRoleBinding, the ConfigMap
+C<amdgpu-metrics-exporter-config> with the exporter's C<config.json>, the
+DaemonSet and the Service. All but the ConfigMap are named
+C<amdgpu-metrics-exporter>; ServiceAccount, ConfigMap, DaemonSet and Service
+are in C<kube-system>. Objects already in the cluster are updated, as for
+L</deploy_amd_device_plugin>. Locally via L<Kubernetes::REST>, like the rest
+of this module.
+
+Each of its pods serves the GPU metrics of its node in Prometheus format at
+C</metrics> on port 5000, named with the prefix C<amd_>
+(C<amd_gpu_edge_temperature>, ...), with the pod, namespace and container a
+GPU is allocated to among the labels. The Service
+C<amdgpu-metrics-exporter> (ClusterIP, port 5000, named C<http>, selecting
+the pod label C<app: amdgpu-metrics-exporter>) has upstream's
+C<internalTrafficPolicy: Local>: a client in the cluster reaches the
+exporter of its own node only. To collect every node, scrape the pods (the
+Service's endpoints); the pods also carry upstream's label
+C<app.kubernetes.io/name: metrics-exporter>. There is no wait.
+
+B<Upstream supports the exporter on Instinct MI2xx and MI3xx (ROCm 6.2 or
+later) and on MI350P and Radeon AI (ROCm 7.13 or later), not on APUs such as
+the Ryzen AI Max (Strix Halo) and not on consumer Radeons>: there metrics are
+missing or stay 0
+(L<https://github.com/ROCm/device-metrics-exporter/issues/281>,
+L<https://github.com/ROCm/device-metrics-exporter/issues/353>; the platforms
+as C<docs/index.md> at v1.5.3 lists them).
+
+It allocates no GPUs and runs next to L</deploy_amd_device_plugin> or
+L</deploy_amd_dra_driver>: it finds the pods of a node's GPUs through the
+kubelet, whether the device plugin (C<amd.com/> resources) or the DRA driver
+(claims of driver C<gpu.amd.com>, which upstream calls beta, Kubernetes 1.34
+on) allocated them
+(L<https://github.com/ROCm/device-metrics-exporter/blob/v1.5.3/docs/installation/kubernetes-helm.md#enabling-dra-beta-for-gpu-monitoring>).
+
+The DaemonSet is the chart's:
+
+=over
+
+=item * C<docker.io/rocm/device-metrics-exporter:VERSION>, privileged, with
+C<-monitor-gpu=true -monitor-nic=false> and C<METRICS_EXPORTER_PORT> 5000,
+the chart's resources (requests 500m CPU and 512M memory, limits 2 CPUs and
+4Gi), the host's C</dev> and C</sys> and the kubelet's
+C</var/lib/kubelet/pod-resources> mounted, C</var/lib/amd-metrics-exporter>
+(the exporter's health socket) and C</var/run/exporter> mounted from the
+host and created there where missing, and the ConfigMap at C</etc/metrics/>.
+
+=item * An init container (C<busybox:1.36>, privileged) that waits until
+C</sys/class/kfd> and C</sys/module/amdgpu/drivers> exist, that is until the
+C<amdgpu> kernel driver is loaded.
+
+=item * A rolling update one node at a time; no priority class and no
+tolerations, as the chart has none by default.
+
+=back
+
+The exporter labels its node C<metricsexporter.amd.com.gpu.ID.state> for
+each GPU it finds unhealthy (by the config's thresholds), which is why its
+ClusterRole may update nodes; it may also read pods and create events.
+
+The ConfigMap holds the chart's C<config.json>: the metric prefix C<amd_>;
+the chart's labels (GPU UUID, serial number, pod, namespace, container, card
+model, driver version and more) with C<CLUSTER_NAME>
+C<amdgpu-k8s-metrics-exporter>; health thresholds of 0 uncorrectable ECC
+errors; profiler metrics off. Only the chart's list of fields is left out: at
+v1.5.3 it names every field the exporter knows, and without a list the
+exporter exports every field, so the metrics are the same; with another
+C<version> its fields not in v1.5.3 are exported too. There is no option for
+the config, and a change made to the ConfigMap by hand is overwritten by the
+next run of this function.
+
+What differs from the chart: the namespace is C<kube-system>, not
+upstream's C<kube-amd-gpu>, so there is no namespace to create or remove;
+the names carry no Helm release (above); the image tag is always given and
+pulled only when missing (no C<imagePullPolicy: Always>); a C<nodeSelector>
+C<kubernetes.io/arch: amd64>, as the image is amd64 only; no Helm labels;
+the config without its list of fields (above). The chart's ServiceMonitor is
+left out: the chart renders it only with C<serviceMonitor.enabled>, off by
+default, and the Prometheus Operator's C<monitoring.coreos.com/v1> API in the
+cluster. With a Prometheus Operator, a ServiceMonitor of your own for the
+Service's port C<http> does that job.
+
+Not next to a Helm install of the chart: that one's objects have other names
+(its ServiceAccount the same name, in its own namespace), so both would run,
+two exporters on each node reporting the same GPUs twice and both labelling
+the node.
+
+B<It runs on every amd64 node>, and on one without the C<amdgpu> driver
+loaded its pod stays in C<Init:0/1> for good: no crash loop and no error,
+a pod that never starts. On a cluster with such nodes pass C<affinity>
+(below).
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+Optional options:
+
+=over
+
+=item C<version>
+
+Image tag of the exporter, C<docker.io/rocm/device-metrics-exporter:VERSION>,
+with its C<v>. Default: C<v1.5.3>. The objects and the config stay those of
+v1.5.3's chart, and the init container's C<busybox:1.36> stays as upstream
+has it.
+
+=item C<affinity>
+
+A pod C<affinity> (hashref, as in a pod spec) for the DaemonSet, on top of
+the C<amd64> C<nodeSelector>; see L</deploy_amd_device_plugin> for an
+example and why a node label of your own selects more safely than Node
+Feature Discovery's. Default: none, every amd64 node, as upstream. Anything
+but a hashref dies before the cluster is touched.
+
+=back
+
+  # the exporter on every node with an AMD GPU set up
+  deploy_amd_metrics_exporter(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity   => $amd_gpu_nodes,
+  );
+
+=cut
+
+sub deploy_amd_metrics_exporter {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+  my $version    = $opts{version} // AMD_METRICS_EXPORTER_VERSION;
+  my $affinity   = _check_affinity($opts{affinity});
+
+  Rex::Logger::info("Deploying AMD GPU metrics exporter $version...");
+
+  my $api = _api($kubeconfig);
+  _create_or_update($api, @$_) for _amd_metrics_exporter_specs($version, $affinity);
+
+  Rex::Logger::info("AMD GPU metrics exporter applied; its pods serve /metrics on port 5000"
+    . " (Service kube-system/amdgpu-metrics-exporter)");
+}
+
+=method remove_amd_metrics_exporter(%opts)
+
+Delete what L</deploy_amd_metrics_exporter> deploys, in reverse order: the
+Service, the DaemonSet (its pods go with it), the ConfigMap, the
+ClusterRoleBinding, the ClusterRole and the ServiceAccount.
+
+Idempotent like L</remove_amd_device_plugin>: an object that is not there is
+logged and skipped, any other error dies (and leaves the objects after it in
+place). Locally via L<Kubernetes::REST>.
+
+It does not remove:
+
+=over
+
+=item * The node labels C<metricsexporter.amd.com.gpu.ID.state> the
+exporter set for GPUs it found unhealthy.
+
+=item * The host directories C</var/lib/amd-metrics-exporter> and
+C</var/run/exporter>, which the DaemonSet created where they were missing,
+and what the exporter left in them.
+
+=back
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+  remove_amd_metrics_exporter(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+
+=cut
+
+sub remove_amd_metrics_exporter {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+
+  Rex::Logger::info("Removing AMD GPU metrics exporter...");
+
+  # The objects the deploy sends, in reverse: Service, DaemonSet, ConfigMap,
+  # ClusterRoleBinding, ClusterRole, ServiceAccount.
+  my $api = _api($kubeconfig);
+  _delete_if_present($api, $_->[0] => $_->[1]{metadata})
+    for reverse _amd_metrics_exporter_specs(AMD_METRICS_EXPORTER_VERSION);
+}
+
 =method untaint_node(%opts)
 
 Remove C<node-role.kubernetes.io/control-plane:NoSchedule> and
@@ -1293,6 +1512,233 @@ sub _amd_dra_driver_specs {
   );
 }
 
+# ROCm's device metrics exporter: the objects its Helm chart at
+# AMD_METRICS_EXPORTER_VERSION renders with the default values, the GPU
+# branch (monitor.resources.gpu true, nic false, platform k8s, service type
+# ClusterIP; metrics-exporter-rbac.yaml, configmap.yaml, daemonsets.yaml,
+# metrics-exporter-service.yaml under helm-charts/templates), as
+# [ kind => spec ] pairs in the order they are created: what an object
+# refers to exists before it. Values that are the chart's defaults are kept
+# as they are (the arguments, the environment, the port, the resources, the
+# mounts and their hostPath types, the init container with its
+# imagePullPolicy IfNotPresent, the securityContexts, hostNetwork false, the
+# rolling update with maxUnavailable 1, internalTrafficPolicy Local); the
+# chart sets no priority class, tolerations, nodeSelector or affinity by
+# default. The ServiceMonitor is off by default and left out, and so are
+# the NIC branch and the OpenShift SCC rule.
+#
+# What differs:
+# - kube-system instead of the install docs' kube-amd-gpu, as for the DRA
+#   driver: no namespace object to create or to remove.
+# - Names without a Helm release: the ServiceAccount's, which the chart
+#   fixes as amdgpu-metrics-exporter, for the DaemonSet, the ClusterRole and
+#   its binding and the Service too, and amdgpu-metrics-exporter-config for
+#   the ConfigMap. The pod label app is the chart's release-less one,
+#   amdgpu-metrics-exporter (its DaemonSet already carries it); the chart's
+#   selector and Service use the release's.
+# - The image tag is $version; the init image busybox:1.36 stays, written
+#   as the chart writes it. The exporter's imagePullPolicy Always is left
+#   out, as for the node labeller: Kubernetes' default for a tag other than
+#   latest is IfNotPresent, and Always would tie every pod start to Docker
+#   Hub (some 330 MB) for a tag that does not move.
+# - nodeSelector kubernetes.io/arch amd64, as the image is amd64 only (the
+#   chart has none by default); $affinity, if given, is the pod affinity.
+# - No Helm labels: not helm.sh/chart and app.kubernetes.io/managed-by
+#   (Helm does not manage these objects), and not app.kubernetes.io/name
+#   and app.kubernetes.io/instance either, which name the chart
+#   (device-metrics-exporter-charts) and the Helm release, neither of which
+#   exists here. (The DRA driver keeps those two: its selector is made of
+#   them, and its release is named as its objects are.)
+#   app.kubernetes.io/version is $version, the image the DaemonSet runs.
+#   The pod label app.kubernetes.io/name: metrics-exporter is no Helm label
+#   and stays: the exporter knows it (DefaultExporterLabel in
+#   pkg/exporter/globals/constants.go) and upstream's docs select its pods
+#   by it.
+# - The config.json is built here, without GPUConfig.Fields
+#   (_amd_metrics_exporter_config).
+#
+# The selector is fixed and carries no version: a DaemonSet's selector cannot
+# change, and an update with another one would be refused.
+sub _amd_metrics_exporter_specs {
+  my ($version, $affinity) = @_;
+  my $namespace = 'kube-system';
+  my $name      = 'amdgpu-metrics-exporter';
+  my $config    = "$name-config";
+  my $port      = 5000;
+  my %app       = ( app => $name );
+  my %labels    = (
+    'app.kubernetes.io/component' => 'amd-gpu',
+    'app.kubernetes.io/part-of'   => 'amd-gpu',
+    'app.kubernetes.io/version'   => $version,
+  );
+  # The chart's literal block (|), its continuation line and final newline
+  # included.
+  my $driver_wait = join '', map { "$_\n" }
+    'echo "Checking for AMD GPU driver..."',
+    'while [ ! -d /host-sys/class/kfd ] || \\',
+    '      [ ! -d /host-sys/module/amdgpu/drivers ]; do',
+    '  echo "amdgpu driver is not loaded"',
+    '  sleep 2',
+    'done';
+
+  return (
+    [ ServiceAccount => {
+      metadata => { name => $name, namespace => $namespace, labels => { %labels } },
+    } ],
+    [ ClusterRole => {
+      metadata => { name => $name, labels => { %labels } },
+      rules    => [
+        { apiGroups => [''], resources => ['pods'],   verbs => [qw( watch get list )] },
+        { apiGroups => [''], resources => ['nodes'],  verbs => [qw( watch get list update )] },
+        { apiGroups => [''], resources => ['events'], verbs => ['create'] },
+      ],
+    } ],
+    [ ClusterRoleBinding => {
+      metadata => { name => $name, labels => { %labels } },
+      roleRef  => {
+        apiGroup => 'rbac.authorization.k8s.io',
+        kind     => 'ClusterRole',
+        name     => $name,
+      },
+      subjects => [{ kind => 'ServiceAccount', name => $name, namespace => $namespace }],
+    } ],
+    [ ConfigMap => {
+      metadata => { name => $config, namespace => $namespace },
+      data     => {
+        'config.json' => JSON::MaybeXS->new( canonical => 1, convert_blessed => 1 )
+          ->encode( _amd_metrics_exporter_config() ),
+      },
+    } ],
+    [ DaemonSet => {
+      metadata => {
+        name      => $name,
+        namespace => $namespace,
+        labels    => { %app, 'app.kubernetes.io/version' => $version },
+      },
+      spec => {
+        updateStrategy => {
+          type          => 'RollingUpdate',
+          rollingUpdate => { maxUnavailable => 1 },
+        },
+        selector => { matchLabels => { %app } },
+        template => {
+          metadata => { labels => { %app, 'app.kubernetes.io/name' => 'metrics-exporter' } },
+          spec     => {
+            hostNetwork        => \0,
+            serviceAccountName => $name,
+            nodeSelector       => { 'kubernetes.io/arch' => 'amd64' },
+            ( defined $affinity ? ( affinity => $affinity ) : () ),
+            initContainers => [{
+              command         => [ 'sh', '-c', $driver_wait ],
+              image           => 'busybox:1.36',
+              imagePullPolicy => 'IfNotPresent',
+              name            => 'driver-init',
+              securityContext => { privileged => \1 },
+              volumeMounts    => [{ mountPath => '/host-sys', name => 'sys-volume' }],
+            }],
+            containers => [{
+              name  => "$name-container",
+              image => "docker.io/rocm/device-metrics-exporter:$version",
+              args  => [qw( -monitor-gpu=true -monitor-nic=false )],
+              env   => [
+                { name => 'NODE_NAME', valueFrom => { fieldRef => { fieldPath => 'spec.nodeName' } } },
+                { name => 'METRICS_EXPORTER_PORT', value => "$port" },
+              ],
+              ports           => [{ containerPort => $port, protocol => 'TCP' }],
+              securityContext => { privileged => \1 },
+              resources       => {
+                limits   => { cpu => '2',    memory => '4Gi' },
+                requests => { cpu => '500m', memory => '512M' },
+              },
+              volumeMounts => [
+                { mountPath => '/dev',                           name => 'dev-volume' },
+                { mountPath => '/sys',                           name => 'sys-volume' },
+                { mountPath => '/var/lib/kubelet/pod-resources', name => 'pod-resources' },
+                { mountPath => '/var/lib/amd-metrics-exporter',  name => 'exporter-health-grpc-volume' },
+                { mountPath => '/var/run/exporter',              name => 'exporter-slurm-job' },
+                { name => 'metrics-config-volume', mountPath => '/etc/metrics/' },
+              ],
+              workingDir => '/root',
+            }],
+            volumes => [
+              { hostPath => { path => '/dev', type => 'Directory' }, name => 'dev-volume' },
+              { hostPath => { path => '/sys', type => 'Directory' }, name => 'sys-volume' },
+              { hostPath => { path => '/var/lib/kubelet/pod-resources', type => 'Directory' },
+                name     => 'pod-resources' },
+              { hostPath => { path => '/var/lib/amd-metrics-exporter', type => 'DirectoryOrCreate' },
+                name     => 'exporter-health-grpc-volume' },
+              { hostPath => { path => '/var/run/exporter', type => 'DirectoryOrCreate' },
+                name     => 'exporter-slurm-job' },
+              { name => 'metrics-config-volume', configMap => { name => $config } },
+            ],
+          },
+        },
+      },
+    } ],
+    [ Service => {
+      metadata => { name => $name, namespace => $namespace, labels => { %app } },
+      spec     => {
+        selector              => { %app },
+        internalTrafficPolicy => 'Local',
+        type                  => 'ClusterIP',
+        ports                 => [{ protocol => 'TCP', name => 'http', port => $port }],
+      },
+    } ],
+  );
+}
+
+# The exporter's config.json as the packaged chart of
+# AMD_METRICS_EXPORTER_VERSION carries it -- example/config-gpu.json at the
+# tag through the Makefile's jq 'del(.ServerPort, .GPUConfig.ExtraPodLabels)'
+# -- with the same keys and values, numbers as numbers, minus
+# GPUConfig.Fields. Encoded canonically by the caller, so the same config is
+# the same string and a re-run changes nothing in the ConfigMap.
+#
+# Fields is left out as an equivalent at v1.5.3, chosen here: the chart lists
+# 194 fields, exactly the values of the enum GPUMetricField in
+# pkg/exporter/proto/exporterconfig.proto at the tag, and an empty or missing
+# Fields switches every value of that enum on (initFieldConfig in
+# pkg/amdgpu/gpuagent/gpuagent_gpu_metrics.go, the only reader of Fields;
+# the collector filter of buildGPUGetFilter follows the same switches;
+# docs/configuration/configmap.md: "An empty Fields (the default) exports
+# everything"). The same metrics, without 194 lines here. A version bump
+# with fields new to it therefore exports those too, where the chart's list
+# would leave them out until the chart named them.
+#
+# Kept, though not the exporter's defaults: MetricsFieldPrefix amd_ (without
+# it the metrics are gpu_edge_temperature, not amd_gpu_edge_temperature),
+# the Labels, HealthThresholds, CustomLabels' CLUSTER_NAME, ProfilerMetrics
+# with the example's placeholder hostname1 (a node of that name gets the
+# profiler off, which all already says) and ProfilerConfig.
+sub _amd_metrics_exporter_config {
+  my $ecc = 'GPU_ECC_UNCORRECT_';
+  return {
+    CommonConfig => {
+      MetricsFieldPrefix => 'amd_',
+      HealthService      => { Enable => JSON()->true, PollingRate => '30s' },
+      Logging            => { Level => 'info', MaxFileSizeMB => 10, MaxBackups => 3, MaxAgeDays => 7 },
+      Debug              => { EnableAPI => JSON()->false },
+    },
+    GPUConfig => {
+      Labels => [qw(
+        GPU_UUID SERIAL_NUMBER GPU_ID POD POD_UUID NAMESPACE CONTAINER JOB_ID JOB_USER
+        JOB_PARTITION CLUSTER_NAME CARD_SERIES CARD_MODEL CARD_VENDOR DRIVER_VERSION
+        VBIOS_VERSION HOSTNAME GPU_PARTITION_ID GPU_COMPUTE_PARTITION_TYPE
+        GPU_MEMORY_PARTITION_TYPE KFD_PROCESS_ID DEPLOYMENT_MODE
+      )],
+      HealthThresholds => {
+        ( map { ( $ecc . $_ => 0 ) } qw(
+          SDMA GFX MMHUB ATHUB BIF HDP XGMI_WAFL DF SMN SEM MP0 MP1 FUSE UMC MCA VCN JPEG IH MPIO
+        ) ),
+        GPU_CPER_MAX_AGE => '',
+      },
+      CustomLabels    => { CLUSTER_NAME => 'amdgpu-k8s-metrics-exporter' },
+      ProfilerMetrics => { all => JSON()->false, hostname1 => JSON()->false },
+      ProfilerConfig  => { SamplingInterval => 1000, PtlDelay => 0 },
+    },
+  };
+}
+
 # Whether the cluster serves DeviceClass in resource.k8s.io/v1 (Kubernetes
 # 1.34 on), asked before any DRA object is created. Kubernetes::REST (with
 # resource_map_from_cluster, the default _api keeps) builds the map behind
@@ -1464,10 +1910,17 @@ sub _wait_for_gpu_resource {
     affinity   => $dra_nodes,
   );
 
+  # ROCm's metrics exporter on the AMD GPU nodes, next to either
+  deploy_amd_metrics_exporter(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity   => $amd_gpu_nodes,
+  );
+
   # And take them out again
   remove_amd_device_plugin(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
   remove_amd_node_labeller(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
   remove_amd_dra_driver(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+  remove_amd_metrics_exporter(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
 
   # Remove control-plane taints on a single-node cluster
   untaint_node(kubeconfig => "$ENV{HOME}/.kube/single.yaml");
@@ -1475,7 +1928,7 @@ sub _wait_for_gpu_resource {
 =head1 DESCRIPTION
 
 L<Rex::Rancher::K8s> provides Kubernetes API operations for L<Rex::Rancher>
-using L<Kubernetes::REST> and L<IO::K8s>. All ten public functions run
+using L<Kubernetes::REST> and L<IO::K8s>. All twelve public functions run
 entirely on the B<local machine> against the cluster's HTTP API — no
 C<kubectl> binary is required anywhere, and no SSH connection to the cluster
 nodes is needed for these operations.
@@ -1498,8 +1951,10 @@ It can also be used standalone for post-deploy operations such as removing
 control-plane taints on single-node clusters, or deploying and removing the
 AMD device plugin and node labeller on nodes of your choosing
 (L</deploy_amd_node_labeller>, L</remove_amd_device_plugin>,
-L</remove_amd_node_labeller>) and ROCm's DRA driver for AMD GPUs
-(L</deploy_amd_dra_driver>, L</remove_amd_dra_driver>). L<Rex::Rancher>
+L</remove_amd_node_labeller>), ROCm's DRA driver for AMD GPUs
+(L</deploy_amd_dra_driver>, L</remove_amd_dra_driver>) and ROCm's device
+metrics exporter (L</deploy_amd_metrics_exporter>,
+L</remove_amd_metrics_exporter>). L<Rex::Rancher>
 re-exports only L</wait_for_api>, L</untaint_node> and the two
 C<deploy_*_device_plugin> functions; the others come from
 C<use Rex::Rancher::K8s>.
