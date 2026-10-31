@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-10-31T00:07:15Z
+id: 99
+priority: low
+status: backlog
+tags:
+- k8s
+- refactor
+title: 'K8s.pm: _create_or_update durch Kubernetes::REST ensure ersetzen?'
+updated: 2026-10-31T00:07:15Z
+---
+
+Gefunden in k95: Rex::Rancher::K8s hat seit k95 einen Helper _create_or_update (create, bei already exists get plus update mit resourceVersion), den NVIDIA- und AMD-Plugin nutzen. Kubernetes::REST bietet eine ensure-Methode, die das ersetzen könnte. Zu prüfen: Semantik von ensure (Update vs. Patch, resourceVersion, cluster-scoped Objekte), ab welcher Kubernetes::REST-Version sie existiert und ob ein Pin dafür nötig wäre (Hausregel: nur auf released CPAN-Versionen pinnen). Nur Refactor, kein Verhaltenswechsel; live nur über kubernetes-ocp beweisbar.
