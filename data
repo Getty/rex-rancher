@@ -1,0 +1,32 @@
+---
+class: standard
+completed: 2026-10-31T02:04:02Z
+created: 2026-10-31T00:09:00Z
+id: 100
+priority: high
+started: 2026-10-31T01:30:59Z
+status: done
+tags:
+- config
+- network
+title: 'config.yaml: node_ip / node_external_ip for server and agent'
+updated: 2026-10-31T02:04:02Z
+---
+
+Rex::Rancher::Server/Agent write no `node-ip` (and no `node-external-ip`) into config.yaml (_build_agent_config knows server, token, node-name, node-label). On multi-homed hosts RKE2/K3s take the address of the default route.
+
+Seen 2026-10-31 on synapse (kubernetes-ocp k248 live test): eno1 192.168.0.165 (default route, other LAN) + vlan30 10.230.30.50 (cluster network). The node registered with InternalIP 192.168.0.165, which the CP otho cannot reach. Result: Cilium VXLAN broken in one direction, nfd-worker could not deliver, pulls via the NodePort mirror hung. Fixed by hand with `node-ip: 10.230.30.50` + agent restart; InternalIP was right afterwards and NFD labelled at once.
+
+Wanted: options `node_ip` and `node_external_ip` (string or list, for dual-stack) on install_server and install_agent, written as `node-ip` / `node-external-ip`. Same on rke2 and k3s. A re-run must not change a running node's node-ip unasked (same reasoning as node-name, Node.pm:149), or at least must say so.
+
+Done means: tests for the config construction in both modes, POD. OCP follows on its own card and passes the join address.
+
+2026-10-31 01:42 Started. Form: YAML list for node-ip and node-external-ip. Both are cli.StringSliceFlag in k3s pkg/cli/cmds/agent.go, RKE2 copies them unchanged (copyFlag in rancher/rke2 pkg/cli/cmds/agent.go) and uses k3s configfilearg, which maps a YAML list to repeated flags (docs.k3s.io/installation/configuration). Same form this module already writes for tls-san and node-label. Re-run plan: keep what config.yaml holds when the option is not given (as Node.pm keeps a matching hostname and install_server keeps the config.yaml token), warn when a given value changes it. Baseline prove: 44 files, 1659 tests.
+
+2026-10-31 01:53 Implemented. Options.pm check_node_addresses (string, comma string or arrayref; each element must be an IPv4/IPv6 address via core Socket inet_pton; anything else dies in preflight_server/preflight_agent before any host command). Distribution.pm node_addresses: reads config.yaml with cat 2>/dev/null; not given means keep config.yaml's value (info line), given and different (or none before) means write it and warn naming both plus the Cilium agent pod restart. Builders write node-ip / node-external-ip as YAML lists only when set. Tests: new t/node-ip.t (git added), t/deploy-preflight.t extended, two existing claims adjusted (preflight return hash, cluster-cidr no-config-read grep narrowed to the cluster-cidr reads). Six mutants killed.
+
+2026-10-31 01:57 Verified. prove -lr t/ green: 45 files, 1680 tests (baseline 44 / 1659). dzil build clean with t/node-ip.t inside, artefacts removed. Mutants killed: keep dropped, change warning dropped, warning on unchanged value, no inet_pton check, server writes a comma string instead of a list, agent preflight skips the check. Live unverified: the config.yaml form, the keep on re-run and the Cilium agent restart need a real deploy (OCP k254 on the synapse rejoin). Drift for the dispatcher: (1) pre-existing unresolved internal POD links in the built Server.pm and Rancher.pm, from method headings with an argument list; (2) cpanfile does not declare Socket, already imported by Server.pm and now by Options.pm; inet_pton on the perl 5.14 floor unchecked; (3) node_name has the same drop on re-run: config.yaml is rewritten without node-name when the option is omitted; (4) changing node-ip on a server with embedded etcd (peer URLs) is not covered and not verified; (5) only config.yaml is read for the keep, drop-ins are not; documented; (6) the rex-rancher-traps skill could gain a node_ip row, not edited.
+
+Ready for review and commit. Tree commit-ready on worktree-k95-amd-gpu, not committed: lib/Rex/Rancher.pm, Agent.pm, Distribution.pm, Options.pm, Server.pm, t/cluster-cidr-established.t, t/deploy-preflight.t modified; t/node-ip.t new and git added. Changes entry proposed in the worker report. Live unverified.
+
+Committed as cb950e5dcb6379a346726d310b026538d8d07c74. Unverified live, live run by kubernetes-ocp k254.
