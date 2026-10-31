@@ -8,7 +8,8 @@ use Test::More;
 # and its binding, DeviceClass gpu.amd.com (resource.k8s.io/v1), the
 # kubelet plugin DaemonSet -- with the documented changes (kube-system, the
 # image tag pinned, amd64 nodeSelector, no Helm labels, no namespace on
-# cluster-scoped objects), after asking the cluster whether it serves
+# cluster-scoped objects, the admission policy also matching
+# resource.k8s.io/v1), after asking the cluster whether it serves
 # DeviceClass in resource.k8s.io/v1 at all. remove_amd_dra_driver deletes the
 # same objects in reverse, idempotently.
 #
@@ -19,7 +20,8 @@ use Test::More;
 # IO faked, discovery included, so the resolution of the Kinds, the paths, and
 # the APIError a 404/409/403 becomes are the installed client's own. That the
 # image starts, that the plugin publishes ResourceSlices, that the admission
-# policy lets it, and that a claim gets a GPU into a pod are only shown live.
+# policy lets it and refuses it another node's, and that a claim gets a GPU
+# into a pod are only shown live.
 
 use IO::K8s;
 use JSON::MaybeXS;
@@ -247,6 +249,8 @@ for my $obj (@upstream) {
   delete @{$labels}{qw( helm.sh/chart app.kubernetes.io/managed-by )};
 }
 delete $upstream{$_}{metadata}{namespace} for qw( ClusterRole ClusterRoleBinding );
+# the policy's rule also names resource.k8s.io/v1 (k107)
+push @{ $upstream{ValidatingAdmissionPolicy}{spec}{matchConstraints}{resourceRules}[0]{apiVersions} }, 'v1';
 {
   my $pod = $upstream{DaemonSet}{spec}{template}{spec};
   delete $pod->{securityContext};
@@ -303,6 +307,12 @@ is_deeply( $sa, { name => 'k8s-gpu-dra-driver-service-account', namespace => 'ku
 is( $spec{ValidatingAdmissionPolicy}{spec}{matchConditions}[0]{expression},
   'request.userInfo.username == "system:serviceaccount:' . $sa->{namespace} . ':' . $sa->{name} . '"',
   "policy: its user is the ServiceAccount's, namespace and name" );
+# k107: the chart's rule names only v1beta1, and on a cluster that serves
+# resource.k8s.io only as v1 (amdlab, RKE2 1.36) it matched nothing: a
+# ResourceSlice for another node, written as the plugin, went through.
+my ($rule) = @{ $spec{ValidatingAdmissionPolicy}{spec}{matchConstraints}{resourceRules} };
+is_deeply( [ sort @{ $rule->{apiVersions} } ], [qw( v1 v1beta1 )],
+  "policy: matches resourceslices in v1 as well as the chart's v1beta1" );
 is_deeply( $spec{ClusterRoleBinding}{subjects},
   [ { kind => 'ServiceAccount', name => $sa->{name}, namespace => $sa->{namespace} } ],
   'ClusterRoleBinding: binds that ServiceAccount' );
@@ -520,6 +530,9 @@ like( $info[0], qr/v1\.0\.0/, '... and in the log' );
   is_deeply( [ map { $json->decode( $body{"PUT $_"} )->{metadata}{resourceVersion} } @OBJECTS ],
     [ map { 'rv-' . ( m{([^/]+)\z} )[0] } @OBJECTS ], '... at the resourceVersion the cluster has' );
   is( scalar( grep { /already exists, updating/ } @info ), 7, '... each said' );
+  is_deeply( $json->decode( $body{"PUT $VAP/resourceslices-policy-k8s-gpu-dra-driver"} )
+    ->{spec}{matchConstraints}{resourceRules}[0]{apiVersions}, [qw( v1beta1 v1 )],
+    '... the policy replaced with the rule for v1 and v1beta1 (k107)' );
 }
 
 ok( !run_api( deploy => '1.36', { "POST $VAP" => 403 } ), 'a 403 on the policy: dies' );

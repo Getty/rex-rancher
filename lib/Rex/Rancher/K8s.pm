@@ -637,6 +637,14 @@ labels. Not next to a Helm install of the chart: the DeviceClass has the
 same name in every install, the other cluster-scoped objects those of a
 release named C<k8s-gpu-dra-driver>, and this function would take them over.
 
+The admission policy differs too: its rule names C<resourceslices> in
+C<resource.k8s.io/v1> as well as in the chart's C<v1beta1>. The chart at
+v1.0.1, and upstream's main branch as of 2026-10-31, names C<v1beta1> only,
+and on a cluster that serves C<resource.k8s.io> only as C<v1> (RKE2 1.36, for
+one) that policy checks no write at all: the plugin of one node could change
+every node's ResourceSlices. The policy's expressions are the chart's;
+C<spec.nodeName> is the same field in C<v1>.
+
 B<It runs on every amd64 node>, and on one without the C<amdgpu> driver
 loaded its pod stays in C<Init:0/1> for good: no crash loop and no error,
 a pod that never starts. On a cluster with such nodes pass C<affinity>
@@ -1358,13 +1366,20 @@ sub _amd_node_labeller_specs {
 #   which the chart gives them and which cluster-scoped objects do not have.
 # - The chart's empty pod securityContext and container resources ({}) are
 #   left out: the API server stores the same empty objects without them.
+# - The admission policy's rule names resourceslices in v1 as well as in the
+#   chart's v1beta1 (k107). The chart at v1.0.1, and upstream main as of
+#   2026-10-31, names v1beta1 only, and on a cluster that serves
+#   resource.k8s.io only as v1 (RKE2 1.36) that rule matched nothing: a
+#   ResourceSlice for another node, written as the plugin's ServiceAccount,
+#   went through. The likely cause: matchPolicy Equivalent (the default)
+#   maps a request only to versions the API server serves, so a v1 write
+#   finds no v1beta1 to match. The plugin writes through v1 (there is no
+#   other version there), and its ResourceSlice has spec.nodeName in v1 as
+#   in v1beta1, so the expressions stay the chart's. v1beta1 stays, as the
+#   chart has it, for a cluster that still serves it.
 #
 # The selector is fixed and carries no version: a DaemonSet's selector cannot
 # change, and an update with another one would be refused.
-#
-# The admission policy names resourceslices in v1beta1, as the chart does;
-# whether it also applies to the plugin's writes through v1 (matchPolicy
-# Equivalent, if the cluster still serves v1beta1) is upstream's matter.
 sub _amd_dra_driver_specs {
   my ($version, $affinity) = @_;
   my $namespace = 'kube-system';
@@ -1410,7 +1425,8 @@ sub _amd_dra_driver_specs {
       },
     } ],
     # The plugin of a node may change only that node's ResourceSlices. The
-    # chart's folded (>-) expressions as one line each.
+    # chart's folded (>-) expressions as one line each; v1 in apiVersions is
+    # ours, not the chart's (see above).
     [ ValidatingAdmissionPolicy => {
       metadata => { name => $policy },
       spec     => {
@@ -1418,7 +1434,7 @@ sub _amd_dra_driver_specs {
         matchConstraints => {
           resourceRules => [{
             apiGroups   => ['resource.k8s.io'],
-            apiVersions => ['v1beta1'],
+            apiVersions => [qw( v1beta1 v1 )],
             operations  => [qw( CREATE UPDATE DELETE )],
             resources   => ['resourceslices'],
           }],

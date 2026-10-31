@@ -37,7 +37,11 @@ Revision history for Rex-Rancher
     Kubernetes 1.34 or later (DeviceClass in resource.k8s.io/v1) and dies on
     an older cluster before creating anything. Its GPUs show as
     ResourceSlices of driver gpu.amd.com, not as amd.com/gpu; a node runs
-    either this or the device plugin.
+    either this or the device plugin. Its admission policy matches
+    ResourceSlices in resource.k8s.io/v1 as well as the chart's v1beta1:
+    with v1beta1 alone, as the chart has it, it checked no write on a
+    cluster that serves only v1 (Kubernetes 1.36), and the plugin of one
+    node could change every node's ResourceSlices.
   - New deploy_amd_metrics_exporter and remove_amd_metrics_exporter in
     Rex::Rancher::K8s (not re-exported by Rex::Rancher): ROCm's
     device-metrics-exporter v1.5.3 as its Helm chart deploys it with the
