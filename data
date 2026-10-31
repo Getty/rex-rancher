@@ -1,0 +1,33 @@
+---
+class: standard
+completed: 2026-10-31T02:31:39Z
+created: 2026-10-31T01:11:20Z
+id: 107
+priority: medium
+started: 2026-10-31T01:31:09Z
+status: done
+tags:
+- gpu
+- amd
+- k8s
+- dra
+- security
+title: 'DRA-Admission-Policy greift auf 1.36 nicht: nennt nur resource.k8s.io v1beta1'
+updated: 2026-10-31T02:34:51Z
+---
+
+Live gefunden 2026-10-31 auf amdlab (RKE2 1.36.4) beim k102-Lauf (Commit 5310056). Die ValidatingAdmissionPolicy resourceslices-policy-k8s-gpu-dra-driver aus dem Chart v1.0.1 hat resourceRules apiVersions nur v1beta1, matchPolicy Equivalent. Der Cluster serviert resource.k8s.io nur noch als v1 (kubectl api-versions). Probe: kubectl create --dry-run=server einer ResourceSlice fuer Node otho, impersoniert als system:serviceaccount:kube-system:k8s-gpu-dra-driver-service-account (ohne node-name im Token, also muss die erste Validation scheitern) wurde angenommen. Die Policy matcht also nicht und haertet nichts. Wahrscheinliche Ursache: v1beta1 nicht serviert, damit keine Aequivalenz zu v1 (Ursache nicht separat bewiesen). Entscheidung offen: (a) wie upstream lassen und im POD sagen, dass sie auf Clustern ohne v1beta1 nichts tut; (b) v1 zusaetzlich eintragen (Abweichung vom Chart, macht die Haertung erst wirksam, failurePolicy Fail; braucht Live-Beweis, dass das Plugin dann noch seine eigenen Slices schreiben darf). Vorher pruefen, ob upstream main oder ein neueres Release das schon korrigiert.
+
+Upstream main (Stand 2026-10-31) hat in helm-charts-k8s/templates/validatingadmissionpolicy.yaml ebenfalls nur apiVersions v1beta1, also noch nicht korrigiert.
+
+OCP-Wunsch 2026-10-31: v1 zusaetzlich zu v1beta1 in resourceRules, als Abweichung vom Chart im POD dokumentiert; eine mitinstallierte, wirkungslose Policy ist schlechter als keine. Akzeptanz: der dry-run-Probe (ResourceSlice fuer otho als Plugin-SA) wird abgelehnt, die eigene Slice des Plugins auf synapse geht weiter durch. Falls v1 nicht machbar: Policy ganz weglassen statt wirkungslos ausliefern. Promotion ins todo: Maintainer.
+
+2026-10-31 02:21 Worker: going with v1 in addition to v1beta1. No reason found against v1: the plugin (built on k8s.io/dynamic-resource-allocation v0.36.0-rc.1) can only write through v1 on amdlab, since v1 is all that is served; ResourceSlice v1 has spec.nodeName (string, optional) like v1beta1, so the CEL expressions are unchanged. Type checking (apiserver validating/typechecking.go) only writes ExpressionWarnings into status and skips a GVR the RESTMapper cannot resolve, so an unserved v1beta1 in the rule neither blocks the policy nor warns.
+
+2026-10-31 02:26 Done in the tree (not committed): lib/Rex/Rancher/K8s.pm _amd_dra_driver_specs resourceRules apiVersions now [v1beta1, v1]; the old 'upstream's matter' comment replaced by a 'What differs' entry naming chart v1.0.1, upstream main 2026-10-31 and the likely cause; POD of deploy_amd_dra_driver has a paragraph on the deviation. t/amd-dra-driver.t: the chart object gets v1 pushed as a documented change, an explicit assertion that apiVersions is v1 plus v1beta1, and an assertion that the PUT on a redeploy carries [v1beta1, v1]. Against the old spec (lib change reverse-applied) 4 of 124 fail (tests 16, 19, 34, 82); restored, 124 pass. prove -lr t/: 45 files, 1708 tests, PASS, no skips. Checks: VAP and binding are created before DeviceClass and DaemonSet; a redeploy PUTs the policy at the fetched resourceVersion, which replaces the whole spec, so amdlab gets the new rule on the next deploy. Drift: the fake 1.36 discovery in the test lists v1beta2 and v1beta1 as served, amdlab serves only v1 (harmless for _serves_dra_v1, which reads the preferred version). Unverified live: that the dry-run probe for otho is now refused and that the plugin on synapse still writes, updates and deletes its own slices.
+
+2026-10-31 02:27 Policy rule now matches resource.k8s.io v1 and v1beta1, documented as a deviation from chart v1.0.1 in the code comment and the POD. Offline: t/amd-dra-driver.t fails 4 of 124 on the old spec, passes on the new; prove -lr t/ 45 files 1708 tests PASS. Live acceptance on amdlab still open: probe for otho refused, plugin slice on synapse still admitted. Uncommitted, for the release-manager.
+
+Committed as 057cef41664034d217233ffb8183d95b3c04868f; live acceptance on amdlab follows (dry-run probe denied, plugin's own slice passes)
+
+Live-Abnahme amdlab 2026-10-31 (RKE2 1.36.4, lib aus 057cef4, Go von kubernetes-ocp-9c): deployte VAP nennt apiVersions v1beta1 und v1, typeChecking leer. Dry-run-Probe ResourceSlice fuer otho als Plugin-SA ohne node-name: abgelehnt, aber ueber Auswertungsfehler (no such key: extra, failurePolicy Fail), das ist der Ausdruck des Charts. Mit --as-user-extra node-name=synapse: abgelehnt mit der Regelmeldung (synapse may not modify resourceslices on node otho). Mit node-name=otho: als dry-run angenommen. Eigene Slice: Pod-Neustart schrieb nichts (Inhalt gleich, gleiche resourceVersion); nach Loeschen der Slice legte das Plugin (Feldmanager gpu-kubeletplugin) sie unter aktiver Policy neu an, kein Denied im Log. remove_amd_dra_driver sauber, Slice weg.
