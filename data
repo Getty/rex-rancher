@@ -1,0 +1,31 @@
+---
+class: standard
+completed: 2026-10-31T01:32:25Z
+created: 2026-10-31T00:13:26Z
+id: 103
+priority: medium
+started: 2026-10-31T01:32:25Z
+status: done
+tags:
+- gpu
+- amd
+- k8s
+- metrics
+title: deploy_amd_metrics_exporter / remove_amd_metrics_exporter (ROCm device-metrics-exporter
+  v1.5.3)
+updated: 2026-10-31T01:35:00Z
+---
+
+Folgearbeit zu k95, Anfrage kubernetes-ocp-9c 2026-10-31 (Punkt e und f): deploy_amd_metrics_exporter(kubeconfig, version, affinity) mit rocm/device-metrics-exporter v1.5.3: DaemonSet und Service auf Port 5000, dazu was die Helm-Templates am Tag v1.5.3 sonst brauchen (ServiceAccount, ClusterRole, Binding, Config-ConfigMap). Quelle im Code. Upstream unterstützt nur Instinct und Radeon AI, keine APUs (Issues 281, 353) — im POD sagen. Dazu remove_amd_metrics_exporter, idempotent, NotFound ist ok.
+
+2026-10-31 01:27 Umgesetzt in lib/Rex/Rancher/K8s.pm: deploy_amd_metrics_exporter (kubeconfig, version, affinity) und remove_amd_metrics_exporter (kubeconfig), device-metrics-exporter v1.5.3 nach dem Chart am Tag, GPU-Zweig mit Defaults: ServiceAccount, ClusterRole ohne SCC-Regel, ClusterRoleBinding, ConfigMap amdgpu-metrics-exporter-config, DaemonSet, Service (ClusterIP 5000, Port-Name http, internalTrafficPolicy Local wie upstream). Kein ServiceMonitor. Abweichungen, im Code begruendet: kube-system; Namen ohne Helm-Release; kein imagePullPolicy Always; nodeSelector amd64 (Chart hat keinen); keine Helm-Labels, dazu auch app.kubernetes.io/name und instance an den Objekten, die Chart und Release benennen (version bleibt, Pod-Label app.kubernetes.io/name metrics-exporter bleibt); config.json ohne Fields. Gleichwertigkeit von Fields am Quelltext geprueft: die 194 Chart-Felder sind genau das Enum GPUMetricField, einziger Leser ist initFieldConfig, buildGPUGetFilter folgt exportFieldMap. Koexistenz mit Device-Plugin und DRA belegt mit docs/installation/kubernetes-helm.md am Tag. Ein Service-Update per PUT ohne clusterIP: der API-Server uebernimmt die vergebene clusterIP (beginUpdate, patchAllocatedValues, Quelle Kubernetes v1.34), live unverifiziert.
+
+2026-10-31 01:27 Also found, fuer den Dispatcher: uninstall_node raeumt die Host-Verzeichnisse des Exporters nicht (/var/lib/amd-metrics-exporter, /var/run/exporter, per DirectoryOrCreate angelegt), wie schon die CDI-Specs des DRA-Treibers; Board rex-rancher, falls gewollt. Nicht in Scope genommen.
+
+2026-10-31 01:27 Fertig, nicht committet. Geaendert: lib/Rex/Rancher/K8s.pm (zwei Funktionen mit POD, Konstante AMD_METRICS_EXPORTER_VERSION mit Quellen, Spec-Builder _amd_metrics_exporter_specs, Config-Builder _amd_metrics_exporter_config, Export-Liste, SYNOPSIS, DESCRIPTION zwoelf Funktionen), README.md eine Zeile, neue t/amd-metrics-exporter.t (146 Tests, git add, config.json des gepackten Charts byte-gleich als DATA). Geprueft: prove -lr t/ 44 Dateien 1659 Tests gruen (vorher 43 und 1513); dzil build sauber, Artefakte entfernt; 15 Mutanten von Hand, alle getoetet. Nicht von Rex::Rancher re-exportiert. Live unverifiziert: Image-Start, Lesen der Config, Metriken auf 5000, Pod-Zuordnung, Service-Update ohne clusterIP; auf synapse (gfx1151, APU) laut upstream ohnehin nicht unterstuetzt.
+
+2026-10-31 01:27 Korrektur zur Uebergabe-Notiz: 13 gueltige Mutanten, alle getoetet, nicht 15 (14 Laeufe, einer davon fehlerhaft gebaut und verworfen).
+
+Committed as 4f2f3ca318622e44be41946053ae4573e0bd9d00 on branch worktree-k95-amd-gpu, on top of 5310056. prove -lr t/ PASS (44 files, 1659 tests), dzil build clean. Offline only; live run on amdlab still to do, synapse is an unsupported APU so only objects, pods and endpoint are checkable there.
+
+Live verifiziert 2026-10-31 auf amdlab (RKE2 1.36.4, synapse gfx1151 APU), Stand 4f2f3ca, affinity Marker present. DaemonSet nur auf synapse, Running. /metrics ueber Service-Proxy: 117 Reihen mit Praefix amd_, Label cluster_name aus unserer config.json (ohne Fields gelesen). Zweites Deploy ueber bestehenden Stand: echter No-op, Service clusterIP und resourceVersion gleich, DaemonSet Generation 1, kein Pod-Neustart. remove zweimal: erst sechs Objekte entfernt, dann not there, beide exit 0. Neu deployed und laufen gelassen. Hinweis: upstream hat keine readinessProbe, Pod ist Ready ein paar Sekunden bevor Port 5000 lauscht (erster Abruf 502). Werte auf der APU nicht aussagekraeftig, wie upstream sagt.
