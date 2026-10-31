@@ -19,6 +19,9 @@ use Test::More;
 # calls. That the pinned images exist, that the plugin starts on an AMD node
 # under this securityContext, and that amd.com/gpu shows up are only shown
 # by a real deploy.
+#
+# k106: the wait reads the node's allocatable, not its capacity, which the
+# kubelet keeps after the plugin is gone.
 
 my $slept = 0;
 BEGIN { *CORE::GLOBAL::sleep = sub { $slept++ } }
@@ -210,10 +213,11 @@ round_trip( DaemonSet => $alds, 'labeller with affinity' );
 
 # --- deploy_amd_device_plugin against a fake API ----------------------------------
 
-# %capacity: what the one node offers. @created: [ kind, struct ] of every
-# object sent to create.
-our ( @calls, @created, %exists, $create_error, %capacity );
-%capacity = ( 'amd.com/gpu' => 1 );
+# %allocatable: what the one node offers; its capacity is the same, plus
+# %capacity (the node of a plugin that is gone keeps its capacity, k106).
+# @created: [ kind, struct ] of every object sent to create.
+our ( @calls, @created, %exists, $create_error, %allocatable, %capacity );
+%allocatable = ( 'amd.com/gpu' => 1 );
 {
   package FakeAPI;
   sub new        { bless {}, shift }
@@ -243,7 +247,10 @@ our ( @calls, @created, %exists, $create_error, %capacity );
   sub list {
     push @main::calls, 'list Node';
     return FakeList->new( IO::K8s->new->new_object( 'Node', metadata => { name => 'synapse' },
-      status => { capacity => { %main::capacity } } ) );
+      status => {
+        capacity    => { %main::allocatable, %main::capacity },
+        allocatable => { %main::allocatable },
+      } ) );
   }
   package FakeList;
   sub new   { my ( $c, @i ) = @_; bless { items => \@i }, $c }
@@ -344,7 +351,7 @@ ok( grep( { /\[ok\] amd\.com\/gpu: 1 on synapse/ } @info ), '... waits for amd.c
 
 {
   # A partitioned Instinct under mixed: amd.com/<compute>_<memory>, no amd.com/gpu.
-  local %capacity = ( 'amd.com/cpx_nps4' => 8, 'cpu' => 32 );
+  local %allocatable = ( 'amd.com/cpx_nps4' => 8, 'cpu' => 32 );
   ok( deploy( resource_naming => 'mixed' ), 'resource_naming mixed: deployed' ) or diag $@;
   is( plugin_args()->[-1], '-resource_naming_strategy=mixed', '... mixed reaches the flag' );
   ok( grep( { /\[ok\] amd\.com\/cpx_nps4: 8 on synapse/ } @info ), '... the wait takes the partition resource' );
@@ -356,12 +363,12 @@ ok( grep( { /\[ok\] amd\.com\/gpu: 1 on synapse/ } @info ), '... waits for amd.c
   like( $warn[0], qr/^  amd\.com\/gpu resource did not appear/, '... and warns about amd.com/gpu' );
 }
 {
-  local %capacity = ( 'amd.com/gpu' => 1 );
+  local %allocatable = ( 'amd.com/gpu' => 1 );
   ok( deploy( resource_naming => 'mixed' ), 'mixed on a GPU without partitions' ) or diag $@;
   ok( grep( { /\[ok\] amd\.com\/gpu: 1 on synapse/ } @info ), '... amd.com/gpu counts too' );
 }
 {
-  local %capacity = ( 'nvidia.com/gpu' => 2 );
+  local %allocatable = ( 'nvidia.com/gpu' => 2 );
   ok( deploy( resource_naming => 'mixed' ), 'mixed, only nvidia.com/gpu on the node' ) or diag $@;
   like( $warn[0], qr/^  amd\.com\/\* resource did not appear/, '... warns, naming the amd.com/ prefix' );
 }
@@ -385,6 +392,17 @@ is( $calls[-1], 'create DaemonSet/amdgpu-labeller-daemonset', '... the labeller 
 
 ok( deploy( wait => 1 ), 'wait => 1: deployed' ) or diag $@;
 is( $calls[-1], 'list Node', '... waits' );
+
+{
+  # k106, seen on synapse: a redeploy after the plugin was gone. The node
+  # keeps capacity amd.com/gpu 1; allocatable is 0 until the plugin registers.
+  local %allocatable = ( 'amd.com/gpu' => 0 );
+  local %capacity    = ( 'amd.com/gpu' => 1 );
+  ok( deploy(), 'capacity 1, allocatable 0: deployed' ) or diag $@;
+  ok( !grep( { /\[ok\]/ } @info ), '... no [ok] for the capacity left behind' );
+  is( $slept, 24, '... waits the full two minutes' );
+  like( $warn[0], qr/^  amd\.com\/gpu resource did not appear/, '... and warns' );
+}
 
 # --- deploy_amd_node_labeller (k101) ---------------------------------------------
 

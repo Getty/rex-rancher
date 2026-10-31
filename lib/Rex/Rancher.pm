@@ -1118,7 +1118,7 @@ values (kube-proxy replacement on both).
 =item 5. B<GPU device plugin> (C<gpu =E<gt> 1> + C<kubeconfig_file>, unless
 C<gpu_device_plugin =E<gt> 0>) — NVIDIA's or ROCm's DaemonSet, or both,
 applied via the Kubernetes API, wait for C<nvidia.com/gpu> or C<amd.com/gpu>
-capacity on the node. No C<kubectl> required anywhere.
+to become allocatable on the node. No C<kubectl> required anywhere.
 
 =back
 

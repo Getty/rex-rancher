@@ -134,7 +134,7 @@ sub wait_for_api {
 =method deploy_nvidia_device_plugin(%opts)
 
 Deploy the NVIDIA Kubernetes device plugin DaemonSet to C<kube-system> and
-wait for C<nvidia.com/gpu> capacity to appear on at least one node.
+wait for C<nvidia.com/gpu> to become allocatable on at least one node.
 
 All operations run locally via L<Kubernetes::REST> — no C<kubectl> or SSH
 to the cluster is needed.
@@ -167,9 +167,12 @@ fetched from the cluster before the update to satisfy the optimistic
 concurrency requirement).
 
 After applying, polls up to 24 times (2-minute timeout) for
-C<nvidia.com/gpu> capacity to appear in any node's C<status.capacity>.
-When it does not, a warning says so (no die), naming the API error of the
-last attempt if that one failed (a 403, no connection).
+C<nvidia.com/gpu> in any node's C<status.allocatable>. Not its
+C<status.capacity>: the kubelet keeps that after a device plugin is gone and
+only drops C<status.allocatable> to 0, so a redeploy would take the old
+plugin's count for a ready plugin. When none appears, a warning says so (no
+die), naming the API error of the last attempt if that one failed (a 403, no
+connection).
 
 Required options:
 
@@ -216,8 +219,8 @@ sub deploy_nvidia_device_plugin {
 
 Deploy ROCm's Kubernetes device plugin for AMD GPUs
 (L<https://github.com/ROCm/k8s-device-plugin>) as a DaemonSet to
-C<kube-system> and wait for C<amd.com/gpu> capacity to appear on at least one
-node. The counterpart of L</deploy_nvidia_device_plugin>, run the same way:
+C<kube-system> and wait for C<amd.com/gpu> to become allocatable on at least
+one node. The counterpart of L</deploy_nvidia_device_plugin>, run the same way:
 locally via L<Kubernetes::REST>, no C<kubectl> or SSH to the cluster.
 
 The DaemonSet is upstream's C<k8s-ds-amdgpu-dp.yaml> of the pinned release,
@@ -268,10 +271,12 @@ and RKE2's C<nonroot-devices> option, which Rex::Rancher does not set.
 Every object already in the cluster is updated (C<resourceVersion> is
 fetched before the update), as in L</deploy_nvidia_device_plugin>. Then,
 unless C<wait =E<gt> 0>, it polls up to 24 times (2-minute timeout) for
-C<amd.com/gpu> capacity in any node's C<status.capacity> (with
-C<resource_naming =E<gt> 'mixed'>, for any C<amd.com/> resource); when none
-appears, a warning says so (no die), naming the API error of the last
-attempt if that one failed.
+C<amd.com/gpu> in any node's C<status.allocatable> (with
+C<resource_naming =E<gt> 'mixed'>, for any C<amd.com/> resource). Not its
+C<status.capacity>, which the kubelet keeps after the plugin is gone: a
+redeploy read the old plugin's count there while the new plugin pod was still
+in C<ContainerCreating>. When none appears, a warning says so (no die),
+naming the API error of the last attempt if that one failed.
 
 Required options:
 
@@ -1829,7 +1834,9 @@ sub _check_affinity {
   return $affinity;
 }
 
-# Poll for $resource (nvidia.com/gpu, amd.com/gpu) in any node's capacity.
+# Poll for $resource (nvidia.com/gpu, amd.com/gpu) in any node's allocatable.
+# Not capacity: the kubelet keeps that after a device plugin is gone and only
+# drops allocatable to 0, so a redeploy would read the old plugin's count.
 # A $resource ending in / is a prefix: any resource under it counts
 # (amd.com/ for ROCm's mixed naming, amd.com/gpu or amd.com/cpx_nps4).
 sub _wait_for_gpu_resource {
@@ -1844,14 +1851,14 @@ sub _wait_for_gpu_resource {
     my $found = eval {
       my $nodes = $api->list('Node');
       for my $node (@{ $nodes->items }) {
-        my $cap = $node->status->capacity or next;
+        my $alloc = $node->status->allocatable or next;
         my @names = $prefix
-          ? sort grep { index($_, $resource) == 0 } keys %$cap
+          ? sort grep { index($_, $resource) == 0 } keys %$alloc
           : ($resource);
         for my $name (@names) {
-          next unless $cap->{$name} && $cap->{$name} > 0;
+          next unless $alloc->{$name} && $alloc->{$name} > 0;
           Rex::Logger::info("  [ok] $name: "
-            . $cap->{$name} . " on "
+            . $alloc->{$name} . " on "
             . $node->metadata->name);
           return 1;  # returns 1 as value of the eval block
         }
@@ -1859,8 +1866,8 @@ sub _wait_for_gpu_resource {
       0;
     };
     $last_error = $@ ? ( $@ =~ s/\s+\z//r ) : undef;
-    return 1 if $found;  # exit the sub once GPU capacity is confirmed
-    Rex::Logger::info("  No GPU capacity yet ($i/24), waiting...");
+    return 1 if $found;  # exit the sub once an allocatable GPU is confirmed
+    Rex::Logger::info("  No allocatable GPU yet ($i/24), waiting...");
     sleep 5;
   }
 

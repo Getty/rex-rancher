@@ -53,6 +53,13 @@ Revision history for Rex-Rancher
     dies with the usual message -- address, hint, journal excerpt. Any other
     journal line starts the count over; wait_for_service takes
     unreachable_after to change the threshold, 0 to turn it off.
+  - deploy_nvidia_device_plugin and deploy_amd_device_plugin wait for the
+    GPU resource in the node's status.allocatable instead of
+    status.capacity: the kubelet keeps capacity after a device plugin is
+    gone and only drops allocatable to 0, so a redeploy reported
+    "[ok] amd.com/gpu: 1" at the first poll while the new plugin pod was
+    still ContainerCreating. The log line while waiting now reads "No
+    allocatable GPU yet". Seen live on RKE2 v1.36.4.
 
 0.004     2026-10-21 22:35:28Z
   - Requires IO::K8s 1.111 and Kubernetes::REST 1.110; recommends Rex::GPU

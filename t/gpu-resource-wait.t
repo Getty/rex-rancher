@@ -17,6 +17,11 @@ use Test::More;
 # (amd.com/cpx_nps4), so deploy_amd_device_plugin waits for the prefix
 # amd.com/: a resource ending in / takes any resource under it. An exact name
 # still takes only itself.
+#
+# k106: the loop read status.capacity, which the kubelet keeps after a device
+# plugin is gone (seen on synapse, RKE2 v1.36.4: capacity amd.com/gpu 1 with
+# the plugin pod still ContainerCreating); only status.allocatable drops to 0.
+# A redeploy reported [ok] at the first poll. It reads allocatable now.
 
 my $slept = 0;
 BEGIN { *CORE::GLOBAL::sleep = sub { $slept++ } }
@@ -31,8 +36,10 @@ my ( @info, @warn );
 }
 
 # @answers: one per list call; a string dies with it, a number is the GPU
-# capacity of the one node (0: none yet), advertised as $offered. The last
-# answer repeats. A hashref answer is the node's whole capacity.
+# count of the one node (0: none yet), advertised as $offered. The last
+# answer repeats. A hashref answer is the node's whole allocatable. Its
+# capacity is the same, unless the answer is [ capacity, allocatable ]: the
+# node of a plugin that is gone keeps its capacity (k106).
 our ( @answers, $offered );
 {
   package FakeAPI;
@@ -40,8 +47,10 @@ our ( @answers, $offered );
   sub list {
     my $a = @main::answers > 1 ? shift @main::answers : $main::answers[0];
     die $a if !ref $a && $a =~ /\D/;
-    my %status = ( status => { capacity => ref $a ? $a : $a ? { $main::offered => $a } : {} } );
-    return FakeList->new( IO::K8s->new->new_object( 'Node', metadata => { name => 'gpu1' }, %status ) );
+    my ( $capacity, $allocatable ) = ref $a eq 'ARRAY' ? @$a
+      : ( ref $a ? $a : $a ? { $main::offered => $a } : {} ) x 2;
+    return FakeList->new( IO::K8s->new->new_object( 'Node', metadata => { name => 'gpu1' },
+      status => { capacity => $capacity, allocatable => $allocatable } ) );
   }
   package FakeList;
   sub new   { my ( $c, @i ) = @_; bless { items => \@i }, $c }
@@ -73,12 +82,32 @@ for my $resource (qw( nvidia.com/gpu amd.com/gpu )) {
   is( $wait_with->( ( "500 boom\n" ) x 3, 0 ), 0, "$resource: errors, then answers without GPU" );
   unlike( $warn[0], qr/last API error/, "$resource: an error of an earlier attempt is not named" );
 
-  is( $wait_with->( "503 unavailable\n", 2 ), 1, "$resource: error, then GPU capacity: 1" );
+  is( $wait_with->( "503 unavailable\n", 2 ), 1, "$resource: error, then an allocatable GPU: 1" );
   is_deeply( \@warn, [], "$resource: no warning" );
   like( $info[-1], qr/\[ok\] $r: 2 on gpu1/, "$resource: reports the node" );
+
+  # k106: the plugin gone, the node keeps its capacity, allocatable is 0.
+  my $gone = [ { $resource => 1 }, { $resource => 0 } ];
+  is( $wait_with->($gone), 0, "$resource: capacity 1, allocatable 0: 0" );
+  is( $slept, 24, "$resource: ... the full 24 polls" );
+  ok( !grep( { /\[ok\]/ } @info ), "$resource: ... no [ok]" );
+  is( $info[0], '  No allocatable GPU yet (1/24), waiting...', "$resource: ... says what it waits for" );
+  is_deeply( \@warn,
+    [ "  $resource resource did not appear \x{e2}\x{80}\x{94} check device plugin" ],
+    "$resource: ... and warns" );
+
+  # The redeploy on synapse: capacity 1 throughout, allocatable 0 until the
+  # new plugin registers.
+  is( $wait_with->( $gone, $gone, 1 ), 1, "$resource: allocatable 0, 0, then 1: 1" );
+  is( $slept, 2, "$resource: ... at the third poll" );
+
+  is( $wait_with->( [ { $resource => 2 }, { $resource => 1 } ] ), 1, "$resource: capacity 2, allocatable 1: 1" );
+  like( $info[-1], qr/\[ok\] $r: 1 on gpu1/, "$resource: ... reports the allocatable count" );
+
+  is( $wait_with->( [ { $resource => 1 }, {} ] ), 0, "$resource: in capacity only, not in allocatable: 0" );
 }
 
-# The other vendor's capacity is not the one waited for.
+# The other vendor's resource is not the one waited for.
 {
   local @answers = (4);
   local $offered = 'nvidia.com/gpu';
@@ -116,6 +145,10 @@ is_deeply( \@warn, [ "  amd.com/* resource did not appear \x{e2}\x{80}\x{94} che
 
 is( wait_prefix( 'amd.com/', { 'nvidia.com/gpu' => 4, 'xamd.com/gpu' => 1 } ), 0,
   'amd.com/: another vendor, or a name only containing it: not found' );
+
+is( wait_prefix( 'amd.com/', [ { 'amd.com/cpx_nps4' => 8 }, { 'amd.com/cpx_nps4' => 0 } ] ), 0,
+  'amd.com/: a partition in capacity, allocatable 0: not found (k106)' );
+is( $slept, 24, '... 24 polls' );
 
 is( wait_prefix( 'amd.com/', 0, { 'amd.com/cpx_nps4' => 8 } ), 1, 'amd.com/: none yet, then a partition: found' );
 is( $slept, 1, '... at the second poll' );
