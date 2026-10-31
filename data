@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-10-31T01:08:44Z
+created: 2026-10-31T00:13:21Z
+id: 102
+priority: medium
+started: 2026-10-31T01:08:44Z
+status: done
+tags:
+- gpu
+- amd
+- k8s
+- dra
+title: deploy_amd_dra_driver / remove_amd_dra_driver (ROCm k8s-gpu-dra-driver v1.0.1)
+updated: 2026-10-31T01:13:41Z
+---
+
+Folgearbeit zu k95, Anfrage kubernetes-ocp-9c 2026-10-31 (Punkt d und f): deploy_amd_dra_driver(kubeconfig, version, affinity) mit rocm/k8s-gpu-dra-driver v1.0.1: kubeletplugin-DaemonSet, ServiceAccount, ClusterRole, ClusterRoleBinding, DeviceClass gpu.amd.com (resource.k8s.io/v1, Kubernetes 1.36). Quelle: die Helm-Templates am Tag v1.0.1 (github.com/ROCm/k8s-gpu-dra-driver). Upstream-DaemonSet ist privileged und hat einen Init-Container (busybox:1.36, wartet auf /sys/class/kfd und /sys/module/amdgpu/drivers) — so übernehmen, Quelle im Code. Dazu remove_amd_dra_driver, idempotent, NotFound ist ok. Vorab prüfen: kann die released IO::K8s-Version DeviceClass in resource.k8s.io/v1 bauen (lokal 1.112, cpanfile verlangt 1.111)? Wenn nicht: Karte auf dem IO::K8s-Board, hier blocken. Laut OCP-Recherche: DRA und Device-Plugin pro Node exklusiv; APU-Speicher (Issue 84) unbewiesen.
+
+Gebaut: deploy_amd_dra_driver(kubeconfig, version, affinity) und remove_amd_dra_driver(kubeconfig) in Rex::Rancher::K8s, dort exportiert, nicht von Rex::Rancher re-exportiert. Objekte nach dem Helm-Chart v1.0.1 (Commit 9eb4e2e) mit Defaults: ServiceAccount, ClusterRole, ClusterRoleBinding, ValidatingAdmissionPolicy plus Binding (im Chart per Default an), DeviceClass gpu.amd.com in resource.k8s.io/v1, DaemonSet k8s-gpu-dra-driver-kubeletplugin (privileged, busybox:1.36-Init, system-node-critical wie upstream). Abweichungen, im Code begruendet: kube-system statt kube-amd-gpu, Image-Tag immer ausgeschrieben (latest ist v1.0.0, Git-appVersion v0.1.0 gibt es nicht), nodeSelector amd64, keine Helm-Labels, kein namespace auf ClusterRole/Binding, leere securityContext/resources weggelassen. Vorabpruefung ueber fetch_resource_map aus der Discovery: ohne DeviceClass in resource.k8s.io/v1 stirbt deploy vor dem ersten Objekt; ohne sie wuerde ein 1.33-Cluster still eine v1beta2-DeviceClass bekommen (per Mutant gezeigt). IO::K8s 1.111 baut alle Kinds, cpanfile unveraendert. Neuer Test t/amd-dra-driver.t (122 Tests: Specs gegen handgerendertes Chart-YAML, deploy/remove durch den echten Kubernetes::REST mit Fake-IO samt Discovery), git add erledigt. prove -lr t/ 43 Dateien 1513 Tests gruen (Baseline 42/1391), 5 Mutanten von Hand gefangen, dzil build sauber, Artefakte entfernt, podchecker ohne neue Fehlerart. Live unverifiziert: Image startet, ResourceSlices erscheinen, Admission-Policy greift (nennt nur v1beta1), CDI unter RKE2/K3s-containerd, Claim bis in den Pod, Folgen von remove. APU (Issue 84): keine Quelle in den Upstream-Dateien am Tag, daher nicht in der POD. Drift: ein Helm-Install des Charts daneben kollidiert (gleicher DeviceClass-Name); uninstall_node laesst die CDI-Specs k8s.gpu.amd.com-gpu_* liegen (k105); ABSTRACT von K8s.pm nennt weder Labeller noch DRA.
+
+Bereit fuer Review: Baum commit-fertig (K8s.pm, README-Zeile, neuer Test gestaged), nicht committet. prove gruen 43/1513, Mutanten gefangen. Gruen beweist nur Kompilat und reine Logik; Deploy des DRA-Treibers auf einem 1.34+-Cluster mit AMD-GPU ist live unverifiziert. Commit-Vorschlag und Changes-Text im Bericht an den Orchestrator.
+
+Committed as 5310056c11aba6d4e084d7b234b8b7e21ed08006 on branch worktree-k95-amd-gpu, on top of 0b6e1b3. Offline verified, live run on amdlab pending.
+
+Live verifiziert 2026-10-31 auf amdlab (RKE2 1.36.4, synapse gfx1151, inbox amdgpu), Go von kubernetes-ocp-9c, Stand 5310056. Deploy mit affinity present+allocation dra: Kubelet-Plugin nur auf synapse, DeviceClass, VAP und Binding da, ResourceSlice deviceID 0x1586, 40 CUs, 80 SIMDs, 128Gi. OCP-DRA-Smoke gruen: PyTorch ueber ResourceClaim auf gpu.amd.com, fp32/fp16/bf16 Matmul, Autograd, SDPA. remove zweimal: erst alles entfernt, dann not there, beide exit 0; ResourceSlice nach ca. 30 s vom kubelet abgeraeumt. Befund: VAP greift auf 1.36 nicht, siehe k107.
