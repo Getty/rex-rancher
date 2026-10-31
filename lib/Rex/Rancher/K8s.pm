@@ -18,9 +18,11 @@ use vars qw(@EXPORT);
 @EXPORT = qw(
   control_plane_version
   deploy_amd_device_plugin
+  deploy_amd_dra_driver
   deploy_amd_node_labeller
   deploy_nvidia_device_plugin
   remove_amd_device_plugin
+  remove_amd_dra_driver
   remove_amd_node_labeller
   wait_for_api
   untaint_node
@@ -45,6 +47,20 @@ use constant AMD_DEVICE_PLUGIN_VERSION => '1.31.0.11';
 # cmd/k8s-device-plugin/main.go at that tag knows it (anything else: exit 1).
 # The flag came with release v1.31.0.7.
 use constant AMD_RESOURCE_NAMINGS => qw( single mixed );
+
+# ROCm's driver for Dynamic Resource Allocation of AMD GPUs, release v1.0.1
+# (2026-07-22, commit 9eb4e2ea386e34581524b0110e24769654fcb8d2):
+# https://github.com/ROCm/k8s-gpu-dra-driver/releases/tag/v1.0.1
+# https://github.com/ROCm/k8s-gpu-dra-driver/commit/9eb4e2ea386e34581524b0110e24769654fcb8d2
+# The objects are built after its Helm chart at that tag, as it renders with
+# its default values:
+# https://github.com/ROCm/k8s-gpu-dra-driver/tree/v1.0.1/helm-charts-k8s
+# The tag carries a v, unlike the device plugin's. The chart in git names
+# appVersion v0.1.0 (only the packaged chart of the release gets v1.0.1), a
+# tag the image does not have, and the image's latest is v1.0.0, without
+# v1.0.1's fix for amdgpu 6.19.14 and later: the image tag is always spelled
+# out. docker.io/rocm/k8s-gpu-dra-driver is amd64 only.
+use constant AMD_DRA_DRIVER_VERSION => 'v1.0.1';
 
 =method wait_for_api(%opts)
 
@@ -213,6 +229,12 @@ C<CriticalAddonsOnly> toleration.
 B<It runs on every amd64 node>, and on one without the C<amdgpu> driver
 loaded the plugin exits, so its pod there stays in C<CrashLoopBackOff>. On a
 cluster with such nodes pass C<affinity> (below).
+
+Not on the nodes of L</deploy_amd_dra_driver>: a node's AMD GPUs are
+allocated either by this plugin or by DRA, not both (ROCm's device metrics
+exporter,
+L<https://github.com/ROCm/device-metrics-exporter/blob/v1.5.3/pkg/exporter/scheduler/k8s.go#L94-L97>);
+keep the two apart with C<affinity>.
 
 No runtime class, CDI or containerd change is involved: the plugin hands the
 kubelet C</dev/kfd> and the GPU's C</dev/dri/cardN> and C</dev/dri/renderDN>
@@ -522,6 +544,227 @@ sub remove_amd_node_labeller {
   my $api = _api($kubeconfig);
   _delete_if_present($api, $_->[0] => $_->[1]{metadata})
     for reverse _amd_node_labeller_specs(AMD_DEVICE_PLUGIN_VERSION);
+}
+
+=method deploy_amd_dra_driver(%opts)
+
+Deploy ROCm's driver for Dynamic Resource Allocation (DRA) of AMD GPUs
+(L<https://github.com/ROCm/k8s-gpu-dra-driver>), the objects upstream's
+Helm chart installs with its default values, in this order: the
+ServiceAccount C<k8s-gpu-dra-driver-service-account> in C<kube-system>, the
+ClusterRole C<k8s-gpu-dra-driver-role> and its ClusterRoleBinding
+C<k8s-gpu-dra-driver-role-binding>, the ValidatingAdmissionPolicy
+C<resourceslices-policy-k8s-gpu-dra-driver> and its binding of the same
+name, the DeviceClass C<gpu.amd.com> and the DaemonSet
+C<k8s-gpu-dra-driver-kubeletplugin> in C<kube-system>. Objects already in
+the cluster are updated, as for L</deploy_amd_device_plugin>. Locally via
+L<Kubernetes::REST>, like the rest of this module.
+
+Instead of a count such as C<amd.com/gpu> in the node's capacity, the plugin
+on each node publishes that node's GPUs as devices in a ResourceSlice whose
+C<spec.driver> is C<gpu.amd.com>, and a pod gets one through a
+ResourceClaim of the DeviceClass C<gpu.amd.com>, as in upstream's
+C<example/example.yaml>:
+
+  apiVersion: resource.k8s.io/v1
+  kind: ResourceClaimTemplate
+  metadata:
+    name: single-gpu
+  spec:
+    spec:
+      devices:
+        requests:
+        - name: gpu
+          exactly:
+            deviceClassName: gpu.amd.com
+
+with C<resourceClaims: [{name: gpu, resourceClaimTemplateName: single-gpu}]>
+in the pod spec and C<resources: {claims: [{name: gpu}]}> on the container.
+
+There is no wait. That a node's GPUs arrived shows as a ResourceSlice with
+C<spec.driver> C<gpu.amd.com> and that node's C<spec.nodeName>
+(C<kubectl get resourceslices>, or C<list('ResourceSlice')> through
+L<Kubernetes::REST>).
+
+The DaemonSet is the chart's:
+
+=over
+
+=item * C<docker.io/rocm/k8s-gpu-dra-driver:VERSION>, privileged, running
+C<gpu-kubeletplugin> with the kubelet's C<plugins> and C<plugins_registry>
+directories, C</var/run/cdi> (where it writes the CDI specs of the devices
+it prepares) and the host's C</dev> and C</sys> mounted, and a gRPC
+liveness probe on port 51515.
+
+=item * An init container (C<docker.io/busybox:1.36>, privileged) that
+waits until C</sys/class/kfd> and C</sys/module/amdgpu/drivers/> exist, that
+is until the C<amdgpu> kernel driver is loaded.
+
+=item * C<priorityClassName: system-node-critical>.
+
+=back
+
+What differs from the chart: the namespace is C<kube-system>, not
+upstream's C<kube-amd-gpu>, so there is no namespace to create or remove;
+the image tag is always given (the chart's own default from git is a tag the
+image does not have, and C<latest> is v1.0.0); a C<nodeSelector>
+C<kubernetes.io/arch: amd64>, as the image is amd64 only; and no Helm
+labels. Not next to a Helm install of the chart: the DeviceClass has the
+same name in every install, the other cluster-scoped objects those of a
+release named C<k8s-gpu-dra-driver>, and this function would take them over.
+
+B<It runs on every amd64 node>, and on one without the C<amdgpu> driver
+loaded its pod stays in C<Init:0/1> for good: no crash loop and no error,
+a pod that never starts. On a cluster with such nodes pass C<affinity>
+(below).
+
+B<DRA and the device plugin exclude each other per node>: ROCm's device
+metrics exporter takes the GPU pods of a node to be served by one of the
+two, not both
+(L<https://github.com/ROCm/device-metrics-exporter/blob/v1.5.3/pkg/exporter/scheduler/k8s.go#L94-L97>),
+and each would hand out the node's GPUs on its own. L</deploy_amd_device_plugin>
+runs on every amd64 node unless its C<affinity> says otherwise: give the two
+separate nodes.
+
+What the cluster needs:
+
+=over
+
+=item * Kubernetes 1.34 or later: the DeviceClass is created in
+C<resource.k8s.io/v1>. A cluster whose API does not serve it dies here,
+saying so, before any object is created. (Upstream's chart falls back to
+C<v1beta2> or C<v1beta1> on 1.32 and 1.33; this function does not.)
+
+=item * containerd with CDI enabled, reading C</var/run/cdi>: the devices of
+a claim reach the container as CDI devices. Rex::Rancher changes nothing
+about containerd for this.
+
+=item * The node name in the plugin's service account token (feature gate
+C<ServiceAccountTokenPodNodeInfo>, on by default since Kubernetes 1.30 and
+stable since 1.32, so on unless switched off): the admission policy lets the
+plugin of a node change only that node's ResourceSlices, and without the
+node name it refuses every change, so no GPU appears.
+
+=back
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+Optional options:
+
+=over
+
+=item C<version>
+
+Image tag of the driver, C<docker.io/rocm/k8s-gpu-dra-driver:VERSION>, with
+its C<v>. Default: C<v1.0.1>. The objects stay those of v1.0.1's chart, and
+the init container's C<busybox:1.36> stays as upstream has it.
+
+=item C<affinity>
+
+A pod C<affinity> (hashref, as in a pod spec) for the DaemonSet, on top of
+the C<amd64> C<nodeSelector>; see L</deploy_amd_device_plugin> for an
+example and why a node label of your own selects more safely than Node
+Feature Discovery's. Default: none, every amd64 node, as upstream. Anything
+but a hashref dies before the cluster is touched.
+
+=back
+
+  # DRA on the nodes labelled for it, the device plugin elsewhere
+  deploy_amd_dra_driver(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity   => $dra_nodes,
+  );
+
+=cut
+
+sub deploy_amd_dra_driver {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+  my $version    = $opts{version} // AMD_DRA_DRIVER_VERSION;
+  my $affinity   = _check_affinity($opts{affinity});
+
+  Rex::Logger::info("Deploying AMD GPU DRA driver $version...");
+
+  my $api = _api($kubeconfig);
+  die "The cluster does not serve DeviceClass in resource.k8s.io/v1:"
+    . " the AMD GPU DRA driver needs Kubernetes 1.34 or later; nothing deployed\n"
+    unless _serves_dra_v1($api);
+
+  _create_or_update($api, @$_) for _amd_dra_driver_specs($version, $affinity);
+
+  Rex::Logger::info("AMD GPU DRA driver applied; its GPUs show as ResourceSlices of driver gpu.amd.com");
+}
+
+=method remove_amd_dra_driver(%opts)
+
+Delete what L</deploy_amd_dra_driver> deploys, in reverse order, the
+DaemonSet first so no plugin runs on without its rights: the DaemonSet, the
+DeviceClass C<gpu.amd.com>, the admission policy's binding and the policy,
+the ClusterRoleBinding, the ClusterRole and the ServiceAccount.
+
+Idempotent like L</remove_amd_device_plugin>: an object that is not there is
+logged and skipped, any other error dies (and leaves the objects after it in
+place). On a cluster that does not serve C<resource.k8s.io/v1> the
+DeviceClass counts as not there. Locally via L<Kubernetes::REST>.
+
+It does not remove:
+
+=over
+
+=item * The ResourceSlices the plugins published.
+
+=item * What the plugin left on the nodes: the CDI specs in C</var/run/cdi>
+(C<k8s.gpu.amd.com-gpu_*>), its checkpoint in
+C</var/lib/kubelet/plugins/gpu.amd.com/> and its registration in
+C</var/lib/kubelet/plugins_registry>.
+
+=back
+
+Pods whose claims are allocated keep their GPUs; a new claim of the
+DeviceClass C<gpu.amd.com> is not allocated any more.
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+  remove_amd_dra_driver(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+
+=cut
+
+sub remove_amd_dra_driver {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+
+  Rex::Logger::info("Removing AMD GPU DRA driver...");
+
+  # The objects the deploy sends, in reverse. A DeviceClass on a cluster
+  # without resource.k8s.io/v1 is not asked for: there it is not there, and
+  # asking would depend on how the client resolves a Kind the cluster lacks.
+  my $api = _api($kubeconfig);
+  my $dra = _serves_dra_v1($api);
+  for (reverse _amd_dra_driver_specs(AMD_DRA_DRIVER_VERSION)) {
+    my ($kind, $metadata) = ($_->[0], $_->[1]{metadata});
+    if ($kind eq 'DeviceClass' && !$dra) {
+      Rex::Logger::info("  $kind/$metadata->{name} not there"
+        . " (the cluster does not serve resource.k8s.io/v1), nothing to remove");
+      next;
+    }
+    _delete_if_present($api, $kind => $metadata);
+  }
 }
 
 =method untaint_node(%opts)
@@ -863,6 +1106,212 @@ sub _amd_node_labeller_specs {
   );
 }
 
+# ROCm's DRA driver: the objects its Helm chart at AMD_DRA_DRIVER_VERSION
+# renders with the default values (serviceaccount.yaml, clusterrole.yaml,
+# clusterrolebinding.yaml, validatingadmissionpolicy.yaml,
+# validatingadmissionpolicybinding.yaml, deviceclass.yaml, kubeletplugin.yaml
+# under helm-charts-k8s/templates), as [ kind => spec ] pairs in the order
+# they are created: what an object refers to exists before it. The names are
+# the chart's for a release named k8s-gpu-dra-driver, as its README installs
+# it. Values that are the chart's defaults are kept as they are (the image
+# pull policy, the probe, the environment, the paths, priorityClassName
+# system-node-critical, no tolerations); the webhook and the OpenShift SCC
+# are off by default there and left out here.
+#
+# What differs:
+# - kube-system instead of the README's kube-amd-gpu, as for the device
+#   plugin: no namespace object to create or to remove, and the priority
+#   class system-node-critical (the chart's own) is at home there. The
+#   admission policy's user follows the namespace and the ServiceAccount.
+# - The image tag is $version, never the chart's appVersion (v0.1.0 in git,
+#   a tag that does not exist); the init image docker.io/busybox:1.36 stays.
+# - nodeSelector kubernetes.io/arch amd64, as the image is amd64 only (the
+#   chart has none); $affinity, if given, is the pod affinity.
+# - No Helm labels (helm.sh/chart, app.kubernetes.io/managed-by: Helm):
+#   Helm does not manage these objects. app.kubernetes.io/version is
+#   $version, the image the DaemonSet runs.
+# - No metadata.namespace on the ClusterRole and the ClusterRoleBinding,
+#   which the chart gives them and which cluster-scoped objects do not have.
+# - The chart's empty pod securityContext and container resources ({}) are
+#   left out: the API server stores the same empty objects without them.
+#
+# The selector is fixed and carries no version: a DaemonSet's selector cannot
+# change, and an update with another one would be refused.
+#
+# The admission policy names resourceslices in v1beta1, as the chart does;
+# whether it also applies to the plugin's writes through v1 (matchPolicy
+# Equivalent, if the cluster still serves v1beta1) is upstream's matter.
+sub _amd_dra_driver_specs {
+  my ($version, $affinity) = @_;
+  my $namespace = 'kube-system';
+  my $name      = 'k8s-gpu-dra-driver';
+  my $sa        = "$name-service-account";
+  my $role      = "$name-role";
+  my $policy    = "resourceslices-policy-$name";
+  my %selector  = (
+    'app.kubernetes.io/name'      => $name,
+    'app.kubernetes.io/instance'  => $name,
+    'app.kubernetes.io/component' => 'kubeletplugin',
+  );
+  my %labels = (
+    'app.kubernetes.io/name'     => $name,
+    'app.kubernetes.io/instance' => $name,
+    'app.kubernetes.io/version'  => $version,
+  );
+  my $cdi       = '/var/run/cdi';
+  my $registrar = '/var/lib/kubelet/plugins_registry';
+  my $plugins   = '/var/lib/kubelet/plugins';
+  my $health    = 51515;
+
+  return (
+    [ ServiceAccount => {
+      metadata => { name => $sa, namespace => $namespace, labels => { %labels } },
+    } ],
+    [ ClusterRole => {
+      metadata => { name => $role },
+      rules    => [
+        { apiGroups => ['resource.k8s.io'], resources => ['resourceclaims'], verbs => ['get'] },
+        { apiGroups => [''],                resources => ['nodes'],          verbs => ['get'] },
+        { apiGroups => ['resource.k8s.io'], resources => ['resourceslices'],
+          verbs     => [qw( get list watch create update patch delete )] },
+      ],
+    } ],
+    [ ClusterRoleBinding => {
+      metadata => { name => "$role-binding" },
+      subjects => [{ kind => 'ServiceAccount', name => $sa, namespace => $namespace }],
+      roleRef  => {
+        kind     => 'ClusterRole',
+        name     => $role,
+        apiGroup => 'rbac.authorization.k8s.io',
+      },
+    } ],
+    # The plugin of a node may change only that node's ResourceSlices. The
+    # chart's folded (>-) expressions as one line each.
+    [ ValidatingAdmissionPolicy => {
+      metadata => { name => $policy },
+      spec     => {
+        failurePolicy    => 'Fail',
+        matchConstraints => {
+          resourceRules => [{
+            apiGroups   => ['resource.k8s.io'],
+            apiVersions => ['v1beta1'],
+            operations  => [qw( CREATE UPDATE DELETE )],
+            resources   => ['resourceslices'],
+          }],
+        },
+        matchConditions => [{
+          name       => 'isRestrictedUser',
+          expression => 'request.userInfo.username == "system:serviceaccount:'.$namespace.':'.$sa.'"',
+        }],
+        variables => [
+          { name       => 'userNodeName',
+            expression => q{request.userInfo.extra[?'authentication.kubernetes.io/node-name'][0].orValue('')} },
+          { name       => 'objectNodeName',
+            expression => q{(request.operation == "DELETE" ? oldObject : object).spec.?nodeName.orValue("")} },
+        ],
+        validations => [
+          { expression => 'variables.userNodeName != ""',
+            message    => 'no node association found for user, this user must run in a pod on a node'
+              .' and ServiceAccountTokenPodNodeInfo must be enabled' },
+          { expression        => 'variables.userNodeName == variables.objectNodeName',
+            messageExpression => q{"this user running on node '"+variables.userNodeName+"' may not modify " +}
+              .q{ (variables.objectNodeName == "" ?"cluster resourceslices" : "resourceslices on node '"+variables.objectNodeName+"'")} },
+        ],
+      },
+    } ],
+    [ ValidatingAdmissionPolicyBinding => {
+      metadata => { name => $policy },
+      spec     => { policyName => $policy, validationActions => ['Deny'] },
+    } ],
+    [ DeviceClass => {
+      metadata => { name => 'gpu.amd.com' },
+      spec     => { selectors => [{ cel => { expression => q{device.driver == 'gpu.amd.com'} } }] },
+    } ],
+    [ DaemonSet => {
+      metadata => {
+        name      => "$name-kubeletplugin",
+        namespace => $namespace,
+        labels    => { %labels, 'app.kubernetes.io/component' => 'kubeletplugin' },
+      },
+      spec => {
+        selector       => { matchLabels => { %selector } },
+        updateStrategy => { type => 'RollingUpdate' },
+        template       => {
+          metadata => { labels => { %selector } },
+          spec     => {
+            priorityClassName  => 'system-node-critical',
+            serviceAccountName => $sa,
+            nodeSelector       => { 'kubernetes.io/arch' => 'amd64' },
+            ( defined $affinity ? ( affinity => $affinity ) : () ),
+            # Waits for the amdgpu driver, verbatim from the chart.
+            initContainers => [{
+              name    => 'driver-init',
+              image   => 'docker.io/busybox:1.36',
+              command => [ 'sh', '-c', 'while [ ! -d /sys/class/kfd ] || [ ! -d /sys/module/amdgpu/drivers/ ];'
+                .q{ do echo 'amdgpu driver is not loaded'; sleep 2; done} ],
+              securityContext => { privileged => \1 },
+              volumeMounts    => [{ name => 'sys', mountPath => '/sys' }],
+            }],
+            containers => [{
+              name            => 'plugin',
+              securityContext => { privileged => \1 },
+              image           => "docker.io/rocm/k8s-gpu-dra-driver:$version",
+              imagePullPolicy => 'IfNotPresent',
+              command         => ['gpu-kubeletplugin'],
+              livenessProbe   => {
+                grpc             => { port => $health, service => 'liveness' },
+                failureThreshold => 3,
+                periodSeconds    => 10,
+              },
+              env => [
+                { name => 'CDI_ROOT',                         value => $cdi },
+                { name => 'KUBELET_REGISTRAR_DIRECTORY_PATH', value => $registrar },
+                { name => 'KUBELET_PLUGINS_DIRECTORY_PATH',   value => $plugins },
+                { name => 'NODE_NAME', valueFrom => { fieldRef => { fieldPath => 'spec.nodeName' } } },
+                { name => 'NAMESPACE', valueFrom => { fieldRef => { fieldPath => 'metadata.namespace' } } },
+                { name => 'HEALTHCHECK_PORT',                 value => "$health" },
+              ],
+              volumeMounts => [
+                { name => 'plugins-registry', mountPath => $registrar },
+                { name => 'plugins',          mountPath => $plugins },
+                { name => 'cdi',              mountPath => $cdi },
+                { name => 'dev',              mountPath => '/dev' },
+                { name => 'sys',              mountPath => '/sys' },
+              ],
+            }],
+            volumes => [
+              { name => 'plugins-registry', hostPath => { path => $registrar } },
+              { name => 'plugins',          hostPath => { path => $plugins } },
+              { name => 'cdi',              hostPath => { path => $cdi } },
+              { name => 'dev',              hostPath => { path => '/dev' } },
+              { name => 'sys',              hostPath => { path => '/sys' } },
+            ],
+          },
+        },
+      },
+    } ],
+  );
+}
+
+# Whether the cluster serves DeviceClass in resource.k8s.io/v1 (Kubernetes
+# 1.34 on), asked before any DRA object is created. Kubernetes::REST (with
+# resource_map_from_cluster, the default _api keeps) builds the map behind
+# new_object from the cluster's aggregated discovery: a Kind maps to the
+# IO::K8s class of the version its group prefers, and only Kinds the cluster
+# serves and IO::K8s ships are in it. Without resource.k8s.io there is no
+# DeviceClass in it, and new_object('DeviceClass') dies with "Can't locate
+# IO/K8s/DeviceClass.pm" -- after the ServiceAccount, the RBAC and the
+# policy are created; on 1.32 or 1.33 it maps to the v1beta2 or v1beta1
+# class. fetch_resource_map is that map, from the same cached discovery
+# new_object then uses (no second fetch); where discovery cannot be read it
+# dies ("Could not load resource map from cluster: ..."), where new_object
+# would fall back to IO::K8s's built-in map with a warning.
+sub _serves_dra_v1 {
+  my ($api) = @_;
+  my $class = $api->fetch_resource_map->{DeviceClass} // '';
+  return $class =~ /(?:\A|::)Api::Resource::V1::DeviceClass\z/ ? 1 : 0;
+}
+
 # Create the $kind object $spec describes or, where it already exists, update
 # it with the cluster's resourceVersion (optimistic concurrency). Namespaced
 # or cluster-scoped as $spec's metadata has it.
@@ -1009,9 +1458,16 @@ sub _wait_for_gpu_resource {
     wait            => 0,
   );
 
+  # ROCm's DRA driver instead, on nodes of its own
+  deploy_amd_dra_driver(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity   => $dra_nodes,
+  );
+
   # And take them out again
   remove_amd_device_plugin(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
   remove_amd_node_labeller(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+  remove_amd_dra_driver(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
 
   # Remove control-plane taints on a single-node cluster
   untaint_node(kubeconfig => "$ENV{HOME}/.kube/single.yaml");
@@ -1019,7 +1475,7 @@ sub _wait_for_gpu_resource {
 =head1 DESCRIPTION
 
 L<Rex::Rancher::K8s> provides Kubernetes API operations for L<Rex::Rancher>
-using L<Kubernetes::REST> and L<IO::K8s>. All eight public functions run
+using L<Kubernetes::REST> and L<IO::K8s>. All ten public functions run
 entirely on the B<local machine> against the cluster's HTTP API — no
 C<kubectl> binary is required anywhere, and no SSH connection to the cluster
 nodes is needed for these operations.
@@ -1042,9 +1498,11 @@ It can also be used standalone for post-deploy operations such as removing
 control-plane taints on single-node clusters, or deploying and removing the
 AMD device plugin and node labeller on nodes of your choosing
 (L</deploy_amd_node_labeller>, L</remove_amd_device_plugin>,
-L</remove_amd_node_labeller>). L<Rex::Rancher> re-exports only
-L</wait_for_api>, L</untaint_node> and the two C<deploy_*_device_plugin>
-functions; the others come from C<use Rex::Rancher::K8s>.
+L</remove_amd_node_labeller>) and ROCm's DRA driver for AMD GPUs
+(L</deploy_amd_dra_driver>, L</remove_amd_dra_driver>). L<Rex::Rancher>
+re-exports only L</wait_for_api>, L</untaint_node> and the two
+C<deploy_*_device_plugin> functions; the others come from
+C<use Rex::Rancher::K8s>.
 
 =head2 No kubectl required
 

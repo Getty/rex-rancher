@@ -23,6 +23,14 @@ Revision history for Rex-Rancher
   - New remove_amd_device_plugin and remove_amd_node_labeller in
     Rex::Rancher::K8s: delete exactly what the deploys create; an object
     that is not there is logged, any other API error dies.
+  - New deploy_amd_dra_driver and remove_amd_dra_driver in Rex::Rancher::K8s
+    (not re-exported by Rex::Rancher): ROCm's DRA driver for AMD GPUs,
+    k8s-gpu-dra-driver v1.0.1, as its Helm chart deploys it with the default
+    values, in kube-system and on amd64 nodes, with an affinity option. Needs
+    Kubernetes 1.34 or later (DeviceClass in resource.k8s.io/v1) and dies on
+    an older cluster before creating anything. Its GPUs show as
+    ResourceSlices of driver gpu.amd.com, not as amd.com/gpu; a node runs
+    either this or the device plugin.
   - An agent (or joining server) that cannot reach its server address no
     longer waits out the full 600 s: while the unit is not active the
     journal is read along, and once it has shown nothing but "Failed to
