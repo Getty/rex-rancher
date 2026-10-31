@@ -133,6 +133,20 @@ L<Rex::Rancher::Server/install_server>'s C<node_labels>; like there, labels
 are only read when the agent registers, not on a re-run against a node that
 already joined.
 
+=item C<node_ip>
+
+=item C<node_external_ip>
+
+The address the node advertises as its C<InternalIP> / C<ExternalIP>,
+written as C<node-ip> / C<node-external-ip> to C<config.yaml>; for a
+multi-homed host whose default route does not point into the cluster
+network. An IP address, several separated by commas, or an arrayref (one
+IPv4 and one IPv6 address for dual-stack); anything else dies before the
+host is touched. A re-run without it keeps what C<config.yaml> holds; one
+that changes it warns, and the Cilium agent pod on the node then needs a
+restart as well. Same as L<Rex::Rancher::Server/install_server>'s
+C<node_ip> and C<node_external_ip>, which has the details.
+
 =item C<registries>
 
 Private registry mirror configuration hashref. Same structure as
@@ -179,7 +193,10 @@ sub install_agent {
 
   Rex::Logger::info("Installing $distribution agent to join $server");
 
-  _write_config($dist, %opts);
+  # What config.yaml holds is kept for an address not given (k100).
+  my %addresses = $dist->node_addresses(node_ip => $checked->{node_ip},
+    node_external_ip => $checked->{node_external_ip});
+  _write_config($dist, %opts, %addresses);
   _write_registries($dist, %opts);
   # Before the installer and the first start, as on the server.
   $dist->ensure_nvidia_runtime_path if $opts{nvidia_runtime_path};
@@ -212,7 +229,7 @@ is left as it was. Not exported.
 =over
 
 =item 1. the pure option checks: C<install_method> (with C<version>),
-C<distribution>;
+C<distribution>, C<node_ip>, C<node_external_ip>;
 
 =item 2. with C<kubeconfig>, the control plane's version through the API
 (from this machine, no host involved); an API that does not answer dies;
@@ -233,8 +250,9 @@ under C<hold_running>, else C<version>.
 
 Dies as L</install_agent> would. Returns a hashref: the C<version> this run
 installs (held, pinned, or C<undef> for the stable channel), the
-C<install_method> and the control plane's C<server_version> (C<undef>
-without C<kubeconfig>).
+C<install_method>, the control plane's C<server_version> (C<undef>
+without C<kubeconfig>), and C<node_ip> and C<node_external_ip> as arrayrefs
+of addresses (each C<undef> when not given).
 
 =cut
 
@@ -244,6 +262,8 @@ sub preflight_agent {
     install_method => Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version}),
   );
   my $dist = Rex::Rancher::Distribution->new_for($opts{distribution}, role => 'agent');
+  $checked{$_} = Rex::Rancher::Options->check_node_addresses($_ => $opts{$_})
+    for qw( node_ip node_external_ip );
 
   # An agent never goes to a newer minor than the control plane, nor skips
   # or goes back a minor itself.
@@ -277,8 +297,9 @@ sub _control_plane_version {
   return $version;
 }
 
-# Same keys on rke2 and k3s agents; node-label as in the server's
-# config.yaml (Rex::Rancher::Server).
+# Same keys on rke2 and k3s agents; node-label, node-ip and node-external-ip
+# as in the server's config.yaml (Rex::Rancher::Server). node_ip and
+# node_external_ip come as lists (Rex::Rancher::Options).
 sub _build_agent_config {
   my (%opts) = @_;
 
@@ -287,6 +308,8 @@ sub _build_agent_config {
     token  => $opts{token},
   );
   $config{'node-name'} = $opts{node_name} if $opts{node_name};
+  $config{'node-ip'}   = $opts{node_ip}   if $opts{node_ip};
+  $config{'node-external-ip'} = $opts{node_external_ip} if $opts{node_external_ip};
 
   if (my $node_labels = $opts{node_labels}) {
     my @labels = ref $node_labels eq 'ARRAY' ? @{$node_labels} : ($node_labels);
@@ -399,8 +422,8 @@ node for either RKE2 or K3s. It handles:
 
 =over
 
-=item * Writing C<config.yaml> with the server URL, token, and optional node name
-and node labels
+=item * Writing C<config.yaml> with the server URL, token, and optional node name,
+node labels and node addresses
 
 =item * Writing C<registries.yaml> for private registry mirrors (optional)
 

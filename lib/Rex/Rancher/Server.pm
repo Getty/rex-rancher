@@ -235,6 +235,43 @@ parsed dies too, with its name. A server not set up yet is not checked.
 
 Node labels applied at join time, as an arrayref of C<key=value> strings.
 
+=item C<node_ip>
+
+=item C<node_external_ip>
+
+The addresses the node advertises as its C<InternalIP> and C<ExternalIP>,
+written as C<node-ip> and C<node-external-ip> to C<config.yaml> (a YAML
+list), on RKE2 and K3s alike. An IP address, several separated by commas
+(C<'10.0.0.5,fd00::5'>), or an arrayref (C<['10.0.0.5', 'fd00::5']>): one
+address, or one IPv4 and one IPv6 address for dual-stack. Anything else (a
+hash or other reference, an empty string or list, something that is not an
+IPv4 or IPv6 address, spaces included) dies before the host is touched;
+only the syntax is checked. Default: nothing written, and RKE2 and K3s
+advertise the address of the default route.
+
+Set C<node_ip> on a multi-homed host whose default route does not point
+into the cluster network: without it the node registers with an
+C<InternalIP> the other nodes may not reach, and whatever reaches the node
+there (Cilium's tunnel between the nodes, a registry mirror behind a node
+port, NFD's worker) fails, often in one direction only. On a server the API
+server also advertises C<node_external_ip>, else C<node_ip>, as its service
+endpoint (the C<advertise-address> default of RKE2 and K3s).
+
+C<config.yaml> is written whole on every run. A re-run without C<node_ip>
+keeps the C<node-ip> the node's C<config.yaml> holds, with a log line, so a
+re-run does not move a node to another address unasked; the same for
+C<node_external_ip>. A re-run whose C<node_ip> differs from it, or that
+sets one where C<config.yaml> holds none, writes it with a warning that
+names both (see L<Rex::Rancher::Distribution/node_addresses>). The node
+advertises the new address once its service restarts: on RKE2 for the
+changed C<config.yaml> (see L</Re-runs>), on K3s at every run. On a cluster
+with Cilium that is not enough: restart the Cilium agent pod on that node
+as well, or its C<CiliumNode> keeps the old address. Rex::Rancher does not
+restart it for you. To drop a C<node-ip> again, remove it from
+C<config.yaml> by hand. Only C<config.yaml> is read: a C<node-ip> in a
+C<config.yaml.d> drop-in wins over it, as RKE2 and K3s merge them, and is
+left alone.
+
 =item C<kubeconfig_mode>
 
 File mode of the kubeconfig the server writes on the node
@@ -344,6 +381,9 @@ sub install_server {
   my $hold         = $opts{hold_running};
   my $cilium       = exists $opts{cilium} ? $opts{cilium} : 1;
   my $token        = _resolve_token($dist, $opts{token});
+  # What config.yaml holds is kept for an address not given (k100).
+  my %addresses    = $dist->node_addresses(node_ip => $checked->{node_ip},
+    node_external_ip => $checked->{node_external_ip});
   my $server       = $opts{server};
   my $tls_san      = $opts{tls_san};
   my $node_labels  = $opts{node_labels};
@@ -358,7 +398,8 @@ sub install_server {
 
   # Write config.yaml
   _write_config($dist, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable, $cluster_cidr, $kubeconfig_mode);
+    $node_name, $disable, $cluster_cidr, $kubeconfig_mode,
+    $addresses{node_ip}, $addresses{node_external_ip});
 
   # Write registries.yaml if configured
   if ($registries) {
@@ -381,7 +422,7 @@ sub install_server {
 
   my $checked = Rex::Rancher::Server::preflight_server(%opts);
   # { version => ..., install_method => 'script', cluster_cidr => ...,
-  #   kubeconfig_mode => ... }
+  #   kubeconfig_mode => ..., node_ip => [...], node_external_ip => undef }
 
 Everything L</install_server> checks before it writes or installs, with the
 same options and in the same order, and nothing else: it only reads the
@@ -393,7 +434,8 @@ exported.
 =over
 
 =item 1. the pure option checks: C<distribution>, C<install_method> (with
-C<version>), C<cluster_cidr>, C<kubeconfig_mode>;
+C<version>), C<cluster_cidr>, C<kubeconfig_mode>, C<node_ip>,
+C<node_external_ip>;
 
 =item 2. Cilium datapath state an earlier cluster left on a host without
 RKE2 or K3s (L<Rex::Rancher::Uninstall/check_cilium_residue>), the first
@@ -413,8 +455,9 @@ under C<hold_running>, else C<version>;
 
 Dies as L</install_server> would. Returns a hashref: the C<version> this run
 installs (held, pinned, or C<undef> for the stable channel), the
-C<install_method>, the C<cluster_cidr> and the C<kubeconfig_mode> (each
-C<undef> when not given).
+C<install_method>, the C<cluster_cidr>, the C<kubeconfig_mode>, and
+C<node_ip> and C<node_external_ip> as arrayrefs of addresses (each C<undef>
+when not given).
 
 =cut
 
@@ -428,6 +471,8 @@ sub preflight_server {
     install_method => scalar Rex::Rancher::Options->resolve_install_method($opts{install_method}, $opts{version}),
     cluster_cidr   => scalar Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr}),
     kubeconfig_mode => scalar Rex::Rancher::Options->check_kubeconfig_mode($opts{kubeconfig_mode}),
+    map { ( $_ => scalar Rex::Rancher::Options->check_node_addresses($_ => $opts{$_}) ) }
+      qw( node_ip node_external_ip ),
   );
   # The first read of the host: Cilium state an earlier cluster left on a host
   # without RKE2/K3s would hang every image pull of this install (k71).
@@ -847,7 +892,8 @@ sub _generate_token {
 
 sub _build_server_config {
   my ($dist, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable, $cluster_cidr, $kubeconfig_mode) = @_;
+    $node_name, $disable, $cluster_cidr, $kubeconfig_mode,
+    $node_ip, $node_external_ip) = @_;
 
   my %config = (
     'token' => $token,
@@ -875,6 +921,15 @@ sub _build_server_config {
   $config{server} = $server if $server;
   $config{'node-name'} = $node_name if $node_name;
 
+  # Lists of addresses (Rex::Rancher::Options), only when there are any:
+  # unwritten, the node advertises the address of its default route. A YAML
+  # list, like tls-san and node-label: node-ip and node-external-ip are
+  # StringSlice flags in k3s' pkg/cli/cmds/agent.go, which RKE2 copies as
+  # they are, and k3s' config file parser, RKE2's too, turns a list into
+  # the flag repeated (docs.k3s.io/installation/configuration).
+  $config{'node-ip'}          = $node_ip          if $node_ip;
+  $config{'node-external-ip'} = $node_external_ip if $node_external_ip;
+
   # Only when asked for: unwritten, rke2.yaml / k3s.yaml get the
   # distribution's own 0600, which the cluster admin's key in them wants. A
   # string, so that YAML::PP quotes it: an unquoted 0644 is the number 420 to
@@ -896,11 +951,13 @@ sub _build_server_config {
 
 sub _write_config {
   my ($dist, $token, $server, $tls_san, $node_labels, $cilium,
-    $node_name, $disable, $cluster_cidr, $kubeconfig_mode) = @_;
+    $node_name, $disable, $cluster_cidr, $kubeconfig_mode,
+    $node_ip, $node_external_ip) = @_;
 
   my $config =
     _build_server_config($dist, $token, $server, $tls_san, $node_labels, $cilium,
-      $node_name, $disable, $cluster_cidr, $kubeconfig_mode);
+      $node_name, $disable, $cluster_cidr, $kubeconfig_mode,
+      $node_ip, $node_external_ip);
 
   my $config_file = $dist->config_file;
   Rex::Logger::info("Writing config to $config_file");
@@ -1115,7 +1172,7 @@ L</install_server>) to leave room for Cilium and external load balancers.
 
 Both distributions use C</etc/rancher/E<lt>distE<gt>/config.yaml> with the
 same key names (C<token>, C<tls-san>, C<node-name>, C<node-label>,
-C<disable>, C<cni>, etc.). When
+C<node-ip>, C<node-external-ip>, C<disable>, C<cni>, etc.). When
 C<cilium =E<gt> 1> (the default), the distribution's own CNI is switched off
 so that Cilium is the only one: on RKE2 C<cni: none> and
 C<disable-kube-proxy: true>, on K3s C<flannel-backend: none>,

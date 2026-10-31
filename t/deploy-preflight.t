@@ -35,7 +35,7 @@ $SIG{__WARN__} = sub { push @perl_warnings, @_ };
 # %host: pid (0 = not running), running / installed (version strings),
 # residue (what the Cilium probe prints), config (config.yaml content; set:
 # a server is established on the host).
-my ( @log, @order, @warn, %host );
+my ( @log, @order, @warn, %host, %installed );
 {
   no warnings 'redefine';
   my $run = sub {
@@ -79,8 +79,8 @@ my ( @log, @order, @warn, %host );
   *Rex::Rancher::_check_connection       = sub { push @order, 'check_connection' };
   *Rex::Rancher::prepare_node            = sub { push @order, 'prepare_node' };
   *Rex::Rancher::_gpu_setup_if_requested = sub { push @order, 'gpu_setup' };
-  *Rex::Rancher::install_server          = sub { push @order, 'install_server' };
-  *Rex::Rancher::install_agent           = sub { push @order, 'install_agent' };
+  *Rex::Rancher::install_server          = sub { push @order, 'install_server'; %installed = @_ };
+  *Rex::Rancher::install_agent           = sub { push @order, 'install_agent'; %installed = @_ };
 }
 
 # The Kubernetes API behind kubeconfig_file.
@@ -195,6 +195,28 @@ for my $dist (qw( rke2 k3s )) {
   };
 }
 
+# node_ip and node_external_ip (k100, t/node-ip.t): an invalid one dies with
+# the pure checks, before the host is read; a valid one reaches install_*.
+for my $dist (qw( rke2 k3s )) {
+  for my $role (qw( server agent )) {
+    subtest "$dist $role: node_ip and node_external_ip" => sub {
+      for my $bad ( [ node_ip => '10.0.0.1/24' ], [ node_external_ip => [ {} ] ] ) {
+        reset_host( pid => 0 );
+        ok( !eval { deploy( $dist, $role, @{$bad} ); 1 }, "invalid $bad->[0]: dies" );
+        like( $@, qr/\A\Q$bad->[0]\E must be an IP address/, '  naming it' );
+        is_deeply( [ @order ], ['check_connection'], '  before the node is prepared' );
+        is_deeply( [ @log ], [], '  before the host is read' );
+      }
+      reset_host( pid => 0 );
+      %installed = ();
+      ok( eval { deploy( $dist, $role, node_ip => '10.230.30.50', node_external_ip => ['203.0.113.7'] ); 1 },
+        'valid: deploys' ) or diag $@;
+      is( $installed{node_ip}, '10.230.30.50', "  node_ip passed to install_$role" );
+      is_deeply( $installed{node_external_ip}, ['203.0.113.7'], "  node_external_ip too" );
+    };
+  }
+}
+
 # ---------------------------------------------------------------------------
 # The helpers themselves, for install_* and for callers that prepare the node
 # on their own (kubernetes-ocp).
@@ -203,17 +225,18 @@ for my $dist (qw( rke2 k3s )) {
 subtest 'preflight_server / preflight_agent' => sub {
   reset_host( pid => 42, running => 'v1.30.4+rke2r1', installed => 'v1.30.4+rke2r1' );
   is_deeply( Rex::Rancher::Server::preflight_server( hold_running => 1, version => 'v1.31.0+rke2r1',
-      cluster_cidr => '10.42.0.0/16', kubeconfig_mode => '0640' ),
+      cluster_cidr => '10.42.0.0/16', kubeconfig_mode => '0640', node_ip => '10.0.0.5,fd00::5' ),
     { version => 'v1.30.4+rke2r1', install_method => 'script', cluster_cidr => '10.42.0.0/16',
-      kubeconfig_mode => '0640' },
-    'server: the version, install method, cluster-cidr and kubeconfig mode this run uses' );
+      kubeconfig_mode => '0640', node_ip => [ '10.0.0.5', 'fd00::5' ], node_external_ip => undef },
+    'server: the version, install method, cluster-cidr, kubeconfig mode and node addresses this run uses' );
 
   local @nodes = ( cp_node('v1.31.2+k3s1') );
   reset_host( pid => 0, installed => 'v1.30.4+k3s1' );
   is_deeply( Rex::Rancher::Agent::preflight_agent( distribution => 'k3s', hold_running => 1,
-      kubeconfig => 'kc' ),
-    { version => 'v1.30.4+k3s1', install_method => 'script', server_version => 'v1.31.2+k3s1' },
-    'agent: the version, install method and the control plane\'s version' );
+      kubeconfig => 'kc', node_external_ip => ['203.0.113.7'] ),
+    { version => 'v1.30.4+k3s1', install_method => 'script', server_version => 'v1.31.2+k3s1',
+      node_ip => undef, node_external_ip => ['203.0.113.7'] },
+    'agent: the version, install method, the control plane\'s version and node addresses' );
 
   reset_host( pid => 0 );
   ok( !eval { Rex::Rancher::Server::preflight_server( install_method => 'artifact' ); 1 },

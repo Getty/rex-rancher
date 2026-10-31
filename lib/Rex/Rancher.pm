@@ -330,6 +330,18 @@ it, with a warning naming both.
 
 Node labels to apply, as an arrayref of C<key=value> strings.
 
+=item C<node_ip>, C<node_external_ip>
+
+The addresses the node advertises as its C<InternalIP> and C<ExternalIP>
+(C<node-ip> and C<node-external-ip> in C<config.yaml>, RKE2 and K3s): an IP
+address, several separated by commas, or an arrayref, one IPv4 and one IPv6
+address for dual-stack. Anything else dies before the node is prepared.
+Default: the address of the default route. Needed on a multi-homed host
+whose default route does not point into the cluster network. A re-run
+without it keeps what C<config.yaml> holds; one that changes it warns, and
+on a node that already registered the Cilium agent pod then needs a restart
+as well. See L<Rex::Rancher::Server/install_server>.
+
 =item C<kubeconfig_mode>
 
 File mode of the kubeconfig the server writes on the node (C<rke2.yaml> /
@@ -549,7 +561,7 @@ L<Rex::Rancher::Server/get_token>. Required.
 
 Override the node name registered in Kubernetes (optional).
 
-=item C<distribution>, C<version>, C<hold_running>, C<install_method>, C<node_labels>, C<registries>, C<nvidia_runtime_path>
+=item C<distribution>, C<version>, C<hold_running>, C<install_method>, C<node_labels>, C<node_ip>, C<node_external_ip>, C<registries>, C<nvidia_runtime_path>
 
 As for L</rancher_deploy_server>; passed to
 L<Rex::Rancher::Agent/install_agent>. With C<hold_running> the agent keeps

@@ -1132,6 +1132,116 @@ sub _shell_quote {
 }
 
 #
+# Node addresses: config.yaml is written whole on every run, so a node_ip
+# left out of a re-run would drop the node-ip the node was set up with, and
+# the node would come back on the address of its default route -- on a
+# multi-homed host one the other nodes may not reach (k100). A re-run keeps
+# it, as it keeps the node's hostname (Rex::Rancher::Node) and the cluster
+# token (Rex::Rancher::Server).
+#
+
+=method node_addresses
+
+  my %write = $dist->node_addresses(node_ip => $ips, node_external_ip => $ext);
+  # ( node_ip => [ '10.230.30.50' ], node_external_ip => undef )
+
+The C<node_ip> and C<node_external_ip> this run writes to L</config_file>,
+server and agent alike: each an arrayref of addresses, as
+L<Rex::Rancher::Options/check_node_addresses> returns them, or C<undef> for
+none. Reads L</config_file> over the exec channel (C<cat>, no SFTP); for
+each of the two:
+
+=over
+
+=item * not given: the C<node-ip> / C<node-external-ip> L</config_file>
+holds (a list, or a string of addresses separated by commas), kept with a
+log line. C<undef> when it holds none or is not there.
+
+=item * given: the given one. When L</config_file> is there and holds
+another value or none, a warning names both: a node that already
+registered takes the new address when its service restarts, and on a
+cluster with Cilium the Cilium agent pod on that node has to be restarted
+as well, or its C<CiliumNode> keeps the old address.
+
+=back
+
+Only L</config_file> is read, the file this run rewrites; a value in a
+C<config.yaml.d> drop-in wins over it, in RKE2 and K3s alike, and is left
+as it is. A L</config_file> that cannot be parsed or is not a YAML mapping
+keeps neither, a value there that is neither a string nor a list of
+strings is not kept; each with a warning that names the file, never its
+content (it holds the join token).
+
+=cut
+
+sub node_addresses {
+  my ( $self, %given ) = @_;
+  my $file       = $self->config_file;
+  my $configured = $self->_configured_node_addresses;
+  my %write;
+  for my $opt (qw( node_ip node_external_ip )) {
+    ( my $key = $opt ) =~ tr/_/-/;
+    my $was = $configured ? $configured->{$key} : undef;
+    my $now = $given{$opt};
+    unless ($now) {
+      Rex::Logger::info("Keeping $key ".join(',', @{$was})." from $file ($opt not given)")
+        if $was;
+      $write{$opt} = $was;
+      next;
+    }
+    $write{$opt} = $now;
+    # A fresh node, or a config.yaml that could not be read (warned there).
+    next unless $configured;
+    my $to = join(',', @{$now});
+    next if $was && join(',', @{$was}) eq $to;
+    Rex::Logger::info("$key changes from ".( $was ? join(',', @{$was}) : 'none' )
+      . " to $to in $file: a node that already registered takes it when "
+      . $self->service." restarts. With Cilium, restart its agent pod on this "
+      . "node then as well, or its CiliumNode keeps the old address", 'warn');
+  }
+  return %write;
+}
+
+# node-ip and node-external-ip in config.yaml, each as a list: {} for a
+# config.yaml without them, nothing when there is none or it cannot be read
+# as a mapping (with a warning).
+sub _configured_node_addresses {
+  my ( $self ) = @_;
+  my $file    = $self->config_file;
+  my $content = Rex::Commands::Run::run('cat '.$self->_shell_quote($file).' 2>/dev/null',
+    auto_die => 0);
+  return unless $? == 0;
+  my $lost = 'a node-ip or node-external-ip in it is not kept: pass node_ip or '
+    . 'node_external_ip to keep one';
+  # Repeated keys are allowed, the last one wins, as in the distributions.
+  # Never the parser's message: it quotes the line, which may be the token's.
+  my @docs;
+  unless (eval { @docs = YAML::PP->new(duplicate_keys => 1)->load_string($content // ''); 1 }) {
+    my ($line) = ($@ // '') =~ /^Line\s*:\s*(\d+)/m;
+    Rex::Logger::info("Could not parse $file as YAML"
+      . ( defined $line ? " (line $line)" : '' ) . ", so $lost", 'warn');
+    return;
+  }
+  my $config = $docs[0] // {};
+  unless (ref $config eq 'HASH') {
+    Rex::Logger::info("$file is not a YAML mapping, so $lost", 'warn');
+    return;
+  }
+  my %addr;
+  for my $key (qw( node-ip node-external-ip )) {
+    my $value = $config->{$key} // next;
+    my @ip = ref $value eq 'ARRAY' ? @{$value} : ref $value ? (undef) : split /,/, $value;
+    if (grep { !defined || ref } @ip) {
+      Rex::Logger::info("$file: $key is neither a string nor a list of strings, "
+        . "so it is not kept", 'warn');
+      next;
+    }
+    $addr{$key} = \@ip if @ip;
+  }
+  return \%addr;
+}
+
+#
 # Service start and wait
 #
 
@@ -1811,7 +1921,8 @@ Everything L<Rex::Rancher::Server>, L<Rex::Rancher::Agent> and
 L<Rex::Rancher::Cilium> need to know about RKE2 versus K3s lives in one
 object: paths, service names, install script and release artifacts, and the
 host steps both distributions share (artifact download and checksum, version
-check, service start and wait, secret files, the NVIDIA runtime C<PATH>).
+check, service start and wait, secret files, the NVIDIA runtime C<PATH>,
+the node addresses a re-run keeps).
 L<Rex::Rancher::Distribution::RKE2> and L<Rex::Rancher::Distribution::K3s>
 implement the distribution-specific methods; a change to one wants the
 other in the same edit. Use L</new_for> to get one: it loads the class.

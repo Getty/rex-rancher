@@ -5,6 +5,8 @@ our $VERSION = '0.005';
 use v5.14.4;
 use warnings;
 
+use Socket qw( AF_INET AF_INET6 inet_pton );
+
 =method resolve_install_method
 
   my $method = Rex::Rancher::Options->resolve_install_method($method, $version);
@@ -86,6 +88,39 @@ sub check_ipam_mode {
   return $mode;
 }
 
+=method check_node_addresses
+
+  my $ips = Rex::Rancher::Options->check_node_addresses(node_ip => $value);
+
+The addresses of C<node_ip> or C<node_external_ip> (the option name comes
+first, for the message) as an arrayref: C<$value> is one IPv4 or IPv6
+address, a string of several separated by commas, or an arrayref of them,
+one per element; for dual-stack one IPv4 and one IPv6 address. Returns
+C<undef> for C<undef>, and dies naming the option for anything else: a
+reference other than an arrayref, an element that is not a string, an empty
+string or list, or something that is not an IP address (spaces included).
+Only the syntax is checked: whether the host has the address, and which
+combinations RKE2 and K3s take, is left to them.
+
+=cut
+
+sub check_node_addresses {
+  my ( $self, $name, $value ) = @_;
+  return unless defined $value;
+  my $want = "$name must be an IP address, several separated by commas, or an "
+    . "array reference of them (one IPv4 and one IPv6 for dual-stack)";
+  die "$want, got a ".ref($value)." reference\n" if ref $value && ref $value ne 'ARRAY';
+  my @ip = ref $value ? @{$value} : split /,/, $value, -1;
+  die "$want, got an empty ".( ref $value ? 'list' : 'string' )."\n" unless @ip;
+  for my $ip (@ip) {
+    die "$want, got ".( defined $ip ? 'a '.ref($ip).' reference' : 'an undefined element' )."\n"
+      if !defined $ip || ref $ip;
+    die "$want, got '$ip'\n"
+      unless defined inet_pton( AF_INET, $ip ) || defined inet_pton( AF_INET6, $ip );
+  }
+  return [@ip];
+}
+
 1;
 
 =head1 SYNOPSIS
@@ -96,6 +131,7 @@ sub check_ipam_mode {
   my $cidr   = Rex::Rancher::Options->check_cluster_cidr($opts{cluster_cidr});
   my $kcmode = Rex::Rancher::Options->check_kubeconfig_mode($opts{kubeconfig_mode});
   my $mode   = Rex::Rancher::Options->check_ipam_mode($opts{ipam_mode});
+  my $ips    = Rex::Rancher::Options->check_node_addresses(node_ip => $opts{node_ip});
 
 =head1 DESCRIPTION
 

@@ -196,7 +196,9 @@ for my $dist (qw( rke2 k3s )) {
     reset_host( version => $v );
     ok( eval { server( $dist, cluster_cidr => '10.0.0.0/8' ); 1 }, 'installs' ) or diag $@;
     is( written_cidr($cfg), '10.0.0.0/8', 'config.yaml gets it' );
-    ok( !( grep { /^cat '|^find |^test -d / } @log ), 'no config read' );
+    # The cluster-cidr reads; config.yaml's node addresses are read with
+    # 2>/dev/null, on every run (t/node-ip.t).
+    ok( !( grep { /^cat '[^']+'\z|^find |^test -d / } @log ), 'no config read' );
 
     # A config.yaml without server/token belongs to a server that never came
     # up (an aborted first run, a node whose /var/lib/rancher was wiped): its

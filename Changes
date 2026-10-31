@@ -1,6 +1,13 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - New options node_ip and node_external_ip for install_server,
+    install_agent, rancher_deploy_server and rancher_deploy_agent, written
+    as node-ip / node-external-ip (a YAML list) to config.yaml on RKE2 and
+    K3s, for multi-homed hosts whose default route does not lead into the
+    cluster network. An invalid value dies before the host is touched; a
+    re-run without them keeps what config.yaml holds, one that changes them
+    warns (restart the Cilium agent pod on that node by hand).
   - With gpu => 1 and a Rex::GPU that sets up AMD GPUs (Rex::GPU->amd_class),
     rancher_deploy_server deploys ROCm's k8s-device-plugin 1.31.0.11 and waits
     for amd.com/gpu where gpu_setup set up an AMD GPU: instead of the NVIDIA
