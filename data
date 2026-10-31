@@ -1,0 +1,30 @@
+---
+class: standard
+completed: 2026-10-31T02:18:05Z
+created: 2026-10-31T00:47:50Z
+id: 106
+priority: high
+started: 2026-10-31T01:31:04Z
+status: done
+tags:
+- gpu
+- amd
+- nvidia
+- k8s
+- bug
+title: 'GPU-Wartefunktion liest status.capacity statt allocatable: stale Wert meldet
+  sofort Erfolg'
+updated: 2026-10-31T02:41:03Z
+---
+
+Live gefunden 2026-10-31 auf amdlab (RKE2 1.36.4, synapse gfx1151) beim k101-Lauf. _wait_for_gpu_resource in lib/Rex/Rancher/K8s.pm (Commit 0b6e1b3) prüft node.status.capacity. Nachdem ein Device-Plugin weg ist, lässt das kubelet capacity stehen (synapse: capacity amd.com/gpu 1) und setzt nur allocatable auf 0. Ein Redeploy meldete deshalb nach 1 s "[ok] amd.com/gpu: 1 on synapse", bevor der Plugin-Pod überhaupt lief (ContainerCreating). Belastbar war allocatable: 0 vor dem Deploy, 1 nach der Registrierung, 0 nach remove_amd_device_plugin. Betrifft deploy_amd_device_plugin und deploy_nvidia_device_plugin (gleiche Hilfsfunktion). Fertig heißt: Wartefunktion liest allocatable, Test mit capacity 1 / allocatable 0 schlägt mit der alten Logik fehl, POD-Text von deploy_amd_device_plugin und deploy_nvidia_device_plugin angepasst.
+
+2026-10-31 02:13 Fix: _wait_for_gpu_resource in lib/Rex/Rancher/K8s.pm reads node.status.allocatable instead of status.capacity; the waiting log line is now 'No allocatable GPU yet (i/24), waiting...', the [ok] line keeps its format and shows the allocatable count. POD of deploy_nvidia_device_plugin and deploy_amd_device_plugin plus pipeline step 5 in Rex::Rancher say allocatable and why (capacity outlives the plugin). Tests: t/gpu-resource-wait.t fake takes [capacity, allocatable]; new k106 cases for nvidia.com/gpu and amd.com/gpu (capacity 1 / allocatable 0 gives 0 after 24 polls with a warning; 0, 0, then 1 is found at the third poll; capacity 2 / allocatable 1 reports 1; capacity only gives 0) and the amd.com/ prefix. t/amd-device-plugin.t fake node now sets allocatable (plus an optional stale capacity), new end-to-end redeploy case on synapse. Against the old code: gpu-resource-wait.t 18 of 61 fail, amd-device-plugin.t 3 of 163 fail; same with only the read line reverted on the fixed code. prove -lr t/: 45 files, 1706 tests, PASS, no skips. Unverified live. Also found (off-scope): eg/lan.Rexfile status check prints status.capacity nvidia.com/gpu and eg/lan.RUNBOOK.md says nvidia.com/gpu in the node's capacity; both read stale after a plugin is gone.
+
+2026-10-31 02:13 Done: the GPU wait reads status.allocatable, not status.capacity (K8s.pm helper shared by the NVIDIA and AMD plugin deploys), POD and log wording updated. Regression tests in t/gpu-resource-wait.t and t/amd-device-plugin.t fail against the old code (18 + 3) and pass now; prove -lr t/ 1706 tests PASS. Not committed. Unverified live: recheck the redeploy on amdlab (synapse).
+
+Committed as cf10698; fix unverified live; a live recheck on amdlab follows together with k107
+
+Live amdlab 2026-10-31 (lib aus 057cef4, enthaelt cf10698): vor dem Redeploy capacity amd.com/gpu 1, allocatable 0 (Plugin weg, Vorbedingung des Bugs live bestaetigt). Label entfernt 02:34:05Z, Plugin-Pod lief 02:34:06Z und registrierte 02:34:06.58Z; deploy_amd_device_plugin mit wait pollte erstmals 02:34:10Z und meldete [ok] amd.com/gpu 1 zu Recht. Keine Zeile No allocatable GPU yet, da das Plugin schneller war: dieser Lauf unterscheidet alten und neuen Code nicht. Diskriminierender Live-Check (Deploy mit wait waehrend allocation=dra, erwartet 24 Polls ohne ok) offen, Rueckfrage bei kubernetes-ocp-9c.
+
+Unterscheidender Live-Check amdlab 2026-10-31 (Go kubernetes-ocp-9c, lib aus 057cef4): allocation=dra auf synapse, capacity 1 / allocatable 0. deploy_amd_device_plugin mit wait ab 02:38:10Z: 24 Zeilen No allocatable GPU yet (1/24 bis 24/24), um 02:40:20Z WARN amd.com/gpu resource did not appear, kein ok. Der alte Code haette beim ersten Poll ok gemeldet. Alle Logzeilen auf STDERR (Rex::Logger), STDOUT leer bis auf das Skript. Danach Label entfernt, allocatable 1, Endzustand wie vorher. Drift: nach der Warnung folgt trotzdem AMD GPU device plugin ready, siehe k110.
