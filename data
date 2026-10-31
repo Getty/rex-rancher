@@ -1,0 +1,55 @@
+---
+class: standard
+completed: 2026-10-31T00:10:03Z
+created: 2026-10-30T23:24:42Z
+id: 95
+priority: high
+started: 2026-10-31T00:10:03Z
+status: done
+tags:
+- gpu
+- amd
+- needs:rex-gpu#1
+title: AMD-GPUs in der gpu-Pipeline (Rex::GPU-AMD-Pfad, AMD-Device-Plugin)
+updated: 2026-10-31T04:46:55Z
+---
+
+AMD-GPUs in Rex::Rancher's gpu-Pipeline. Heute ist gpu => 1 NVIDIA-only: gpu_setup über Rex::GPU (Treiber, Toolkit, CDI, containerd), nvidia_runtime_path, deploy_nvidia_device_plugin + Warten auf nvidia.com/gpu. Ein AMD-Host bekommt nichts (Rex::GPU warnt nur).
+
+Ziel (Maintainer-Go 2026-10-31, OCP braucht AMD-GPU-Worker):
+- gpu => 1 auf einem AMD-Host ruft den AMD-Pfad von Rex::GPU (rex-gpu k1: Rex::GPU::AMD::install_driver / verify_amd bzw. gpu_setup mit AMD-Dispatch). Kein runtime-PATH, keine containerd-Änderung — der AMD-Device-Plugin-Weg braucht keine eigene Runtime (nur /dev/kfd + /dev/dri).
+- deploy_amd_device_plugin: ROCm k8s-device-plugin (github.com/ROCm/k8s-device-plugin) als DaemonSet, optional der Node-Labeller aus demselben Projekt; Warten auf amd.com/gpu in der Node-Capacity. gpu_device_plugin => 0 schaltet es ab wie bei NVIDIA. Version gepinnt, Quelle im Code benannt.
+- Gemischte Hosts (NVIDIA + AMD) sauber behandeln oder klar sterben, nicht stillschweigend nur einen Vendor.
+
+Hängt an rex-gpu k1 (API dort). Bis die steht: gegen den dort notierten Kontrakt bauen, Tests mit Fakes.
+Live-Testhost synapse.ai.citilan.de (AMD gfx1151 APU, Ubuntu 24.04 HWE 7.0, root per SSH) wird gerade von der OCP-Session (kubernetes-ocp-9c) für einen Join-Test benutzt — Live-Läufe dort nur nach Rücksprache per SendMessage. Kein Push, kein Release.
+
+2026-10-31 rex-rancher-amd (Auftrag kubernetes-ocp-9c, Maintainer-Go): in Arbeit im Worktree .claude/worktrees/k95-amd-gpu, Branch worktree-k95-amd-gpu. Rex::GPU::AMD (rex-gpu k1) existiert noch nicht — Bau gegen den k1-Kontrakt, Tests mit Fakes; API-Fragen an rex-gpu-amd gestellt.
+
+2026-10-30 23:37 Stand: Rex::GPU gpu_setup gibt in 0.002–0.005 (Tags/Release-Tarballs geprüft) das Detect-Hashref zurück; Nicht-Hashref wird trotzdem als 'unbekannt → NVIDIA wie heute' behandelt. Kontrakt laut rex-gpu (via Orchestrator 2026-10-31): gpu_setup dispatcht AMD selbst, Signal Rex::GPU->can('amd_class'); Treiber nur für compute wahr. Vendor-Regeln (Orchestrator, ersetzt die-Variante): AMD-Plugin gdw. amd compute wahr && amd_class; NVIDIA-Plugin wie heute außer nvidia leer && AMD-Plugin; altes Rex::GPU + amd-Element → warn, kein die. Bau: Rex::Rancher::_gpu_vendor_plan (rein), K8s::deploy_amd_device_plugin (ROCm k8s-device-plugin 1.31.0.11, Labeller opt-in), _wait_for_gpu_resource($api, $resource).
+
+2026-10-31 Upstream-Recherche von kubernetes-ocp-9c (Volltext dort: scratchpad/research/amd-gpu-k8s-upstream-2026-10-31.md der OCP-Session): ROCm/k8s-device-plugin v1.31.0.11 (2026-09-14), Images docker.io/rocm/k8s-device-plugin:1.31.0.11 und :labeller-1.31.0.11 (nur amd64); Upstream-YAMLs nutzen bewegliche Tags, Helm-Chart 0.22.0 defaultet noch auf 1.31.0.9 -> Tag immer explizit. Plugin: hostPaths /var/lib/kubelet/device-plugins + /sys; Chart 0.22.0 unprivilegiert (allowPrivilegeEscalation false, drop ALL), Raw-Manifest privileged. -resource_naming_strategy=single|mixed (single -> amd.com/gpu). Plugin stirbt (Fatal) ohne geladenes amdgpu -> nur auf AMD-Nodes schedulen; NFD-Labels pci-0300_1002 / pci-0302_1002 / pci-0380_1002 (APU, synapse) / pci-1200_1002 (Instinct MI355X) .present, ODER nur per nodeAffinity. Kein CDI, keine RuntimeClass, keine containerd-Änderung, kein amd-ctk. Non-root-Pods: Device-Nodes behalten video/render -> supplementalGroups oder Agent-Option nonroot-devices (RKE2-Key UNVERIFIED). Labeller optional: RBAC nodes get/list/watch/update, hostPaths /sys ro + /dev; unprivilegiert unter RKE2 UNVERIFIED.
+
+Built (branch worktree-k95-amd-gpu, uncommitted, commit-ready). rancher_deploy_server/agent keep the gpu_setup detect hashref; _gpu_vendor_plan (pure) + _gpu_device_plugins decide step 6. Table: amd_compute = an amd element with true compute. AMD plugin iff amd_compute and Rex::GPU->can(amd_class). NVIDIA plugin as before, except on an amd_compute host without nvidia elements with an AMD-capable Rex::GPU. Mixed: both, NVIDIA first. Old Rex::GPU + any amd element: warning naming the GPUs, no die, else as before (server and agent). Non-hash return, gpu_setup => 0, gpu_device_plugin => 0: as before. New K8s deploy_amd_device_plugin(kubeconfig, version 1.31.0.11, node_labeller, affinity): plugin DaemonSet unprivileged (allowPrivilegeEscalation false, drop ALL; amd-gpu-helm 0.22.0 values.yaml checked via gh api, metrics-exporter hostPath not adopted), amd64 nodeSelector kept, affinity on both DaemonSets, labeller privileged per raw manifest v1.31.0.11 (ClusterRole, ClusterRoleBinding, SA, DaemonSet). New _create_or_update helper (NVIDIA path uses it too, same API calls); _wait_for_gpu_resource takes the resource. Re-exported from Rex::Rancher. POD (=head2 AMD GPUs, options, CrashLoopBackOff + NFD affinity example, supplementalGroups/nonroot-devices sentence) and README updated. Tests: t/gpu-vendor.t + t/amd-device-plugin.t (new, need git add), t/gpu-resource-wait.t parametrized. prove -lr t/: Files=41 Tests=1174 PASS, no skips; compile + pure logic only. Unverified live: image pull/run, unprivileged plugin registering amd.com/gpu on synapse (gfx1151) under RKE2 and K3s, labeller RBAC, CrashLoop + NFD affinity, Rex::GPU::AMD integration (unreleased), wait timing, mixed host. Changes and VERSION untouched.
+
+Drift, not in k95 scope, for a ticket on this board. One: the pod check of the built Rex::Rancher module reports the internal links to rancher_deploy_server and rancher_deploy_agent as unresolved, because the woven method headings carry the opts hash in the heading text; 7 such links before k95, k95 adds one more of the same kind. Two: Kubernetes::REST 1.110 has an ensure method; _create_or_update could become that, k95 kept the existing create, get, update pattern.
+
+Ready for review: AMD vendor plan and deploy_amd_device_plugin, POD and README, 3 tests with 2 new files to git add. prove -lr t/ green, 41 files 1174 tests no skips, proves compile and pure logic only; nothing deployed. Changes entry and commit subject proposed in the worker report. Live proof pending on synapse via kubernetes-ocp once Rex::GPU::AMD exists.
+
+Third correction built (contract change from rex-gpu k1, amd elements carry integrated). New option gpu_amd_integrated, default 0, server and agent: set, gpu_setup gets amd_integrated => 1; unset or 0, the key is not passed (call exactly as before). Ignored with a warning under gpu_setup => 0 (as reboot), silently without gpu. Set with a Rex::GPU without amd_class: dies in _check_gpu_module, before the connection check and prepare_node. amd_set_up is now an amd element with compute true and (integrated not true or gpu_amd_integrated); AMD plugin iff amd_set_up and amd_class; NVIDIA plugin as before except amd_set_up with an empty nvidia list. pci_class 1200 needs no code, covered as MI300A and MI300X rows. POD: gpu_amd_integrated item (Ryzen iGPU gfx1103 on AX42, Ryzen AI Max Strix Halo gfx1151, default off), AMD GPUs section, agent options and die list, GPU hardware support; README paragraph. t/gpu-vendor.t now 113 tests incl. AX42 with and without the option, gpu_setup args with and without the key, die before the host on server and agent for rke2 and k3s; three mutants each caught. prove -lr t/: Files=41 Tests=1222 PASS, no skips; compile and pure logic only. Unverified live as before, plus whether Rex::GPU classifies synapse gfx1151 as integrated (pending with rex-gpu).
+
+Ready for review again with the third correction: gpu_amd_integrated option and the integrated rule. prove -lr t/ green, 41 files 1222 tests no skips, proves compile and pure logic only; nothing deployed. Two new test files still need git add. Commit subject and Changes entry proposed in the worker report.
+
+Hint added per coordinator review: _gpu_vendor_plan gets an info list. With an AMD-capable Rex::GPU, an amd element with compute true and integrated true, and gpu_amd_integrated not set, it names the GPUs and says to pass gpu_amd_integrated => 1 (gpu_setup amd_integrated); logged at info level, server and agent. No hint with the option, with a Rex::GPU without amd_class, or for compute 0 or undef. POD of gpu_amd_integrated mentions the info line. t/gpu-vendor.t: synapse fixture (gfx1151, integrated 1); the old APU fixture became a discrete W7900, since synapse is integrated. 148 tests, three hint mutants each caught. prove -lr t/: Files=41 Tests=1257 PASS, no skips; compile and pure logic only. Card stays in review.
+
+Committed on branch worktree-k95-amd-gpu: 9dceb037c1ee8b861d6f61b139a893dd028c1d63. Offline tests only; unverified live; Rex::GPU::AMD (rex-gpu k1) unreleased.
+
+2026-10-31 Live-Befund kubernetes-ocp-9c auf synapse (RKE2 1.36.4, inbox amdgpu, gfx1151), gemessen mit OCPs Spike-DaemonSets gleicher Form: Device-Plugin unprivilegiert (allowPrivilegeEscalation false, drop ALL) registriert amd.com/gpu: 1. Labeller braucht privileged (unprivilegiert: Fail to open /dev/dri/card0: operation not permitted); privileged liefert cu-count 40, device-id 1586, family GC_11_5_0, product-name AMD_Radeon_8065S, simd-count 80, vram 128G; driver-version leer (Inbox-Treiber ohne Modulversion). Image hat kein ENTRYPOINT (nur Cmd) — relevant für k101.
+
+Live through OCP (kubernetes-ocp, 2026-10-31, amdlab: otho CP + synapse gfx1151). OCP image live-20bec47 with Rex::Rancher 0.005 from worktree-k95-amd-gpu 057cef4, no lib function called by hand:
+- ocp node add --gpu --node_ip set node-ip (k100 node_addresses) end to end: InternalIP 10.230.30.50.
+- ocp apply deployed the device plugin and labeller; torch smoke via amd.com/gpu passed (fp32/fp16/bf16 + SDPA).
+- A node label allocation=dra plus ocp apply removed the plugin and deployed the DRA driver v1.0.1 (DeviceClass, ResourceSlice); the ResourceClaim smoke passed.
+- With the label removed, ocp apply took the DRA driver away and brought the plugin back; a further apply left every DaemonSet unchanged (rv/generation).
+The only lib-side finding: on a fresh node the AMD pods wait on the CNI (k112, backlog).
+From the OCP side the branch is ready to release. Merge and release are the maintainer's call. The amdlab cluster is not held for rex-rancher any more.
