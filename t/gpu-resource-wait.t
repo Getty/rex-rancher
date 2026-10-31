@@ -12,6 +12,11 @@ use Test::More;
 # k95: the same loop waits for amd.com/gpu (deploy_amd_device_plugin) as for
 # nvidia.com/gpu; the resource is the caller's, and the other vendor's
 # resource on a node does not count.
+#
+# k101: with ROCm's mixed naming a partitioned GPU is amd.com/<compute>_<memory>
+# (amd.com/cpx_nps4), so deploy_amd_device_plugin waits for the prefix
+# amd.com/: a resource ending in / takes any resource under it. An exact name
+# still takes only itself.
 
 my $slept = 0;
 BEGIN { *CORE::GLOBAL::sleep = sub { $slept++ } }
@@ -27,15 +32,15 @@ my ( @info, @warn );
 
 # @answers: one per list call; a string dies with it, a number is the GPU
 # capacity of the one node (0: none yet), advertised as $offered. The last
-# answer repeats.
+# answer repeats. A hashref answer is the node's whole capacity.
 our ( @answers, $offered );
 {
   package FakeAPI;
   sub new  { bless {}, shift }
   sub list {
     my $a = @main::answers > 1 ? shift @main::answers : $main::answers[0];
-    die $a if $a =~ /\D/;
-    my %status = ( status => { capacity => $a ? { $main::offered => $a } : {} } );
+    die $a if !ref $a && $a =~ /\D/;
+    my %status = ( status => { capacity => ref $a ? $a : $a ? { $main::offered => $a } : {} } );
     return FakeList->new( IO::K8s->new->new_object( 'Node', metadata => { name => 'gpu1' }, %status ) );
   }
   package FakeList;
@@ -82,5 +87,45 @@ for my $resource (qw( nvidia.com/gpu amd.com/gpu )) {
     'amd.com/gpu awaited, only nvidia.com/gpu on the node: 0' );
   like( $warn[0], qr/^  amd\.com\/gpu resource did not appear/, '... and says which resource' );
 }
+
+# --- a prefix (k101) ---------------------------------------------------------------
+
+sub wait_prefix {
+  my ( $resource, @a ) = @_;
+  local @answers = @a;
+  ( @info, @warn ) = ();
+  $slept = 0;
+  return Rex::Rancher::K8s::_wait_for_gpu_resource( FakeAPI->new, $resource );
+}
+
+is( wait_prefix( 'amd.com/', { 'amd.com/cpx_nps4' => 8, cpu => 96 } ), 1, 'amd.com/: a partition resource counts' );
+like( $info[-1], qr/\[ok\] amd\.com\/cpx_nps4: 8 on gpu1/, '... and is named' );
+is( $slept, 0, '... at the first poll' );
+
+is( wait_prefix( 'amd.com/', { 'amd.com/gpu' => 1 } ), 1, 'amd.com/: amd.com/gpu counts' );
+like( $info[-1], qr/\[ok\] amd\.com\/gpu: 1 on gpu1/, '... and is named' );
+
+is( wait_prefix( 'amd.com/', { 'amd.com/cpx_nps1' => 0, 'amd.com/spx_nps1' => 2 } ), 1,
+  'amd.com/: one at 0, another above: found' );
+like( $info[-1], qr/\[ok\] amd\.com\/spx_nps1: 2 on gpu1/, '... the one above 0' );
+
+is( wait_prefix( 'amd.com/', { 'amd.com/cpx_nps4' => 0 } ), 0, 'amd.com/: only 0: not found' );
+is( $slept, 24, '... 24 polls' );
+is_deeply( \@warn, [ "  amd.com/* resource did not appear \x{e2}\x{80}\x{94} check device plugin" ],
+  '... the warning names the prefix' );
+
+is( wait_prefix( 'amd.com/', { 'nvidia.com/gpu' => 4, 'xamd.com/gpu' => 1 } ), 0,
+  'amd.com/: another vendor, or a name only containing it: not found' );
+
+is( wait_prefix( 'amd.com/', 0, { 'amd.com/cpx_nps4' => 8 } ), 1, 'amd.com/: none yet, then a partition: found' );
+is( $slept, 1, '... at the second poll' );
+
+is( wait_prefix( 'amd.com/', "403 Forbidden\n" ), 0, 'amd.com/: API error throughout: 0, no die' );
+like( $warn[0], qr/^  amd\.com\/\* resource did not appear .* \(last API error: 403 Forbidden\)\z/,
+  '... the warning names the last error' );
+
+# An exact name stays exact: single naming does not take a partition.
+is( wait_prefix( 'amd.com/gpu', { 'amd.com/cpx_nps4' => 8 } ), 0, 'amd.com/gpu: a partition resource does not count' );
+like( $warn[0], qr/^  amd\.com\/gpu resource did not appear/, '... the warning names amd.com/gpu' );
 
 done_testing;

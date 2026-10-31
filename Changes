@@ -13,8 +13,16 @@ Revision history for Rex-Rancher
     are left alone as before. With a Rex::GPU that does not set up AMD GPUs
     it dies before the host is touched.
   - New deploy_amd_device_plugin in Rex::Rancher::K8s, re-exported by
-    Rex::Rancher: unprivileged plugin DaemonSet, optional node labeller, and
-    an optional affinity for clusters with amd64 nodes without an AMD GPU.
+    Rex::Rancher: unprivileged plugin DaemonSet, an optional affinity for
+    clusters with amd64 nodes without an AMD GPU, resource_naming single
+    (default) or mixed, passed as -resource_naming_strategy (the plugin's
+    start command is spelled out, the image has no entrypoint), and
+    wait => 0 to skip the wait for amd.com/gpu (mixed: any amd.com/
+    resource). The node labeller comes with node_labeller => 1, or on
+    nodes of its own with the new deploy_amd_node_labeller.
+  - New remove_amd_device_plugin and remove_amd_node_labeller in
+    Rex::Rancher::K8s: delete exactly what the deploys create; an object
+    that is not there is logged, any other API error dies.
   - An agent (or joining server) that cannot reach its server address no
     longer waits out the full 600 s: while the unit is not active the
     journal is read along, and once it has shown nothing but "Failed to

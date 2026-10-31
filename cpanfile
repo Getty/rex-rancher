@@ -10,6 +10,7 @@ requires 'namespace::autoclean';
 requires 'Rex', '1.14.0';
 recommends 'Rex::GPU', '0.004';
 recommends 'Rex::LibSSH', '0.005';
+requires 'Scalar::Util';
 requires 'YAML::PP', '0.027';
 
 on 'test' => sub {

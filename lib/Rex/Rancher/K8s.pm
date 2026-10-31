@@ -8,6 +8,7 @@ use warnings;
 use Kubernetes::REST::Kubeconfig;
 use Rex::Logger;
 use Rex::Rancher::Distribution;
+use Scalar::Util qw( blessed );
 
 require Rex::Exporter;
 use base qw(Rex::Exporter);
@@ -17,7 +18,10 @@ use vars qw(@EXPORT);
 @EXPORT = qw(
   control_plane_version
   deploy_amd_device_plugin
+  deploy_amd_node_labeller
   deploy_nvidia_device_plugin
+  remove_amd_device_plugin
+  remove_amd_node_labeller
   wait_for_api
   untaint_node
 );
@@ -36,6 +40,11 @@ use constant DEVICE_PLUGIN_VERSION => 'v0.17.0';
 # rocm/k8s-device-plugin:labeller-<version> (the manifests use them untagged
 # and as labeller-latest).
 use constant AMD_DEVICE_PLUGIN_VERSION => '1.31.0.11';
+
+# The plugin's -resource_naming_strategy, as ParseStrategy in
+# cmd/k8s-device-plugin/main.go at that tag knows it (anything else: exit 1).
+# The flag came with release v1.31.0.7.
+use constant AMD_RESOURCE_NAMINGS => qw( single mixed );
 
 =method wait_for_api(%opts)
 
@@ -187,6 +196,12 @@ container:
 false> and all capabilities dropped, the kubelet's C<device-plugins>
 directory and the host's C</sys> mounted.
 
+=item * The image's start command spelled out: C<./k8s-device-plugin> in
+C</root> with its C<-logtostderr=true -stderrthreshold=INFO -v=5>, followed
+by C<-resource_naming_strategy=NAMING> (see C<resource_naming> below). The
+image has no entrypoint, only that command, so arguments alone would replace
+the program.
+
 =item * C<nodeSelector> C<kubernetes.io/arch: amd64>, as upstream ships it
 (the images are amd64 only).
 
@@ -210,10 +225,12 @@ as root needs those groups as C<supplementalGroups>, or the nodes need K3s'
 and RKE2's C<nonroot-devices> option, which Rex::Rancher does not set.
 
 Every object already in the cluster is updated (C<resourceVersion> is
-fetched before the update), as in L</deploy_nvidia_device_plugin>. Then it
-polls up to 24 times (2-minute timeout) for C<amd.com/gpu> capacity in any
-node's C<status.capacity>; when none appears, a warning says so (no die),
-naming the API error of the last attempt if that one failed.
+fetched before the update), as in L</deploy_nvidia_device_plugin>. Then,
+unless C<wait =E<gt> 0>, it polls up to 24 times (2-minute timeout) for
+C<amd.com/gpu> capacity in any node's C<status.capacity> (with
+C<resource_naming =E<gt> 'mixed'>, for any C<amd.com/> resource); when none
+appears, a warning says so (no die), naming the API error of the last
+attempt if that one failed.
 
 Required options:
 
@@ -232,28 +249,46 @@ Optional options:
 =item C<version>
 
 Image tag of the device plugin, and of the node labeller as
-C<labeller-VERSION>. Default: C<1.31.0.11>.
+C<labeller-VERSION>. Default: C<1.31.0.11>. The plugin's arguments need
+1.31.0.7 or later: an older plugin does not know
+C<-resource_naming_strategy> and exits.
+
+=item C<resource_naming>
+
+ROCm's resource naming strategy, C<single> or C<mixed>, passed as
+C<-resource_naming_strategy>. Default: C<single>, every GPU an
+C<amd.com/gpu> (the plugin exits on a node whose GPUs are partitioned in
+different ways). C<mixed> advertises a partitioned GPU by its partition type,
+C<amd.com/COMPUTE_MEMORY> such as C<amd.com/cpx_nps4> (an Instinct in CPX
+mode), and one without partitions still as C<amd.com/gpu>; the wait then
+takes any C<amd.com/> resource. Anything else dies before the cluster is
+touched.
+
+=item C<wait>
+
+Default: C<1>, the wait for the GPU resource described above. With C<0> it
+returns once the objects are applied: for a caller with a readiness check of
+its own, or a cluster where no node is to offer C<amd.com/gpu> (its AMD GPUs
+allocated through DRA, for instance), which would only wait out the two
+minutes and warn.
 
 =item C<node_labeller>
 
-If true, also deploy upstream's node labeller (C<k8s-ds-amdgpu-labeller.yaml>
-of the same release): the ClusterRole C<cr-node-labeller> (C<get>, C<list>,
-C<watch>, C<update> on nodes), the ClusterRoleBinding C<labeller>, the
-ServiceAccount C<node-labeller-sa> and the DaemonSet
-C<amdgpu-labeller-daemonset> in C<kube-system>, which labels each node with
-its AMD GPUs' VRAM, compute unit and SIMD count, device ID, family and
-product name. It runs privileged with the host's C</dev> and C</sys>
-(read-only) mounted, as upstream's manifest has it: it opens the GPU's
-C</dev/dri> nodes. Default: C<0>; L<Rex::Rancher/rancher_deploy_server>
-deploys the plugin without it.
+If true, also deploy upstream's node labeller exactly as
+L</deploy_amd_node_labeller> does, with this call's C<version> and
+C<affinity>. Default: C<0>; L<Rex::Rancher/rancher_deploy_server> deploys
+the plugin without it. A labeller meant for other nodes than the plugin —
+every AMD GPU node, the plugin only on some — is deployed with
+L</deploy_amd_node_labeller> and its own C<affinity> instead.
 
 =item C<affinity>
 
-A pod C<affinity> (hashref, as in a pod spec) for the plugin's DaemonSet and
-the labeller's, on top of the C<amd64> C<nodeSelector>. Default: none, which
-is upstream's behaviour (every amd64 node, see above). With Node Feature
-Discovery in the cluster, the AMD GPU nodes are those with one of its PCI
-labels for vendor C<1002>; the terms of C<nodeSelectorTerms> are alternatives:
+A pod C<affinity> (hashref, as in a pod spec) for the plugin's DaemonSet
+(and, with C<node_labeller>, the labeller's), on top of the C<amd64>
+C<nodeSelector>. Default: none, which is upstream's behaviour (every amd64
+node, see above). With Node Feature Discovery in the cluster, the nodes with
+an AMD GPU carry one of its PCI labels for vendor C<1002>; the terms of
+C<nodeSelectorTerms> are alternatives:
 
   # 0300 a Radeon, 0302 a 3D controller, 0380 an APU's GPU (e.g. gfx1151),
   # 1200 an Instinct MI355X (other Instinct models unverified)
@@ -272,6 +307,22 @@ labels for vendor C<1002>; the terms of C<nodeSelectorTerms> are alternatives:
     } },
   );
 
+B<These labels select the hardware, not the GPUs you set up>: the integrated
+Radeon of a Ryzen CPU carries them too (a Hetzner AX42, with a Phoenix iGPU,
+has C<pci-0300_1002.present>), and so the plugin lands on nodes whose GPU
+was left alone (see C<gpu_amd_integrated> in L<Rex::Rancher>) and crash-loops
+there. A node label of your own, set only on the nodes whose GPU you
+accepted — by the step that joins them, say — selects more safely; one
+setup uses C<ocp.internal/amd-gpu.present=true> for that:
+
+  affinity => { nodeAffinity => {
+    requiredDuringSchedulingIgnoredDuringExecution => { nodeSelectorTerms => [
+      { matchExpressions => [{
+        key => 'ocp.internal/amd-gpu.present', operator => 'In', values => ['true'],
+      }] },
+    ] },
+  } },
+
 Anything but a hashref dies before the cluster is touched.
 
 =back
@@ -284,24 +335,193 @@ sub deploy_amd_device_plugin {
   my (%opts) = @_;
   my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
   my $version    = $opts{version} // AMD_DEVICE_PLUGIN_VERSION;
-  my $affinity   = $opts{affinity};
-  die "affinity must be a hash reference (a pod spec's affinity)\n"
-    if defined $affinity && ref $affinity ne 'HASH';
+  my $naming     = _check_amd_resource_naming($opts{resource_naming});
+  my $affinity   = _check_affinity($opts{affinity});
+  my $wait       = $opts{wait} // 1;
 
   Rex::Logger::info("Deploying AMD GPU device plugin $version...");
 
   my $api = _api($kubeconfig);
 
-  _create_or_update($api, DaemonSet => _amd_device_plugin_daemonset_spec($version, $affinity));
+  _create_or_update($api, DaemonSet => _amd_device_plugin_daemonset_spec($version, $naming, $affinity));
   if ($opts{node_labeller}) {
     Rex::Logger::info("  Deploying the AMD GPU node labeller...");
-    _create_or_update($api, @$_) for _amd_node_labeller_specs($version, $affinity);
+    _deploy_amd_node_labeller($api, $version, $affinity);
   }
 
+  unless ($wait) {
+    Rex::Logger::info("  DaemonSet applied, not waiting for GPU resources (wait => 0)");
+    return;
+  }
+
+  # mixed: a partitioned GPU is amd.com/<compute>_<memory>, an unpartitioned
+  # one still amd.com/gpu; the prefix takes either.
   Rex::Logger::info("  DaemonSet applied, waiting for GPU resources...");
-  _wait_for_gpu_resource($api, 'amd.com/gpu');
+  _wait_for_gpu_resource($api, $naming eq 'mixed' ? 'amd.com/' : 'amd.com/gpu');
 
   Rex::Logger::info("AMD GPU device plugin ready");
+}
+
+=method deploy_amd_node_labeller(%opts)
+
+Deploy upstream's node labeller from ROCm's device plugin project
+(C<k8s-ds-amdgpu-labeller.yaml> of the release
+L</deploy_amd_device_plugin> pins) on its own, without the device plugin:
+the ClusterRole C<cr-node-labeller> (C<get>, C<list>, C<watch>, C<update> on
+nodes), the ClusterRoleBinding C<labeller>, the ServiceAccount
+C<node-labeller-sa> and the DaemonSet C<amdgpu-labeller-daemonset> in
+C<kube-system>. Each of its pods labels its node with the AMD GPUs' VRAM,
+compute unit and SIMD count, device ID, family and product name. Objects
+already in the cluster are updated, as for the plugin. There is no wait: the
+labeller adds no capacity to wait for. Locally via L<Kubernetes::REST>, like
+the rest of this module.
+
+C<deploy_amd_device_plugin(node_labeller =E<gt> 1)> deploys the same objects
+with the plugin's C<affinity>; this function is for a labeller that runs on
+other nodes than the plugin.
+
+The labeller runs privileged, with the host's C</dev> and C</sys>
+(read-only) mounted, as upstream's manifest has it: it opens the GPU's
+C</dev/dri/cardN>, and unprivileged the device cgroup refuses that
+("operation not permitted"), leaving only the device ID labelled — seen on
+an RKE2 1.36 node with a Ryzen AI Max (gfx1151). It does not ask for the
+driver version label (nor does upstream's manifest); that one would stay
+empty with the kernel's own C<amdgpu> driver anyway, which has no
+C</sys/module/amdgpu/version>.
+
+Like the plugin it runs on every amd64 node unless C<affinity> says
+otherwise.
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+Optional options:
+
+=over
+
+=item C<version>
+
+The release; the image is C<rocm/k8s-device-plugin:labeller-VERSION>.
+Default: C<1.31.0.11>, as for the plugin.
+
+=item C<affinity>
+
+A pod C<affinity> (hashref, as in a pod spec) for the labeller's DaemonSet,
+on top of the C<amd64> C<nodeSelector>; see L</deploy_amd_device_plugin> for
+an example and why a label of your own selects more safely than Node Feature
+Discovery's. Anything but a hashref dies before the cluster is touched.
+
+=back
+
+  # the labeller on every AMD GPU node, the plugin only where it allocates
+  deploy_amd_node_labeller(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity   => $every_amd_gpu_node,
+  );
+  deploy_amd_device_plugin(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity   => $device_plugin_nodes,
+  );
+
+=cut
+
+sub deploy_amd_node_labeller {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+  my $version    = $opts{version} // AMD_DEVICE_PLUGIN_VERSION;
+  my $affinity   = _check_affinity($opts{affinity});
+
+  Rex::Logger::info("Deploying AMD GPU node labeller $version...");
+
+  my $api = _api($kubeconfig);
+  _deploy_amd_node_labeller($api, $version, $affinity);
+
+  Rex::Logger::info("AMD GPU node labeller applied");
+}
+
+=method remove_amd_device_plugin(%opts)
+
+Delete what L</deploy_amd_device_plugin> deploys for the plugin itself: the
+DaemonSet C<amdgpu-device-plugin-daemonset> in C<kube-system> (its pods go
+with it). The node labeller is left alone; see
+L</remove_amd_node_labeller>.
+
+Idempotent: an object that is not there (the API answers 404) is logged and
+skipped. Any other error (a 403, no connection) dies. Locally via
+L<Kubernetes::REST>.
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+  remove_amd_device_plugin(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+
+=cut
+
+sub remove_amd_device_plugin {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+
+  Rex::Logger::info("Removing AMD GPU device plugin...");
+
+  # The name and namespace from the spec the deploy sends; version and naming
+  # do not reach the metadata.
+  my $api = _api($kubeconfig);
+  _delete_if_present($api, DaemonSet =>
+    _amd_device_plugin_daemonset_spec(AMD_DEVICE_PLUGIN_VERSION, 'single')->{metadata});
+}
+
+=method remove_amd_node_labeller(%opts)
+
+Delete what L</deploy_amd_node_labeller> deploys, the DaemonSet first so no
+labeller pod runs on without its rights: the DaemonSet
+C<amdgpu-labeller-daemonset> and the ServiceAccount C<node-labeller-sa> in
+C<kube-system>, then the ClusterRoleBinding C<labeller> and the ClusterRole
+C<cr-node-labeller>. The labels it set on the nodes are not removed. The
+device plugin is left alone.
+
+Idempotent like L</remove_amd_device_plugin>: an object that is not there is
+logged and skipped, any other error dies (and leaves the objects after it in
+place).
+
+Required options:
+
+=over
+
+=item C<kubeconfig>
+
+Local path to the cluster kubeconfig.
+
+=back
+
+  remove_amd_node_labeller(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+
+=cut
+
+sub remove_amd_node_labeller {
+  my (%opts) = @_;
+  my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
+
+  Rex::Logger::info("Removing AMD GPU node labeller...");
+
+  # The objects the deploy sends, in reverse: DaemonSet, ServiceAccount,
+  # ClusterRoleBinding, ClusterRole.
+  my $api = _api($kubeconfig);
+  _delete_if_present($api, $_->[0] => $_->[1]{metadata})
+    for reverse _amd_node_labeller_specs(AMD_DEVICE_PLUGIN_VERSION);
 }
 
 =method untaint_node(%opts)
@@ -477,17 +697,29 @@ sub _nvidia_device_plugin_daemonset_spec {
 }
 
 # ROCm's device plugin DaemonSet, upstream's k8s-ds-amdgpu-dp.yaml at the
-# release AMD_DEVICE_PLUGIN_VERSION names, with three changes: the image
+# release AMD_DEVICE_PLUGIN_VERSION names, with four changes: the image
 # carries the tag; the securityContext is the Helm chart's (amd-gpu-helm
 # 0.22.0), not privileged: the plugin reads /sys, writes its socket to the
 # kubelet's device-plugins directory and hands the kubelet the device nodes
 # (/dev/kfd, /dev/dri/cardN, /dev/dri/renderDN) to put into the pods without
 # opening them itself (the chart's extra /var/lib/amd-metrics-exporter mount
-# is for its -pulse health checks, not used here); and $affinity, if given,
-# is the pod affinity. A plain hashref like the NVIDIA one, so its shape is
-# unit-tested offline. The caller resolves the version default.
+# is for its -pulse health checks, not used here) — a DaemonSet of this form
+# (kubernetes-ocp's own, not this code) registered amd.com/gpu: 1 on synapse,
+# RKE2 1.36.4 with a gfx1151, on 2026-10-31; the container's command and
+# arguments are given, to pass -resource_naming_strategy=$naming; and
+# $affinity, if given, is the pod affinity. A plain hashref like the NVIDIA
+# one, so its shape is unit-tested offline. The caller resolves the defaults.
+#
+# The image (config of rocm/k8s-device-plugin:1.31.0.11, Dockerfile at the
+# tag) has no Entrypoint, only Cmd ["./k8s-device-plugin", "-logtostderr=true",
+# "-stderrthreshold=INFO", "-v=5"] with WorkingDir /root/: args alone would
+# replace that Cmd and run "-resource_naming_strategy=..." as the program.
+# So command is the binary, args carry the image's three log flags on, and
+# workingDir is spelled out for the relative ./k8s-device-plugin, as
+# upstream's own command form has it (k8s-ds-amdgpu-dp-health.yaml, the
+# labeller) rather than resting on the image's WorkingDir.
 sub _amd_device_plugin_daemonset_spec {
-  my ($version, $affinity) = @_;
+  my ($version, $naming, $affinity) = @_;
   return {
     metadata => {
       name      => 'amdgpu-device-plugin-daemonset',
@@ -511,8 +743,14 @@ sub _amd_device_plugin_daemonset_spec {
             operator => 'Exists',
           }],
           containers => [{
-            image => "rocm/k8s-device-plugin:$version",
-            name  => 'amdgpu-dp-cntr',
+            image      => "rocm/k8s-device-plugin:$version",
+            name       => 'amdgpu-dp-cntr',
+            workingDir => '/root',
+            command    => ['./k8s-device-plugin'],
+            args       => [
+              qw( -logtostderr=true -stderrthreshold=INFO -v=5 ),
+              "-resource_naming_strategy=$naming",
+            ],
             securityContext => {
               allowPrivilegeEscalation => \0,
               capabilities             => { drop => ['ALL'] },
@@ -534,10 +772,12 @@ sub _amd_device_plugin_daemonset_spec {
 
 # The node labeller, upstream's k8s-ds-amdgpu-labeller.yaml at the same
 # release: [ kind => spec ] pairs in upstream's order. It stays privileged,
-# as there ("Needed for /dev"): the chart's unprivileged variant may not open
-# /dev/dri/* under runc's device cgroup, and the family and product-name
-# labels go through libdrm. Changes: the image is labeller-$version, not
-# labeller-latest, and so its imagePullPolicy Always is left out
+# as there ("Needed for /dev"): kubernetes-ocp's live test on synapse (RKE2
+# 1.36.4, gfx1151, 2026-10-31) ran it unprivileged, and it failed to open
+# /dev/dri/card0 ("operation not permitted", the device cgroup) and labelled
+# the device ID only; privileged it labelled cu-count, device-id, family,
+# product-name, simd-count and vram. Changes: the image is labeller-$version,
+# not labeller-latest, and so its imagePullPolicy Always is left out
 # (Kubernetes' default for a tag other than latest is IfNotPresent; a pinned
 # tag needs no pull on every pod start, which would tie each restart to
 # Docker Hub); the ClusterRoleBinding loses upstream's namespace: default,
@@ -643,9 +883,64 @@ sub _create_or_update {
   return $obj;
 }
 
+# Delete the $kind object $metadata names (in its namespace, if it has one),
+# with the API's default propagation, which for apps/v1 (the DaemonSets) is
+# Background: the pods go too, after the call returns.
+# Not there is fine — removal is idempotent — and only logged: Kubernetes::REST
+# (1.109 on) dies with a Kubernetes::REST::APIError for an HTTP error status,
+# and a 404 is its is_not_found. Anything else (a 403, a 599 for no
+# connection, a croak) dies. True if it deleted something.
+sub _delete_if_present {
+  my ($api, $kind, $metadata) = @_;
+  my ($name, $namespace) = @{$metadata}{qw( name namespace )};
+
+  if (eval {
+    $api->delete($kind, $name, ( defined $namespace ? ( namespace => $namespace ) : () ));
+    1;
+  }) {
+    Rex::Logger::info("  Removed $kind/$name");
+    return 1;
+  }
+  my $err = $@;
+  die $err unless blessed $err
+    && $err->isa('Kubernetes::REST::APIError') && $err->is_not_found;
+
+  Rex::Logger::info("  $kind/$name not there, nothing to remove");
+  return 0;
+}
+
+# The labeller's four objects, for deploy_amd_node_labeller and
+# deploy_amd_device_plugin(node_labeller => 1) alike.
+sub _deploy_amd_node_labeller {
+  my ($api, $version, $affinity) = @_;
+  _create_or_update($api, @$_) for _amd_node_labeller_specs($version, $affinity);
+}
+
+# resource_naming as given, or single; anything ROCm's plugin does not know
+# dies here, before the cluster is touched.
+sub _check_amd_resource_naming {
+  my ($naming) = @_;
+  return 'single' unless defined $naming;
+  return $naming if !ref $naming && grep { $_ eq $naming } AMD_RESOURCE_NAMINGS;
+  die "resource_naming must be one of " . join(', ', AMD_RESOURCE_NAMINGS)
+    . ", not '$naming'\n";
+}
+
+# affinity as given (undef: none); anything but a hashref dies here.
+sub _check_affinity {
+  my ($affinity) = @_;
+  die "affinity must be a hash reference (a pod spec's affinity)\n"
+    if defined $affinity && ref $affinity ne 'HASH';
+  return $affinity;
+}
+
 # Poll for $resource (nvidia.com/gpu, amd.com/gpu) in any node's capacity.
+# A $resource ending in / is a prefix: any resource under it counts
+# (amd.com/ for ROCm's mixed naming, amd.com/gpu or amd.com/cpx_nps4).
 sub _wait_for_gpu_resource {
   my ($api, $resource) = @_;
+  my $prefix = $resource =~ m{/\z};
+  my $label  = $prefix ? "$resource*" : $resource;
 
   # The error of the last attempt, if it failed: a 403 or a dead API reads
   # the same as a plugin that has not reported yet until the warning names it.
@@ -654,10 +949,14 @@ sub _wait_for_gpu_resource {
     my $found = eval {
       my $nodes = $api->list('Node');
       for my $node (@{ $nodes->items }) {
-        my $cap = $node->status->capacity;
-        if ($cap && $cap->{$resource} && $cap->{$resource} > 0) {
-          Rex::Logger::info("  [ok] $resource: "
-            . $cap->{$resource} . " on "
+        my $cap = $node->status->capacity or next;
+        my @names = $prefix
+          ? sort grep { index($_, $resource) == 0 } keys %$cap
+          : ($resource);
+        for my $name (@names) {
+          next unless $cap->{$name} && $cap->{$name} > 0;
+          Rex::Logger::info("  [ok] $name: "
+            . $cap->{$name} . " on "
             . $node->metadata->name);
           return 1;  # returns 1 as value of the eval block
         }
@@ -670,7 +969,7 @@ sub _wait_for_gpu_resource {
     sleep 5;
   }
 
-  Rex::Logger::info("  $resource resource did not appear — check device plugin"
+  Rex::Logger::info("  $label resource did not appear — check device plugin"
     . ( defined $last_error ? " (last API error: $last_error)" : '' ), "warn");
   return 0;
 }
@@ -697,13 +996,30 @@ sub _wait_for_gpu_resource {
     node_labeller => 1,
   );
 
+  # Or each on its own nodes: the labeller on every AMD GPU node, the
+  # plugin with mixed resource naming and no wait on some of them
+  deploy_amd_node_labeller(
+    kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity   => $amd_gpu_nodes,
+  );
+  deploy_amd_device_plugin(
+    kubeconfig      => "$ENV{HOME}/.kube/mycluster.yaml",
+    affinity        => $device_plugin_nodes,
+    resource_naming => 'mixed',
+    wait            => 0,
+  );
+
+  # And take them out again
+  remove_amd_device_plugin(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+  remove_amd_node_labeller(kubeconfig => "$ENV{HOME}/.kube/mycluster.yaml");
+
   # Remove control-plane taints on a single-node cluster
   untaint_node(kubeconfig => "$ENV{HOME}/.kube/single.yaml");
 
 =head1 DESCRIPTION
 
 L<Rex::Rancher::K8s> provides Kubernetes API operations for L<Rex::Rancher>
-using L<Kubernetes::REST> and L<IO::K8s>. All five public functions run
+using L<Kubernetes::REST> and L<IO::K8s>. All eight public functions run
 entirely on the B<local machine> against the cluster's HTTP API — no
 C<kubectl> binary is required anywhere, and no SSH connection to the cluster
 nodes is needed for these operations.
@@ -723,7 +1039,12 @@ L<Rex::Rancher::Agent/install_agent> uses L</control_plane_version> to keep
 an agent from a newer minor version than the control plane.
 
 It can also be used standalone for post-deploy operations such as removing
-control-plane taints on single-node clusters.
+control-plane taints on single-node clusters, or deploying and removing the
+AMD device plugin and node labeller on nodes of your choosing
+(L</deploy_amd_node_labeller>, L</remove_amd_device_plugin>,
+L</remove_amd_node_labeller>). L<Rex::Rancher> re-exports only
+L</wait_for_api>, L</untaint_node> and the two C<deploy_*_device_plugin>
+functions; the others come from C<use Rex::Rancher::K8s>.
 
 =head2 No kubectl required
 
