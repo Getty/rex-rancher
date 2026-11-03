@@ -366,6 +366,15 @@ is( $k8s->object_to_struct($ads_obj)->{spec}{template}{spec}{affinity}{nodeAffin
   {requiredDuringSchedulingIgnoredDuringExecution}{nodeSelectorTerms}[0]{matchExpressions}[0]{key},
   'ocp.internal/amd-gpu.dra', 'affinity: survives the typed classes' );
 
+# k108: init_image replaces the init container's image, and nothing else.
+my $mirror = 'registry.example.com:5000/library/busybox:1.36';
+my %mirrored = map { $_->[0] => $_->[1] } Rex::Rancher::K8s::_amd_dra_driver_specs( $version, undef, $mirror );
+my $mpod = $mirrored{DaemonSet}{spec}{template}{spec};
+is( $mpod->{initContainers}[0]{image}, $mirror, 'init_image: on the init container' );
+is( $mpod->{containers}[0]{image}, 'docker.io/rocm/k8s-gpu-dra-driver:v1.0.1', 'init_image: not the plugin image' );
+$mpod->{initContainers}[0]{image} = 'docker.io/busybox:1.36';
+is_deeply( \%mirrored, \%spec, 'init_image: nothing else changes' );
+
 # --- a fake API server behind the real Kubernetes::REST client ------------------------
 
 my $json = JSON::MaybeXS->new( canonical => 1 );
@@ -508,6 +517,8 @@ is_deeply( \@requests, [ @DISCOVERY, @POSTS ],
 is( $json->decode( $body{"POST $DC"} )->{apiVersion}, 'resource.k8s.io/v1', '... DeviceClass sent as resource.k8s.io/v1' );
 is( $json->decode( $body{"POST $DS"} )->{spec}{template}{spec}{containers}[0]{image},
   'docker.io/rocm/k8s-gpu-dra-driver:v1.0.1', '... the pinned image' );
+is( $json->decode( $body{"POST $DS"} )->{spec}{template}{spec}{initContainers}[0]{image},
+  'docker.io/busybox:1.36', "... the chart's init image" );
 like( $info[0], qr/^Deploying AMD GPU DRA driver v1\.0\.1/, '... names the version' );
 like( $info[-1], qr/ResourceSlices of driver gpu\.amd\.com/, '... and how to see the GPUs arrive' );
 is_deeply( \@warn, [], '... no warning' );
@@ -517,6 +528,13 @@ my $sent = $json->decode( $body{"POST $DS"} )->{spec}{template}{spec};
 is( $sent->{containers}[0]{image}, 'docker.io/rocm/k8s-gpu-dra-driver:v1.0.0', '... the version on the image' );
 is_deeply( $sent->{affinity}, $affinity, '... the affinity on the pods' );
 like( $info[0], qr/v1\.0\.0/, '... and in the log' );
+
+# A made-up digest: only the form of the reference matters here.
+my $digest = 'docker.io/library/busybox@sha256:' . ( 'ab' x 32 );
+ok( run_api( deploy => '1.36', undef, init_image => $digest ), 'init_image' ) or diag $@;
+$sent = $json->decode( $body{"POST $DS"} )->{spec}{template}{spec};
+is( $sent->{initContainers}[0]{image}, $digest, '... on the init container sent' );
+is( $sent->{containers}[0]{image}, 'docker.io/rocm/k8s-gpu-dra-driver:v1.0.1', '... the plugin image untouched' );
 
 {
   local %stored = map {
@@ -557,6 +575,15 @@ ok( !grep( { /^POST / } @requests ), '... before any object is created' );
 ok( !run_api( deploy => '1.36', undef, affinity => [] ), 'affinity not a hashref: dies' );
 like( $@, qr/^affinity must be a hash reference/, '... saying so' );
 is_deeply( \@api_for, [], '... before the cluster is touched' );
+
+# A ref would die only in the typed DaemonSet, after the six objects before
+# it are created; an empty or padded string would reach the template.
+for my $bad ( [ '' => 'empty' ], [ ' busybox:1.36' => 'with whitespace' ], [ ['busybox:1.36'] => 'an array reference' ] ) {
+  my ( $value, $label ) = @$bad;
+  ok( !run_api( deploy => '1.36', undef, init_image => $value ), "init_image $label: dies" );
+  like( $@, qr/^init_image must be an image reference/, '... saying so' );
+  is_deeply( \@api_for, [], '... before the cluster is touched' );
+}
 
 ok( !eval { Rex::Rancher::K8s::deploy_amd_dra_driver(); 1 }, 'no kubeconfig: dies' );
 like( $@, qr/^kubeconfig required/, '... saying so' );

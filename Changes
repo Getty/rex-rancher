@@ -50,6 +50,12 @@ Revision history for Rex-Rancher
     the prefix amd_. Runs next to the device plugin or the DRA driver.
     Upstream supports Instinct and Radeon AI, not APUs or consumer Radeons.
     No ServiceMonitor.
+  - deploy_amd_dra_driver and deploy_amd_metrics_exporter take an optional
+    init_image: the image of the init container that waits for the amdgpu
+    driver, as a full reference (a mirror's, or one pinned by digest).
+    Default as upstream's charts write it: docker.io/busybox:1.36 for the
+    DRA driver, busybox:1.36 for the exporter. Anything but a non-empty
+    string without whitespace dies before the cluster is touched.
   - An agent (or joining server) that cannot reach its server address no
     longer waits out the full 600 s: while the unit is not active the
     journal is read along, and once it has shown nothing but "Failed to

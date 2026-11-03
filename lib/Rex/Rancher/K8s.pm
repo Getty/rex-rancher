@@ -620,9 +620,10 @@ directories, C</var/run/cdi> (where it writes the CDI specs of the devices
 it prepares) and the host's C</dev> and C</sys> mounted, and a gRPC
 liveness probe on port 51515.
 
-=item * An init container (C<docker.io/busybox:1.36>, privileged) that
-waits until C</sys/class/kfd> and C</sys/module/amdgpu/drivers/> exist, that
-is until the C<amdgpu> kernel driver is loaded.
+=item * An init container (C<docker.io/busybox:1.36> unless C<init_image>
+names another image, privileged) that waits until C</sys/class/kfd> and
+C</sys/module/amdgpu/drivers/> exist, that is until the C<amdgpu> kernel
+driver is loaded.
 
 =item * C<priorityClassName: system-node-critical>.
 
@@ -697,7 +698,18 @@ Optional options:
 
 Image tag of the driver, C<docker.io/rocm/k8s-gpu-dra-driver:VERSION>, with
 its C<v>. Default: C<v1.0.1>. The objects stay those of v1.0.1's chart, and
-the init container's C<busybox:1.36> stays as upstream has it.
+the init container's image does not follow it (see C<init_image>).
+
+=item C<init_image>
+
+The image of the init container that waits for the C<amdgpu> driver, as a
+full reference: a mirror's (C<registry.example.com/library/busybox:1.36>) or
+one pinned by digest (C<docker.io/library/busybox@sha256:...>). Default:
+C<docker.io/busybox:1.36>, as upstream's chart writes it, a tag, which can
+move. Only the image changes: the container still runs the chart's C<sh -c>
+loop, so the image needs a C<sh> with C<[>, C<echo> and C<sleep>, as busybox
+has. Anything but a non-empty string without whitespace dies before the
+cluster is touched.
 
 =item C<affinity>
 
@@ -722,6 +734,7 @@ sub deploy_amd_dra_driver {
   my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
   my $version    = $opts{version} // AMD_DRA_DRIVER_VERSION;
   my $affinity   = _check_affinity($opts{affinity});
+  my $init_image = _check_init_image($opts{init_image});
 
   Rex::Logger::info("Deploying AMD GPU DRA driver $version...");
 
@@ -730,7 +743,7 @@ sub deploy_amd_dra_driver {
     . " the AMD GPU DRA driver needs Kubernetes 1.34 or later; nothing deployed\n"
     unless _serves_dra_v1($api);
 
-  _create_or_update($api, @$_) for _amd_dra_driver_specs($version, $affinity);
+  _create_or_update($api, @$_) for _amd_dra_driver_specs($version, $affinity, $init_image);
 
   Rex::Logger::info("AMD GPU DRA driver applied; its GPUs show as ResourceSlices of driver gpu.amd.com");
 }
@@ -850,9 +863,10 @@ C</var/lib/kubelet/pod-resources> mounted, C</var/lib/amd-metrics-exporter>
 (the exporter's health socket) and C</var/run/exporter> mounted from the
 host and created there where missing, and the ConfigMap at C</etc/metrics/>.
 
-=item * An init container (C<busybox:1.36>, privileged) that waits until
-C</sys/class/kfd> and C</sys/module/amdgpu/drivers> exist, that is until the
-C<amdgpu> kernel driver is loaded.
+=item * An init container (C<busybox:1.36> unless C<init_image> names
+another image, privileged) that waits until C</sys/class/kfd> and
+C</sys/module/amdgpu/drivers> exist, that is until the C<amdgpu> kernel
+driver is loaded.
 
 =item * A rolling update one node at a time; no priority class and no
 tolerations, as the chart has none by default.
@@ -913,8 +927,20 @@ Optional options:
 
 Image tag of the exporter, C<docker.io/rocm/device-metrics-exporter:VERSION>,
 with its C<v>. Default: C<v1.5.3>. The objects and the config stay those of
-v1.5.3's chart, and the init container's C<busybox:1.36> stays as upstream
-has it.
+v1.5.3's chart, and the init container's image does not follow it (see
+C<init_image>).
+
+=item C<init_image>
+
+The image of the init container that waits for the C<amdgpu> driver, as a
+full reference: a mirror's (C<registry.example.com/library/busybox:1.36>) or
+one pinned by digest (C<docker.io/library/busybox@sha256:...>). Default:
+C<busybox:1.36>, as upstream's chart writes it, a tag, which can move;
+pulled only when missing on the node, as the chart has it, whichever image
+it is. Only the image changes: the container still runs the chart's
+C<sh -c> loop, so the image needs a C<sh> with C<[>, C<echo> and C<sleep>,
+as busybox has. Anything but a non-empty string without whitespace dies
+before the cluster is touched.
 
 =item C<affinity>
 
@@ -939,11 +965,12 @@ sub deploy_amd_metrics_exporter {
   my $kubeconfig = $opts{kubeconfig} or die "kubeconfig required\n";
   my $version    = $opts{version} // AMD_METRICS_EXPORTER_VERSION;
   my $affinity   = _check_affinity($opts{affinity});
+  my $init_image = _check_init_image($opts{init_image});
 
   Rex::Logger::info("Deploying AMD GPU metrics exporter $version...");
 
   my $api = _api($kubeconfig);
-  _create_or_update($api, @$_) for _amd_metrics_exporter_specs($version, $affinity);
+  _create_or_update($api, @$_) for _amd_metrics_exporter_specs($version, $affinity, $init_image);
 
   Rex::Logger::info("AMD GPU metrics exporter applied; its pods serve /metrics on port 5000"
     . " (Service kube-system/amdgpu-metrics-exporter)");
@@ -1356,7 +1383,8 @@ sub _amd_node_labeller_specs {
 #   class system-node-critical (the chart's own) is at home there. The
 #   admission policy's user follows the namespace and the ServiceAccount.
 # - The image tag is $version, never the chart's appVersion (v0.1.0 in git,
-#   a tag that does not exist); the init image docker.io/busybox:1.36 stays.
+#   a tag that does not exist). The init image is $init_image where given
+#   (k108), else the chart's docker.io/busybox:1.36.
 # - nodeSelector kubernetes.io/arch amd64, as the image is amd64 only (the
 #   chart has none); $affinity, if given, is the pod affinity.
 # - No Helm labels (helm.sh/chart, app.kubernetes.io/managed-by: Helm):
@@ -1381,7 +1409,7 @@ sub _amd_node_labeller_specs {
 # The selector is fixed and carries no version: a DaemonSet's selector cannot
 # change, and an update with another one would be refused.
 sub _amd_dra_driver_specs {
-  my ($version, $affinity) = @_;
+  my ($version, $affinity, $init_image) = @_;
   my $namespace = 'kube-system';
   my $name      = 'k8s-gpu-dra-driver';
   my $sa        = "$name-service-account";
@@ -1483,10 +1511,11 @@ sub _amd_dra_driver_specs {
             serviceAccountName => $sa,
             nodeSelector       => { 'kubernetes.io/arch' => 'amd64' },
             ( defined $affinity ? ( affinity => $affinity ) : () ),
-            # Waits for the amdgpu driver, verbatim from the chart.
+            # Waits for the amdgpu driver, verbatim from the chart but for
+            # an $init_image given.
             initContainers => [{
               name    => 'driver-init',
-              image   => 'docker.io/busybox:1.36',
+              image   => $init_image // 'docker.io/busybox:1.36',
               command => [ 'sh', '-c', 'while [ ! -d /sys/class/kfd ] || [ ! -d /sys/module/amdgpu/drivers/ ];'
                 .q{ do echo 'amdgpu driver is not loaded'; sleep 2; done} ],
               securityContext => { privileged => \1 },
@@ -1557,11 +1586,13 @@ sub _amd_dra_driver_specs {
 #   the ConfigMap. The pod label app is the chart's release-less one,
 #   amdgpu-metrics-exporter (its DaemonSet already carries it); the chart's
 #   selector and Service use the release's.
-# - The image tag is $version; the init image busybox:1.36 stays, written
-#   as the chart writes it. The exporter's imagePullPolicy Always is left
-#   out, as for the node labeller: Kubernetes' default for a tag other than
-#   latest is IfNotPresent, and Always would tie every pod start to Docker
-#   Hub (some 330 MB) for a tag that does not move.
+# - The image tag is $version. The init image is $init_image where given
+#   (k108), else busybox:1.36, written as the chart writes it, with the
+#   chart's imagePullPolicy IfNotPresent either way. The exporter's
+#   imagePullPolicy Always is left out, as for the node labeller:
+#   Kubernetes' default for a tag other than latest is IfNotPresent, and
+#   Always would tie every pod start to Docker Hub (some 330 MB) for a tag
+#   that does not move.
 # - nodeSelector kubernetes.io/arch amd64, as the image is amd64 only (the
 #   chart has none by default); $affinity, if given, is the pod affinity.
 # - No Helm labels: not helm.sh/chart and app.kubernetes.io/managed-by
@@ -1581,7 +1612,7 @@ sub _amd_dra_driver_specs {
 # The selector is fixed and carries no version: a DaemonSet's selector cannot
 # change, and an update with another one would be refused.
 sub _amd_metrics_exporter_specs {
-  my ($version, $affinity) = @_;
+  my ($version, $affinity, $init_image) = @_;
   my $namespace = 'kube-system';
   my $name      = 'amdgpu-metrics-exporter';
   my $config    = "$name-config";
@@ -1651,7 +1682,7 @@ sub _amd_metrics_exporter_specs {
             ( defined $affinity ? ( affinity => $affinity ) : () ),
             initContainers => [{
               command         => [ 'sh', '-c', $driver_wait ],
-              image           => 'busybox:1.36',
+              image           => $init_image // 'busybox:1.36',
               imagePullPolicy => 'IfNotPresent',
               name            => 'driver-init',
               securityContext => { privileged => \1 },
@@ -1848,6 +1879,20 @@ sub _check_affinity {
   die "affinity must be a hash reference (a pod spec's affinity)\n"
     if defined $affinity && ref $affinity ne 'HASH';
   return $affinity;
+}
+
+# init_image as given (undef: the chart's, which the spec builder writes); a
+# ref, an empty string or one with whitespace dies here, before the cluster is
+# touched. A ref would die only in the typed DaemonSet, after the objects
+# before it are created; an empty or padded string would be sent as it is (a
+# workload's pod template may leave the image empty, the API's Container docs
+# say), so only the pods would show it. No image reference has whitespace.
+sub _check_init_image {
+  my ($image) = @_;
+  return unless defined $image;
+  return $image if !ref $image && $image =~ /\A\S+\z/;
+  die "init_image must be an image reference such as"
+    . " registry.example.com/library/busybox:1.36, not '$image'\n";
 }
 
 # Poll for $resource (nvidia.com/gpu, amd.com/gpu) in any node's allocatable.

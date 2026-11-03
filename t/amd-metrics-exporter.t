@@ -455,6 +455,16 @@ is( $k8s->object_to_struct($aff_obj)->{spec}{template}{spec}{affinity}{nodeAffin
   {requiredDuringSchedulingIgnoredDuringExecution}{nodeSelectorTerms}[0]{matchExpressions}[0]{key},
   'ocp.internal/amd-gpu.present', 'affinity: survives the typed classes' );
 
+# k108: init_image replaces the init container's image, and nothing else.
+my $mirror = 'registry.example.com:5000/library/busybox:1.36';
+my %mirrored = map { $_->[0] => $_->[1] } Rex::Rancher::K8s::_amd_metrics_exporter_specs( $version, undef, $mirror );
+my $mpod = $mirrored{DaemonSet}{spec}{template}{spec};
+is( $mpod->{initContainers}[0]{image}, $mirror, 'init_image: on the init container' );
+is( $mpod->{initContainers}[0]{imagePullPolicy}, 'IfNotPresent', "init_image: the chart's IfNotPresent stays" );
+is( $mpod->{containers}[0]{image}, 'docker.io/rocm/device-metrics-exporter:v1.5.3', 'init_image: not the exporter image' );
+$mpod->{initContainers}[0]{image} = 'busybox:1.36';
+is_deeply( \%mirrored, \%spec, 'init_image: nothing else changes' );
+
 # --- a fake API server behind the real Kubernetes::REST client ------------------------
 
 my $json = JSON::MaybeXS->new( canonical => 1 );
@@ -586,6 +596,7 @@ is_deeply( \@requests, [ @DISCOVERY, @POSTS ],
   my $c  = $ds->{spec}{template}{spec}{containers}[0];
   is( $c->{image}, 'docker.io/rocm/device-metrics-exporter:v1.5.3', '... the pinned image' );
   ok( !exists $c->{imagePullPolicy}, '... no imagePullPolicy' );
+  is( $ds->{spec}{template}{spec}{initContainers}[0]{image}, 'busybox:1.36', "... the chart's init image" );
   like( $body{"POST $DS"}, qr/"value":"5000"/, '... METRICS_EXPORTER_PORT sent as the string "5000"' );
   like( $body{"POST $DS"}, qr/"containerPort":5000[,}]/, '... containerPort as the number 5000' );
   like( $body{"POST $DS"}, qr/"maxUnavailable":1[,}]/, '... maxUnavailable as the number 1' );
@@ -601,6 +612,13 @@ my $sent = $json->decode( $body{"POST $DS"} )->{spec}{template}{spec};
 is( $sent->{containers}[0]{image}, 'docker.io/rocm/device-metrics-exporter:v1.5.2', '... the version on the image' );
 is_deeply( $sent->{affinity}, $affinity, '... the affinity on the pods' );
 like( $info[0], qr/v1\.5\.2/, '... and in the log' );
+
+# A made-up digest: only the form of the reference matters here.
+my $digest = 'docker.io/library/busybox@sha256:' . ( 'ab' x 32 );
+ok( run_api( deploy => undef, init_image => $digest ), 'init_image' ) or diag $@;
+$sent = $json->decode( $body{"POST $DS"} )->{spec}{template}{spec};
+is( $sent->{initContainers}[0]{image}, $digest, '... on the init container sent' );
+is( $sent->{containers}[0]{image}, 'docker.io/rocm/device-metrics-exporter:v1.5.3', '... the exporter image untouched' );
 
 {
   my %collection = ( ServiceAccount => $SA, ClusterRole => $CR, ClusterRoleBinding => $CRB,
@@ -628,6 +646,15 @@ is_deeply( \@requests, [ @DISCOVERY, @POSTS[ 0 .. 3 ] ], '... no DaemonSet, no S
 ok( !run_api( deploy => undef, affinity => [] ), 'affinity not a hashref: dies' );
 like( $@, qr/^affinity must be a hash reference/, '... saying so' );
 is_deeply( \@api_for, [], '... before the cluster is touched' );
+
+# A ref would die only in the typed DaemonSet, after the four objects before
+# it are created; an empty or padded string would reach the template.
+for my $bad ( [ '' => 'empty' ], [ ' busybox:1.36' => 'with whitespace' ], [ ['busybox:1.36'] => 'an array reference' ] ) {
+  my ( $value, $label ) = @$bad;
+  ok( !run_api( deploy => undef, init_image => $value ), "init_image $label: dies" );
+  like( $@, qr/^init_image must be an image reference/, '... saying so' );
+  is_deeply( \@api_for, [], '... before the cluster is touched' );
+}
 
 ok( !eval { Rex::Rancher::K8s::deploy_amd_metrics_exporter(); 1 }, 'no kubeconfig: dies' );
 like( $@, qr/^kubeconfig required/, '... saying so' );
