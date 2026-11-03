@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-11-03T18:58:59Z
+created: 2026-10-31T02:14:41Z
+id: 108
+priority: low
+started: 2026-11-03T18:44:48Z
+status: done
+tags:
+- amd
+- gpu
+- pinning
+title: 'AMD DRA driver and metrics exporter: init image busybox:1.36 is a tag and
+  not overridable'
+updated: 2026-11-03T18:58:59Z
+---
+
+deploy_amd_dra_driver (lib/Rex/Rancher/K8s.pm ~1473, `docker.io/busybox:1.36`) and deploy_amd_metrics_exporter (~1638, `busybox:1.36`) write upstream's init container image verbatim. It is a mutable tag, not a digest, and the caller has no option to set it, so it is the one image of the AMD stack a consumer cannot pin (OCP pins every other image via OCP::Versions; air-gapped/mirrored clusters may also want their own reference).
+
+Done when: both functions take an optional init image (e.g. `init_image => ...`), default unchanged (busybox:1.36 as upstream), POD names it; or the default is pinned to a digest with a note where it comes from. Either is fine — the point is that the consumer can set it.
+
+Found by OCP k251 (kubernetes-ocp board) while wiring the stack; OCP spec docs/superpowers/specs/2026-10-31-amd-gpu-worker-design.md §3/§4 records it as open.
+
+Go via kubernetes-ocp-9c (2026-11-03). Worker rex-rancher-worker im Worktree .claude/worktrees/k108 (Branch k108-amd-init-image, ab main 466228d).
+
+Worker fertig (Worktree .claude/worktrees/k108, uncommitted): optionales init_image für deploy_amd_dra_driver und deploy_amd_metrics_exporter, Default unverändert (docker.io/busybox:1.36 bzw. busybox:1.36), _check_init_image stirbt vor _api bei Ref/leer/Whitespace; POD + Tests (Override nur im Init-Container, Default byte-gleich). prove -lr t/: Files=45, Tests=1741, PASS. Unverified live: Mirror-/Digest-Init-Image auf echtem AMD-Node. Für OCP: OCP::Versions kann nach Release einen Init-Image-Pin durchreichen.
+
+2026-11-03 18:58 Committed ae3da12 on main (ff from k108-amd-init-image), Changes entry included. unverified live: Mirror-/Digest-Init-Image auf echtem AMD-Node
