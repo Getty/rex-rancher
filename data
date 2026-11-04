@@ -1,0 +1,32 @@
+---
+class: standard
+completed: 2026-11-04T01:31:47Z
+created: 2026-10-31T00:38:37Z
+depends_on:
+- 105
+id: 104
+priority: low
+started: 2026-11-03T18:44:57Z
+status: done
+tags:
+- skill
+- docs
+- amd
+title: 'Skill rex-rancher-core: Modultabelle um die AMD-Funktionen von Rex::Rancher::K8s
+  ergänzen'
+updated: 2026-11-04T01:31:52Z
+---
+
+Gefunden in k101: Die Modultabelle im Skill rex-rancher-core (in diesem Repo gepflegt) listet die AMD-Funktionen von Rex::Rancher::K8s nicht: deploy_amd_device_plugin, deploy_amd_node_labeller, remove_amd_device_plugin, remove_amd_node_labeller (k95, k101), dazu bald deploy/remove für DRA-Treiber und Metrics-Exporter (k102, k103). Nach k103 in einem Rutsch nachziehen; Skill-Text ist Lane des rex-rancher-worker.
+
+Go via kubernetes-ocp-9c (2026-11-03). Worker rex-rancher-worker im Worktree .claude/worktrees/k104 (Branch k104-skill-amd-table, ab main ae3da12). Uninstall-Zeile folgt dem Ergebnis von k105.
+
+2026-11-04 00:49 Sitzung rex-rancher-merge am 2026-11-04 gestoppt. Stand: WIP-Commit 2f3889e auf Branch k104-skill-amd-table, Worktree .claude/worktrees/k104, Basis ae3da12. Inhalt: Modultabelle (Rex::Rancher, Rex::Rancher::K8s, Rex::Rancher::Options) und Pipeline-Schritt 10. Offen: die Uninstall-Zeile nach dem Ergebnis von k105, dann Commit über den release-manager (ersetzt den WIP-Commit).
+
+Übernommen von Sitzung rex-rancher (Auftrag perl-developer-a8). WIP auf main e5d376d (k105 committet) rebased, jetzt 460c105, konfliktfrei. Worker ergänzt die Uninstall-Zeile nach k105.
+
+2026-11-04 01:30 Checked the WIP 460c105 against main e5d376d. The export lists match @EXPORT: Rex::Rancher (7), K8s (12), Uninstall (uninstall_node), Options (none, 5 checks incl. check_node_addresses). The internals match the code: _gpu_vendor_plan, _serves_dra_v1 (DeviceClass resource map on Api::Resource::V1), _create_or_update (every deploy_*), _delete_if_present (every remove_*, only is_not_found swallowed), _wait_for_gpu_resource (status.allocatable). Corrected: 'which device plugin' became plural (both are possible); step 10 lacked the gpu_device_plugin => 0 switch (_gpu_steps) and NVIDIA-first (Rancher.pm 524/525). Uninstall row now carries /var/run/cdi/k8s.gpu.amd.com-gpu_* from k105. Also found, outside scope: step 5 of the skill still says that _gpu_setup_if_requested does eval { require Rex::GPU } plus the install hint. That has moved to _check_gpu_module in step 1 (Rex::GPU >= 0.002, before the host is touched), and step 5 is skipped under gpu_setup => 0. Possible follow-up card on rex-rancher (skill text).
+
+2026-11-04 01:30 Done: .claude/skills/rex-rancher-core/SKILL.md in worktree .claude/worktrees/k104, uncommitted on top of WIP 460c105 (1 file, +8/-5 against main). Table rows Rex::Rancher, K8s, Options, Uninstall plus step 10 checked against the code and corrected. Skill text only, no code: prove not run. Commit via release-manager (git reset --soft main).
+
+Committed as cd5e384 on main (fast-forward from k104-skill-amd-table).
