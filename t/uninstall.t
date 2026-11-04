@@ -43,6 +43,18 @@ use Test::More;
 #      directory in its place or no file at all is left alone and fails
 #      nothing.
 #
+# k105 (k102 live on amdlab): ROCm's DRA driver (deploy_amd_dra_driver) leaves
+# its CDI specs in /var/run/cdi -- k8s.gpu.amd.com-gpu_common and one
+# k8s.gpu.amd.com-gpu_<claim uid> per prepared claim -- and nothing removes
+# them once the distribution is gone. The claims:
+#   9. the leftover rm names them by exactly that pattern, after the two
+#      NVIDIA specs; the line names nothing else in /var/run/cdi (or
+#      /run/cdi) and nothing in /etc/cdi;
+#  10. under /bin/sh the pattern takes the driver's specs and no other file
+#      in the directory, nor the directory; with none there (or no
+#      directory) it reaches rm unexpanded, and the line neither fails nor
+#      writes to stderr for it.
+#
 # Whether the kernel really detaches the programs when the pins go is a live
 # question (Cilium's own detach does exactly that for its bpf_links), NOT
 # claimed here; nor that a real host ends up clean.
@@ -133,10 +145,14 @@ subtest 'the line: every step, in order' => sub {
       'command -v rke2 >/dev/null 2>&1 || for f in /etc/default/rke2-server /etc/default/rke2-agent;'
       . ' do if [ -f $f ] && [ "$(cat $f 2>/dev/null)" = "' . $PATH_LINE . '" ];'
       . ' then rm -f $f 2>/dev/null || true; fi; done' ],
-    [ 'the Cilium CLI, the CNI dir, the shared runtime dir, the GPU Operator toolkit and its two CDI specs, never into a mount below them' =>
+    # k105: the AMD DRA driver's pattern is part of this exact text, so a
+    # missing or a wider pattern fails here.
+    [ 'the Cilium CLI, the CNI dir, the shared runtime dir, the GPU Operator toolkit and its two CDI specs,'
+      . ' the AMD DRA driver\'s CDI specs, never into a mount below them' =>
       'rm -rf --one-file-system /usr/local/bin/cilium /opt/cni /run/k3s /usr/local/nvidia'
       . ' /var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json'
-      . ' /var/run/cdi/management.nvidia.com-gpu.yaml 2>/dev/null || true' ],
+      . ' /var/run/cdi/management.nvidia.com-gpu.yaml'
+      . ' /var/run/cdi/k8s.gpu.amd.com-gpu_* 2>/dev/null || true' ],
     [ 'legacy tc, with tc there: clsact off every device with a Cilium program' =>
       'if command -v tc >/dev/null 2>&1; then for d in /sys/class/net/*; do d=${d##*/};' ],
     [ 'without tc: a warning on stderr that cannot fail the line' =>
@@ -195,6 +211,13 @@ subtest 'the line: every step, in order' => sub {
   like( $cmd, qr/\bipt_used="" ; for ipt in /, 'the backend flag starts empty right before the loop' );
   unlike( $cmd, qr{/etc/default/k3s}, 'no PATH file for K3s: it has no env_file' );
   unlike( $cmd, qr/'/, 'no single quote in the line: a caller may wrap it in single quotes' );
+  # k105: everything the line names under the CDI directories, anywhere in it.
+  is_deeply( [ $cmd =~ m{((?:/var)?/run/cdi\b\S*)}g ], [qw(
+      /var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json
+      /var/run/cdi/management.nvidia.com-gpu.yaml
+      /var/run/cdi/k8s.gpu.amd.com-gpu_*
+    )], 'in /var/run/cdi only the two NVIDIA specs and the AMD DRA driver\'s transient specs, never the directory' );
+  is_deeply( [ $cmd =~ m{(/etc/cdi\S*)}g ], [], 'nothing in /etc/cdi' );
   unlike( $_, qr/["\$`\\']/, 'the warning text is inert inside double quotes' ) for $TC_WARNING, $IPT_WARNING;
 };
 
@@ -331,10 +354,12 @@ SKIP: {
         ip => "case \"\$1 \$2\" in \"link del\") exit 0;; esac\nexit 1\n",
       );
       my $log = $r->{log};
-      like( $log, qr{^rm -rf --one-file-system /usr/local/bin/cilium /opt/cni /run/k3s /usr/local/nvidia /var/run/cdi/k8s\.device-plugin\.nvidia\.com-gpu\.json /var/run/cdi/management\.nvidia\.com-gpu\.yaml$}m,
+      # The AMD pattern as /bin/sh hands it on: unexpanded here, or the
+      # driver's specs should this machine have any.
+      like( $log, qr{^rm -rf --one-file-system /usr/local/bin/cilium /opt/cni /run/k3s /usr/local/nvidia /var/run/cdi/k8s\.device-plugin\.nvidia\.com-gpu\.json /var/run/cdi/management\.nvidia\.com-gpu\.yaml(?: /var/run/cdi/k8s\.gpu\.amd\.com-gpu_\S+)+$}m,
         'the leftover paths go, never recursing into a mount below them' );
-      unlike( $log, qr{^rm -rf [^\n]*(?:/etc/cdi|/var/run/cdi(?:\s|$)|/usr/bin/nvidia)}m,
-        'not /etc/cdi, not /var/run/cdi whole, not the host nvidia binaries' );
+      unlike( $log, qr{^rm -rf [^\n]*(?:/etc/cdi|/var/run/cdi/?(?:\*|\s|$)|/usr/bin/nvidia)}m,
+        'not /etc/cdi, not /var/run/cdi whole or every file in it, not the host nvidia binaries' );
       like( $log, qr{^rm -rf /sys/fs/bpf/cilium /sys/fs/bpf/tc/globals/cilium_\*}m,
         'the pinned links and maps go -- unpinning a link Cilium no longer holds detaches its program' );
       for my $l (qw( cilium_host cilium_net cilium_vxlan cilium_geneve cilium_wg0 )) {
@@ -693,6 +718,79 @@ SAVE
       is( $r->{env}{'rke2-server'}, "$PATH_LINE\n", 'the unit still reads it: left' );
       is( $r->{exit}, 1, 'the outcome check fails the line, as before' );
       like( $r->{stderr}, qr/^RKE2\/K3s is still installed after the uninstall: /m, 'for the binary, not the file' );
+    };
+
+    # ---- k105: the AMD DRA driver's CDI specs --------------------------------
+    #
+    # The shipped line with only its /var/run/cdi/ moved into a temp dir, so
+    # the pattern is expanded by /bin/sh against real files. The rm stub
+    # removes for real, but only below that dir.
+
+    my $UID = '0b0c7d2e-5f1a-4e1b-9c55-2a7d0e9b1f3a';
+    # What is not the driver's: nvidia-cdi-refresh, amd-ctk, the same vendor
+    # without the transient "_", NVIDIA's own DRA driver.
+    my @others = ( 'nvidia.yaml', 'amd.json', 'k8s.gpu.amd.com-gpu.yaml', "k8s.gpu.nvidia.com-claim_$UID.yaml" );
+
+    # $files: the names to create in the CDI dir; undef for no CDI dir at all.
+    my $cdi_run = sub {
+      my ( $files ) = @_;
+      my $root = tempdir( CLEANUP => 1 );
+      my $cdi  = "$root/cdi";
+      if ($files) {
+        mkdir $cdi or die "$cdi: $!";
+        spew( "$cdi/$_", "cdiVersion: 0.6.0\n" ) for @$files;
+      }
+      ( my $line = $cmd ) =~ s{/var/run/cdi/}{$cdi/}g;
+      my $r = run_line( $line,
+        ( map { $_ => "exit 0\n" } qw( tc umount iptables-save iptables-restore ) ),
+        ip => "exit 1\n",
+        rm => "for a; do case \"\$a\" in $cdi/*) $RM -rf -- \"\$a\";; esac; done\nexit 0\n",
+      );
+      $r->{line} = $line;
+      $r->{cdi}  = $cdi;
+      $r->{left} = -d $cdi ? do {
+        opendir my $dh, $cdi or die "$cdi: $!";
+        [ sort grep { !/\A\.\.?\z/ } readdir $dh ];
+      } : undef;
+      return $r;
+    };
+
+    subtest "k105: the AMD DRA driver's CDI specs go, no other file in the directory" => sub {
+      plan skip_all => 'no rm to hand to the stubs' unless $RM;
+      my $r = $cdi_run->( [
+        'k8s.gpu.amd.com-gpu_common.yaml', "k8s.gpu.amd.com-gpu_$UID.yaml", "k8s.gpu.amd.com-gpu_$UID-2.json",
+        'k8s.device-plugin.nvidia.com-gpu.json', 'management.nvidia.com-gpu.yaml',
+        @others,
+      ] );
+      unlike( $r->{line}, qr{/var/run/cdi}, 'every /var/run/cdi path of the line points into the temp dir' );
+      is_deeply( $r->{left}, [ sort @others ],
+        "the driver's _common and per-claim specs and the two NVIDIA specs are gone, every other spec stays" );
+      like( $r->{log}, qr{^rm -rf --one-file-system [^\n]* \Q$r->{cdi}\E/k8s\.gpu\.amd\.com-gpu_common\.yaml}m,
+        'expanded by the shell, in the leftover rm' );
+      SKIP: {
+        skip 'this machine carries Cilium state itself', 2 if machine_has_residue();
+        is( $r->{stderr}, '', 'nothing on stderr' );
+        is( $r->{status}, 0, 'exit 0' );
+      }
+    };
+
+    subtest 'k105: no AMD spec there, or no CDI dir: the pattern is harmless' => sub {
+      plan skip_all => 'no rm to hand to the stubs' unless $RM;
+      for my $case ( [ 'other specs only' => [@others] ], [ 'an empty CDI dir' => [] ], [ 'no CDI dir' => undef ] ) {
+        my ( $what, $files ) = @$case;
+        my $r = $cdi_run->($files);
+        like( $r->{log}, qr{^rm -rf --one-file-system [^\n]* \Q$r->{cdi}\E/k8s\.gpu\.amd\.com-gpu_\*$}m,
+          "$what: the pattern reaches rm unexpanded" );
+        is_deeply( $r->{left}, $files ? [ sort @$files ] : undef, "$what: nothing else removed" );
+        like( $r->{log}, qr/^umount /m, "$what: the line goes on past it" );
+        SKIP: {
+          skip 'this machine carries Cilium state itself', 4 if machine_has_residue();
+          is( $r->{stderr}, '', "$what: nothing on stderr" );
+          is( $r->{status}, 0, "$what: exit 0" );
+          is_deeply( [ $U->uninstall_warnings( $r->{stderr} ) ], [], "$what: no warning" );
+          is( $U->uninstall_failure( $r->{exit}, $r->{stderr} ), undef, "$what: no failure" );
+        }
+      }
     };
   };
 }

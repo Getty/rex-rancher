@@ -177,8 +177,18 @@ toolkit) and its two CDI specs
 C</var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json> and
 C</var/run/cdi/management.nvidia.com-gpu.yaml>, in the same C<rm -rf>. Without
 them a re-join has rke2 take the operator's runtime from the leftover toolkit
-configuration at start. Not removed: C</etc/cdi> (Rex::GPU's own specs), the
-rest of C</var/run/cdi>, the host driver, C</usr/bin/nvidia-*>;
+configuration at start;
+
+=item * what ROCm's GPU DRA driver (L<Rex::Rancher::K8s/deploy_amd_dra_driver>)
+leaves: its CDI specs C</var/run/cdi/k8s.gpu.amd.com-gpu_*>, the C<_common>
+one and one for each claim it prepared, in the same C<rm -rf>. The driver
+removes a claim's spec only when the kubelet unprepares that claim, which
+no longer happens once the distribution is gone, and keeps the C<_common>
+one; until the next reboot nothing else removes them. On a host without
+such a spec the pattern matches nothing, goes to C<rm> as it is and is
+ignored there. Not removed, for either vendor: C</etc/cdi> (Rex::GPU's own
+specs), any other file in C</var/run/cdi>, the host driver,
+C</usr/bin/nvidia-*>;
 
 =item * Cilium's datapath: the C<clsact> qdisc of every device carrying a
 Cilium tc program (with C<tc> installed, see below); the pins in
@@ -339,8 +349,11 @@ uninstall script, and Cilium's devices, iptables chains, tc attachments and
 ip rules are removed, as is the C</etc/default/rke2-server> or
 C<-agent> file Rex::Rancher wrote for the NVIDIA runtime -- only when it
 holds nothing but that C<PATH> line; an admin's file stays (see
-L</uninstall_cmd>). It runs only when called; no install function calls
-it.
+L</uninstall_cmd>). What the GPU stacks left goes as well: the NVIDIA GPU
+Operator's toolkit and its two CDI specs, and the CDI specs of ROCm's GPU
+DRA driver, C</var/run/cdi/k8s.gpu.amd.com-gpu_*>; no other file in
+C</var/run/cdi>, nothing in C</etc/cdi>. It runs only when called; no
+install function calls it.
 
 Logs every L</uninstall_warnings> as a warning -- no C<tc> on the host, or
 no iptables backend with both C<-save> and C<-restore>, so that part of
@@ -446,12 +459,24 @@ sub _env_files_cmd {
 # these files, not /var/run/cdi (other specs live there), not /etc/cdi
 # (Rex::GPU writes its own specs there with gpu.toolkit false), no host
 # driver, no /usr/bin/nvidia-*. Distribution-independent.
+#
+# And the CDI specs of ROCm's DRA driver (deploy_amd_dra_driver, k105): vendor
+# k8s.gpu.amd.com, class gpu, so k8s.gpu.amd.com-gpu_common and one
+# k8s.gpu.amd.com-gpu_<claim uid> per prepared claim -- the CDI library's
+# transient spec names, the extension appended. The driver deletes a claim's
+# spec only on the kubelet's unprepare, which never comes once the
+# distribution is gone, and never deletes _common: without this they stay
+# until the reboot clears /var/run. The pattern needs the "_": a spec of
+# that vendor without it is not one of the driver's transient specs.
+# Unmatched, the shell hands the pattern to rm as it is, and rm -f ignores a
+# path that is not there.
 sub _leftover_paths {
   qw(
     /usr/local/bin/cilium /opt/cni /run/k3s
     /usr/local/nvidia
     /var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json
     /var/run/cdi/management.nvidia.com-gpu.yaml
+    /var/run/cdi/k8s.gpu.amd.com-gpu_*
   )
 }
 
