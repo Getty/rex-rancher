@@ -12,15 +12,15 @@ API is **plain functions** via `Rex::Exporter`; rke2 and k3s differ in one Moo o
 
 | Module | Exports | Owns |
 |---|---|---|
-| `Rex::Rancher` | `rancher_deploy_server`, `rancher_deploy_agent`, `rancher_scan_known_hosts` (+ re-exports of `wait_for_api`, `untaint_node`, `deploy_nvidia_device_plugin`) | the two full pipelines, connection guard, kubeconfig save/patch |
+| `Rex::Rancher` | `rancher_deploy_server`, `rancher_deploy_agent`, `rancher_scan_known_hosts` (+ re-exports of `wait_for_api`, `untaint_node`, `deploy_nvidia_device_plugin`, `deploy_amd_device_plugin`) | the two full pipelines, connection guard, kubeconfig save/patch, which device plugins step 10 deploys (`_gpu_vendor_plan`) |
 | `Rex::Rancher::Node` | `prepare_node` | hostname, tz, locale, NTP, swap off, kernel modules, sysctl |
 | `Rex::Rancher::Server` | `install_server`, `get_kubeconfig`, `fetch_kubeconfig`, `patch_kubeconfig_server`, `get_token`, `update_registries` | control-plane install, `config.yaml`, `registries.yaml` |
 | `Rex::Rancher::Agent` | `install_agent` | worker join |
 | `Rex::Rancher::Cilium` | `install_cilium`, `upgrade_cilium`, `ensure_gateway_api_crds` | Cilium CLI + Helm values |
-| `Rex::Rancher::K8s` | `wait_for_api`, `control_plane_version`, `deploy_nvidia_device_plugin`, `untaint_node` | local K8s API ops |
+| `Rex::Rancher::K8s` | `wait_for_api`, `control_plane_version`, `deploy_nvidia_device_plugin`, `untaint_node`, `deploy_amd_device_plugin`, `deploy_amd_node_labeller`, `deploy_amd_dra_driver`, `deploy_amd_metrics_exporter`, `remove_amd_device_plugin`, `remove_amd_node_labeller`, `remove_amd_dra_driver`, `remove_amd_metrics_exporter` | local K8s API ops: API wait, control-plane version, taints; the GPU objects — NVIDIA's device plugin, ROCm's device plugin, node labeller, DRA driver (`resource.k8s.io/v1` only, `_serves_dra_v1`), metrics exporter — created or updated by `_create_or_update`, removed by `_delete_if_present` (404 skipped, any other error dies); `_wait_for_gpu_resource` (`status.allocatable`, not capacity) |
 | `Rex::Rancher::Distribution` (+ `::RKE2`, `::K3s`) | — (Moo, `new_for($name, role => 'server'\|'agent')`, class loaded via `use_module`) | per-distribution paths, service, installer lines, start verb, version skew, the host steps server and agent share; `cilium_helm_defaults`, `needs_k8s_service_host`, `gateway_api_crd_chart`, `live_verified`, `unknown_distribution` |
-| `Rex::Rancher::Uninstall` | `uninstall_node` | `uninstall_cmd` (the uninstaller one-liner incl. Cilium state: ip rules IPv4 and IPv6, `/run/cilium`; GPU Operator leftovers `/usr/local/nvidia` + `/var/run/cdi/{k8s.device-plugin.nvidia.com-gpu.json,management.nvidia.com-gpu.yaml}`, never `/etc/cdi` or `/var/run/cdi` whole), `uninstall_failure`, `check_cilium_residue` / `cilium_residue` (install guard: Cilium datapath state an earlier cluster left behind) |
-| `Rex::Rancher::Options` | — | pure option checks: `resolve_install_method`, `check_cluster_cidr`, `check_kubeconfig_mode`, `check_ipam_mode` |
+| `Rex::Rancher::Uninstall` | `uninstall_node` | `uninstall_cmd` (the uninstaller one-liner incl. Cilium state: ip rules IPv4 and IPv6, `/run/cilium`; GPU Operator leftovers `/usr/local/nvidia` + `/var/run/cdi/{k8s.device-plugin.nvidia.com-gpu.json,management.nvidia.com-gpu.yaml}`; ROCm DRA driver's transient CDI specs `/var/run/cdi/k8s.gpu.amd.com-gpu_*` (`_common` + one per prepared claim; the `_` keeps that vendor's other specs out); never `/etc/cdi` or `/var/run/cdi` whole), `uninstall_failure`, `check_cilium_residue` / `cilium_residue` (install guard: Cilium datapath state an earlier cluster left behind) |
+| `Rex::Rancher::Options` | — | pure option checks: `resolve_install_method`, `check_cluster_cidr`, `check_kubeconfig_mode`, `check_ipam_mode`, `check_node_addresses` |
 | `Rex::Rancher::Checksum` | — | `expected_sha256`, `sha256_of`, `verify_sha256` for the artifact install |
 
 The distribution just wires these steps; the domain knowledge behind each step lives in
@@ -54,7 +54,10 @@ replacement: `kubernetes-cilium-concepts`; the four things that must line up for
    kubeconfig whose API never answered stops the deploy there — the server is installed,
    Cilium and the device plugin are not, a re-run picks up.
 9. `install_cilium(distribution => …)`.
-10. `deploy_nvidia_device_plugin` — only with `gpu => 1` **and** a saved kubeconfig.
+10. `deploy_nvidia_device_plugin` and/or `deploy_amd_device_plugin` — only with `gpu => 1`
+    **and** a saved kubeconfig, not with `gpu_device_plugin => 0`. AMD's when step 5's
+    `gpu_setup` set up an AMD GPU (NVIDIA's then only next to an NVIDIA GPU, and first),
+    else NVIDIA's.
 
 `rancher_deploy_agent` is the short arm: `preflight_agent` → `prepare_node` → gpu →
 `install_agent`. No kubeconfig, no Cilium, no device plugin — the worker joins an
