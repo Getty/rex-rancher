@@ -1,0 +1,33 @@
+---
+class: standard
+completed: 2026-11-04T01:27:25Z
+created: 2026-10-31T00:38:43Z
+id: 105
+priority: low
+started: 2026-11-03T18:44:52Z
+status: done
+tags:
+- uninstall
+- amd
+- dra
+title: 'Uninstall: CDI-Specs des AMD-DRA-Treibers bleiben in /var/run/cdi liegen'
+updated: 2026-11-04T01:49:40Z
+---
+
+Gefunden bei der Recherche zu k102: Rex::Rancher::Uninstall räumt in /var/run/cdi nur die NVIDIA-Specs ab. Der AMD-DRA-Treiber (k8s-gpu-dra-driver, k102) schreibt dort transiente Specs k8s.gpu.amd.com-gpu_*; nach einem uninstall_node bleiben sie bis zum nächsten Reboot liegen (/var/run ist tmpfs). Zu klären, ob uninstall_node sie mit entfernen soll; erst relevant, wenn k102 live auf einem Node lief.
+
+Go via kubernetes-ocp-9c (2026-11-03). k102 lief live auf amdlab. Worker rex-rancher-worker im Worktree .claude/worktrees/k105 (Branch k105-amd-cdi-uninstall, ab main 466228d).
+
+2026-11-04 00:49 Sitzung rex-rancher-merge am 2026-11-04 gestoppt (hing an einer Freigabeabfrage). Stand: WIP-Commit 44fefb0 auf Branch k105-amd-cdi-uninstall, Worktree .claude/worktrees/k105, Basis 466228d (zwei Commits hinter main ae3da12). Inhalt: uninstall_cmd nimmt /var/run/cdi/k8s.gpu.amd.com-gpu_* mit ins rm -rf, POD von Rex::Rancher::Uninstall und t/uninstall.t (Claims 9 und 10) ergänzt. Offen: Testlauf mit Load-Slot, Prüfung, Rebase auf main, Commit über den release-manager (ersetzt den WIP-Commit).
+
+Übernommen von Sitzung rex-rancher (Auftrag perl-developer-a8). WIP auf main ae3da12 rebased, jetzt 5b3e32c, konfliktfrei. Worker prüft Code, testet t/uninstall.t und volle Suite.
+
+2026-11-04 01:24 Prüfung WIP 5b3e32c (Worktree .claude/worktrees/k105): Das Muster /var/run/cdi/k8s.gpu.amd.com-gpu_* (Uninstall.pm:479) passt zu ROCm k8s-gpu-dra-driver v1.0.1 (9eb4e2e, cmd/gpu-kubeletplugin/cdi.go:48-52, 95, 104, 134; Offline-Kopie aus der k102-Recherche): cdiVendor k8s.gpu.amd.com, cdiClass gpu, _common über GenerateNameForTransientSpec, je Claim GenerateTransientSpecName(vendor, class, claimUID), also <vendor>-<class>_<id> plus .yaml (Konvention der CDI-Library; deren vendorte cache.go/spec.go habe ich offline nicht gelesen, das Glob hängt aber nicht an der Endung). _common löscht weder cdi.go noch Shutdown, in v1.0.1 wie auf main. Glob unter dash und bash geprüft: trifft nur Einträge mit dem Präfix k8s.gpu.amd.com-gpu_ im Verzeichnis, nie das Verzeichnis selbst, nicht k8s.gpu.amd.com-gpu.yaml, nvidia.yaml, amd.json, k8s.gpu.nvidia.com-claim_*, spec.*.tmp oder versteckte Dateien; ein Name mit Leerzeichen bleibt ein Wort. Trifft es nichts, geht das Wort unverändert an rm -f, exit 0, dazu 2>/dev/null || true. Kein einfaches Quote. POD (Uninstall.pm:182-191, 352-356) und Kommentar (463-472) stimmen mit dem Code. Keine Änderung nötig.
+
+2026-11-04 01:25 Tests offline: prove -lv t/uninstall.t -> Files=1, Tests=10, Result: PASS, keine Skips (k105-Subtests mit 5 und 21 Asserts grün). prove -lr t/ -> Files=45, Tests=1741, Result: PASS, keine Datei übersprungen. 9 Mutanten des Musters in isolierten Kopien (Muster fehlt, k8s.gpu.amd.com-*, /var/run/cdi/*, ohne _, nur _common.yaml, plus /var/run/cdi, plus /var/run/cdi/, plus /run/cdi/..., vor den NVIDIA-Specs) fallen alle rot (9 bis 14 Asserts), die unveränderte Kopie bleibt grün. Claim 10 fängt die inhaltlichen Mutanten auch unabhängig vom Text-Claim 9. Live unverifiziert: die Dateinamen auf einem echten Node hat niemand gesehen (der k102-Livelauf hat /var/run/cdi nicht gelistet), und uninstall_node ist auf keinem AMD-DRA-Node gelaufen. Also found (optional, kein Scope): die POD von remove_amd_dra_driver (K8s.pm um Zeile 769) nennt die CDI-Specs als nicht entfernt; das stimmt weiterhin, ein Verweis auf uninstall_node wäre aber hilfreich.
+
+2026-11-04 01:25 Geprüft, nichts geändert: der WIP 5b3e32c (Branch k105-amd-cdi-uninstall, auf main ae3da12) ist inhaltlich commit-bereit. Der Worktree ist sauber, nichts uncommittet; der release-manager ersetzt den WIP per reset --soft main durch den richtigen Commit samt Changes-Eintrag (Entwurf im Bericht an den Orchestrator). uninstall.t: Files=1, Tests=10, Result: PASS. Volle Suite: Files=45, Tests=1741, Result: PASS. Alle 9 Muster-Mutanten rot. Grün beweist nur das Kompilat und die Shell-Logik gegen Stubs. Live unverifiziert: uninstall_node auf einem Node mit dem AMD-DRA-Treiber, und die tatsächlichen Dateinamen in /var/run/cdi.
+
+Committed as e5d376d on main (ff). Live unbestätigt: uninstall_node auf einem AMD-DRA-Node.
+
+2026-11-04 01:49 Live geprüft (Hub, 2026-11-04, synapse 10.230.30.50, Ubuntu 24.04, ohne Kubernetes, über Rex::LibSSH): die AMD-Musterzeile aus _leftover_paths in der Form des echten uninstall_cmd (rm -rf --one-file-system … 2>/dev/null || true) gegen Platzhalter in /var/run/cdi. Weg: k8s.gpu.amd.com-gpu_common.yaml, k8s.gpu.amd.com-gpu_<claim>.yaml. Geblieben: k8s.gpu.amd.com-gpu.yaml (ohne _), example.com-gpu.yaml, k8s.device-plugin.nvidia.com-gpu.json. Exit 0. Kein volles uninstall_node (Host ohne Kubernetes, laufende Dienste). /var/run/cdi danach wieder entfernt wie vorher. main 01fc3ef gepusht.
