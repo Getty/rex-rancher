@@ -1,0 +1,30 @@
+---
+class: standard
+completed: 2026-11-04T01:41:29Z
+created: 2026-10-31T00:07:04Z
+id: 98
+priority: low
+started: 2026-11-03T18:45:01Z
+status: done
+tags:
+- pod
+- docs
+title: 'podchecker: unaufgelöste POD-Links auf rancher_deploy_server/rancher_deploy_agent'
+updated: 2026-11-04T01:41:34Z
+---
+
+Gefunden in k95: podchecker meldet die Links auf rancher_deploy_server und rancher_deploy_agent als unaufgelöst, weil die von Author::GETTY gewebten method-Überschriften die Signatur mit opts tragen. Vor k95 waren es 7 solche Links, k95 fügt einen hinzu. Zu klären: Link-Form oder Überschrift ändern; vorher prüfen, wie metacpan die Anker rendert.
+
+Go via kubernetes-ocp-9c (2026-11-03). Worker rex-rancher-worker im Worktree .claude/worktrees/k98 (Branch k98-pod-method-links, ab main ae3da12).
+
+2026-11-04 00:49 Sitzung rex-rancher-merge am 2026-11-04 gestoppt. Worktree .claude/worktrees/k98 (Branch k98-pod-method-links, Basis ae3da12) ist unverändert, der Worker hatte noch nichts geschrieben: Die Karte beginnt von vorn.
+
+Übernommen von Sitzung rex-rancher (Auftrag perl-developer-a8). Worktree k98 per ff auf main cd5e384. MetaCPAN-Befund (API fastapi.metacpan.org/v1/pod/Rex::Rancher?content-type=text/html, Renderer von metacpan.org; metacpan.org selbst blockt automatisierte Abrufe): =method rancher_deploy_server(%opts) wird zu <h2 id="rancher_deploy_server(%opts)"><a id="rancher_deploy_server"></a><a id="rancher_deploy_server-opts"></a>; rancher_scan_known_hosts($host, %opts) zu id "rancher_scan_known_hosts($host,-%opts)" plus rancher_scan_known_hosts und rancher_scan_known_hosts-host-opts. Die heutigen L</rancher_deploy_server> lösen auf MetaCPAN also auf (Zusatzanker), nur podchecker findet keinen Knoten. Das MetaCPAN-Inhaltsverzeichnis verlinkt #rancher_deploy_server(%25opts), d. h. die volle Überschrift als Sektion trifft dort die h2-id. Vorschlag: L<rancher_deploy_server|/"rancher_deploy_server(%opts)">.
+
+Gegenprobe mit synthetischem POD-Schnipsel (podchecker lokal + MetaCPAN-Renderer über fastapi.metacpan.org/v1/pod_render): L<rancher_deploy_server|/"rancher_deploy_server(%opts)"> -> podchecker ok, MetaCPAN href #rancher_deploy_server(%25opts) = h2-id. L<rancher_scan_known_hosts|/"rancher_scan_known_hosts($host, %opts)"> -> podchecker ok, href #rancher_scan_known_hosts(%24host%2C-%25opts) = h2-id. L</rancher_deploy_server> -> podchecker unresolved, MetaCPAN #rancher_deploy_server (Zusatzanker, löst dort auf).
+
+2026-11-04 01:39 Bestand am gewebten POD (dzil build auf cd5e384, podchecker je .pm): 67 unaufgelöste interne Links, alle Klasse L</name> auf gewebte =head2 mit Signatur: Rex::Rancher 8 (rancher_deploy_server 7, rancher_deploy_agent 1), Cilium 13 (install_cilium 11, upgrade_cilium 2), K8s 32 (12 Funktionen, alle (%opts)), Server 14 (install_server 8, get_kubeconfig($distribution) 3, fetch_kubeconfig 1, patch_kubeconfig_server($content, $server) 2). Agent.pm im Build sauber (=head2 install_agent ohne Signatur); der Treffer dort kam nur aus dem Quell-Lauf, wo =method unbekannt ist. Keine L<Text|/name>-, mehrzeiligen, L<< >>- oder Anführungszeichen-Formen vorhanden. Umgestellt auf L<name|/"name(SIGNATUR)">, Sektion wörtlich = =method-Text; 64 Zeilen in 4 Dateien, jede Zeile unterscheidet sich nur in der Link-Form (maschinell geprüft). Zeilen nicht neu umbrochen. Externe L<Modul/name> unverändert.
+
+2026-11-04 01:39 Fertig, commit-bereit im Worktree .claude/worktrees/k98 (nur POD: lib/Rex/Rancher.pm, Cilium.pm, K8s.pm, Server.pm, 64+/64-). Nachweis: neuer dzil build + podchecker über alle 13 .pm: 67 -> 0 unaufgelöste Links, alle 'pod syntax OK'. MetaCPAN pod_render mit gewebtem Server.pm-Abschnitt get_kubeconfig..patch_kubeconfig_server: href #patch_kubeconfig_server(%24content%2C-%24server), #fetch_kubeconfig(%25opts), #get_kubeconfig(%24distribution) dekodiert = h2-id, Linktext = Funktionsname. Lokal Pod::Simple::XHTML (pod2html): alte Form zeigte auf #patch_kubeconfig_server, das es dort nicht gibt; neue trifft die h2-id. Nebeneffekt perldoc/man: der Name erscheint ohne Anführungszeichen. Sonstiges (nicht behoben): podchecker -warnings -warnings meldet 13 'multiple occurrences of link target' (doppelte =item kubeconfig/version/... unter mehreren Funktionen), identisch auf main; kein 'Wide character'. prove -lr t/: Files=45, Tests=1741, Result: PASS; AUTHOR_TESTING=1 t/author-pod-syntax.t im Build PASS (Test::Pod prüft keine Link-Auflösung). Changes-Vorschlag: 'Point the documentation's links to functions at their full headings, so podchecker and pod2html resolve them as MetaCPAN already did.'
+
+Committed as 01fc3ef, main fast-forwarded to 01fc3ef.
