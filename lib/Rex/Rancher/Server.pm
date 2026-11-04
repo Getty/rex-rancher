@@ -285,7 +285,7 @@ own C<0600 root:root> applies.
 That file holds the cluster admin's client certificate and key: with a mode
 others can read (C<'0644'>), every local account on the server node is
 cluster admin. Nothing in Rex::Rancher needs more than the default;
-L</get_kubeconfig> and the Cilium CLI read the file as root.
+L<get_kubeconfig|/"get_kubeconfig($distribution)"> and the Cilium CLI read the file as root.
 
 =item C<registries>
 
@@ -424,9 +424,9 @@ sub install_server {
   # { version => ..., install_method => 'script', cluster_cidr => ...,
   #   kubeconfig_mode => ..., node_ip => [...], node_external_ip => undef }
 
-Everything L</install_server> checks before it writes or installs, with the
+Everything L<install_server|/"install_server(%opts)"> checks before it writes or installs, with the
 same options and in the same order, and nothing else: it only reads the
-host. L</install_server> runs it first thing; L<Rex::Rancher/rancher_deploy_server>
+host. L<install_server|/"install_server(%opts)"> runs it first thing; L<Rex::Rancher/rancher_deploy_server>
 runs it before it prepares the node, and a caller that prepares the node
 on its own can do the same, so a refused host is left as it was. Not
 exported.
@@ -453,7 +453,7 @@ under C<hold_running>, else C<version>;
 
 =back
 
-Dies as L</install_server> would. Returns a hashref: the C<version> this run
+Dies as L<install_server|/"install_server(%opts)"> would. Returns a hashref: the C<version> this run
 installs (held, pinned, or C<undef> for the stable channel), the
 C<install_method>, the C<cluster_cidr>, the C<kubeconfig_mode>, and
 C<node_ip> and C<node_external_ip> as arrayrefs of addresses (each C<undef>
@@ -571,8 +571,8 @@ a string. The file is read directly via C<cat> over SSH; no SFTP is used.
 C<$distribution> defaults to C<rke2>.
 
 Note: RKE2 and K3s both write a loopback server address
-(C<https://127.0.0.1>, see L</patch_kubeconfig_server>). The content comes
-back as the node has it; L</fetch_kubeconfig> points it at an address that
+(C<https://127.0.0.1>, see L<patch_kubeconfig_server|/"patch_kubeconfig_server($content, $server)">). The content comes
+back as the node has it; L<fetch_kubeconfig|/"fetch_kubeconfig(%opts)"> points it at an address that
 works from elsewhere and saves it, as
 L<Rex::Rancher/rancher_deploy_server> does.
 
@@ -599,8 +599,8 @@ sub get_kubeconfig {
   );
 
 The server's kubeconfig for use from this machine: read from the host Rex is
-connected to (L</get_kubeconfig>, over the exec channel, no SFTP), pointed at
-C<server> (L</patch_kubeconfig_server>), passed through C<filter> if given,
+connected to (L<get_kubeconfig|/"get_kubeconfig($distribution)">, over the exec channel, no SFTP), pointed at
+C<server> (L<patch_kubeconfig_server|/"patch_kubeconfig_server($content, $server)">), passed through C<filter> if given,
 written to C<file> if given, and returned. The CA and the admin client
 certificate and key are kept.
 
@@ -707,7 +707,7 @@ sub fetch_kubeconfig {
 
 Return C<$content>, a kubeconfig as RKE2 or K3s wrote it, with its server
 URL pointed at C<$server>. Pure: no host, no connection, so it serves a
-kubeconfig read over any channel, not only through L</get_kubeconfig>.
+kubeconfig read over any channel, not only through L<get_kubeconfig|/"get_kubeconfig($distribution)">.
 
 RKE2 and K3s write C<https://127.0.0.1:PORT>, or C<https://[::1]:PORT> when
 the cluster's (first) service CIDR is IPv6; both become
@@ -1087,7 +1087,7 @@ installing, configuring, and managing server nodes.
 By default the official install script at L<https://get.rke2.io> is fetched
 and run via C<curl -sfL … | sh ->; with C<install_method =E<gt> 'artifact'>
 the checksum-verified release tarball is installed instead (see
-L</install_server>). The service is started with C<--no-block> to avoid
+L<install_server|/"install_server(%opts)">). The service is started with C<--no-block> to avoid
 systemd's 90-second activation timeout (RKE2's first start pulls many
 container images), then polled with C<systemctl is-active> for up to 10
 minutes; a C<failed> or never-active service dies with its journal tail.
@@ -1136,7 +1136,7 @@ Before any of that, the installed binary is compared with the running one
 onto, with a warning, and a jump of more than one minor or a downgrade
 (possible only when the stable channel could not be resolved before the
 install, or moved in between) dies without a restart. See C<version> under
-L</install_server>.
+L<install_server|/"install_server(%opts)">.
 
 Nothing changed: C<systemctl start>, the service keeps running. Changes
 made by hand or left by an interrupted earlier run count as well. What
@@ -1150,7 +1150,7 @@ default), not in parallel. K3s is restarted on every run, as its install
 script rewrites the unit each time, except onto an unpinned new minor, and
 except with C<hold_running>: then it is restarted as RKE2 is, and also when
 the install script changed the content of its unit or env file (see
-C<hold_running> under L</install_server>).
+C<hold_running> under L<install_server|/"install_server(%opts)">).
 
 =head2 K3s installation
 
@@ -1166,7 +1166,7 @@ C</var/lib/rancher/k3s/agent/etc/containerd> is removed before that
 restart, as on RKE2. Then the kubeconfig wait. The token is read from
 C<config.yaml> and never passed on the command line. Traefik and
 ServiceLB are disabled by default (C<disable> in C<config.yaml>, see
-L</install_server>) to leave room for Cilium and external load balancers.
+L<install_server|/"install_server(%opts)">) to leave room for Cilium and external load balancers.
 
 =head2 Config layout
 
@@ -1178,7 +1178,7 @@ so that Cilium is the only one: on RKE2 C<cni: none> and
 C<disable-kube-proxy: true>, on K3s C<flannel-backend: none>,
 C<disable-network-policy: true>, C<disable-kube-proxy: true> and
 C<cluster-cidr: 10.42.0.0/16>; on both, Cilium's kube-proxy replacement takes
-over. See L</install_server>'s C<cilium>.
+over. See L<install_server|/"install_server(%opts)">'s C<cilium>.
 
 Registry mirrors are written to C<registries.yaml> in the same directory.
 Both files are C<0600 root:root>: C<config.yaml> holds the join token,

@@ -533,13 +533,13 @@ sub rancher_deploy_server {
 Full worker node deployment: prepare the node, optionally set up GPU
 support, install the Kubernetes agent, and join the existing cluster.
 
-The pipeline is shorter than L</rancher_deploy_server> — there is no
+The pipeline is shorter than L<rancher_deploy_server|/"rancher_deploy_server(%opts)"> — there is no
 Cilium installation or kubeconfig retrieval. GPU host setup via
 C<gpu =E<gt> 1> (and C<gpu_setup>, C<reboot>, C<gpu_amd_integrated>) works
 identically to the server case, the warning about AMD GPUs a L<Rex::GPU> without AMD support leaves
 alone included; there is no device plugin step, so C<gpu_device_plugin> has
 no effect here. The worker's GPUs are advertised by the cluster-wide device
-plugin DaemonSet: the one L</rancher_deploy_server> deployed for its own
+plugin DaemonSet: the one L<rancher_deploy_server|/"rancher_deploy_server(%opts)"> deployed for its own
 GPUs, or one deployed with L<Rex::Rancher::K8s/deploy_nvidia_device_plugin>
 or L<Rex::Rancher::K8s/deploy_amd_device_plugin>.
 
@@ -563,14 +563,14 @@ Override the node name registered in Kubernetes (optional).
 
 =item C<distribution>, C<version>, C<hold_running>, C<install_method>, C<node_labels>, C<node_ip>, C<node_external_ip>, C<registries>, C<nvidia_runtime_path>
 
-As for L</rancher_deploy_server>; passed to
+As for L<rancher_deploy_server|/"rancher_deploy_server(%opts)">; passed to
 L<Rex::Rancher::Agent/install_agent>. With C<hold_running> the agent keeps
 its own version, still checked against the control plane with
 C<kubeconfig_file>.
 
 =item C<kubeconfig_file>
 
-The cluster's kubeconfig, as L</rancher_deploy_server> saved it; read, not
+The cluster's kubeconfig, as L<rancher_deploy_server|/"rancher_deploy_server(%opts)"> saved it; read, not
 written. Passed to L<Rex::Rancher::Agent/install_agent> as C<kubeconfig>:
 the agent dies before the node is prepared (see below) when its version is
 of a newer minor than the control plane's. Without it that is not checked.
@@ -578,12 +578,12 @@ Optional.
 
 =item C<hostname>, C<domain>, C<timezone>, C<locale>, C<ntp>
 
-As for L</rancher_deploy_server>; passed to
+As for L<rancher_deploy_server|/"rancher_deploy_server(%opts)">; passed to
 L<Rex::Rancher::Node/prepare_node>.
 
 =item C<gpu>, C<gpu_setup>, C<reboot>, C<gpu_amd_integrated>
 
-As for L</rancher_deploy_server> (step 2).
+As for L<rancher_deploy_server|/"rancher_deploy_server(%opts)"> (step 2).
 
 =back
 
@@ -1225,8 +1225,8 @@ unless the missing package source only shows once the package index is
 refreshed (e.g. Ubuntu, where no fitting driver package is found, or a
 driver source whose repository carries no Fabric Manager of exactly the
 driver's version): then the package sources have already been prepared
-(C<apt-get update>, repositories added or enabled). The die is not caught: L</rancher_deploy_server> and
-L</rancher_deploy_agent> abort with it. It does, however, come after
+(C<apt-get update>, repositories added or enabled). The die is not caught: L<rancher_deploy_server|/"rancher_deploy_server(%opts)"> and
+L<rancher_deploy_agent|/"rancher_deploy_agent(%opts)"> abort with it. It does, however, come after
 L<Rex::Rancher::Node/prepare_node> has already run, so base packages,
 hostname, timezone, locale, swap, kernel modules and sysctl are already
 changed; no Kubernetes distribution has been

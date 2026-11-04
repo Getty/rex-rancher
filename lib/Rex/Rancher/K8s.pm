@@ -220,7 +220,7 @@ sub deploy_nvidia_device_plugin {
 Deploy ROCm's Kubernetes device plugin for AMD GPUs
 (L<https://github.com/ROCm/k8s-device-plugin>) as a DaemonSet to
 C<kube-system> and wait for C<amd.com/gpu> to become allocatable on at least
-one node. The counterpart of L</deploy_nvidia_device_plugin>, run the same way:
+one node. The counterpart of L<deploy_nvidia_device_plugin|/"deploy_nvidia_device_plugin(%opts)">, run the same way:
 locally via L<Kubernetes::REST>, no C<kubectl> or SSH to the cluster.
 
 The DaemonSet is upstream's C<k8s-ds-amdgpu-dp.yaml> of the pinned release,
@@ -252,7 +252,7 @@ B<It runs on every amd64 node>, and on one without the C<amdgpu> driver
 loaded the plugin exits, so its pod there stays in C<CrashLoopBackOff>. On a
 cluster with such nodes pass C<affinity> (below).
 
-Not on the nodes of L</deploy_amd_dra_driver>: a node's AMD GPUs are
+Not on the nodes of L<deploy_amd_dra_driver|/"deploy_amd_dra_driver(%opts)">: a node's AMD GPUs are
 allocated either by this plugin or by DRA, not both (ROCm's device metrics
 exporter,
 L<https://github.com/ROCm/device-metrics-exporter/blob/v1.5.3/pkg/exporter/scheduler/k8s.go#L94-L97>);
@@ -269,7 +269,7 @@ as root needs those groups as C<supplementalGroups>, or the nodes need K3s'
 and RKE2's C<nonroot-devices> option, which Rex::Rancher does not set.
 
 Every object already in the cluster is updated (C<resourceVersion> is
-fetched before the update), as in L</deploy_nvidia_device_plugin>. Then,
+fetched before the update), as in L<deploy_nvidia_device_plugin|/"deploy_nvidia_device_plugin(%opts)">. Then,
 unless C<wait =E<gt> 0>, it polls up to 24 times (2-minute timeout) for
 C<amd.com/gpu> in any node's C<status.allocatable> (with
 C<resource_naming =E<gt> 'mixed'>, for any C<amd.com/> resource). Not its
@@ -321,11 +321,11 @@ minutes and warn.
 =item C<node_labeller>
 
 If true, also deploy upstream's node labeller exactly as
-L</deploy_amd_node_labeller> does, with this call's C<version> and
+L<deploy_amd_node_labeller|/"deploy_amd_node_labeller(%opts)"> does, with this call's C<version> and
 C<affinity>. Default: C<0>; L<Rex::Rancher/rancher_deploy_server> deploys
 the plugin without it. A labeller meant for other nodes than the plugin —
 every AMD GPU node, the plugin only on some — is deployed with
-L</deploy_amd_node_labeller> and its own C<affinity> instead.
+L<deploy_amd_node_labeller|/"deploy_amd_node_labeller(%opts)"> and its own C<affinity> instead.
 
 =item C<affinity>
 
@@ -412,7 +412,7 @@ sub deploy_amd_device_plugin {
 
 Deploy upstream's node labeller from ROCm's device plugin project
 (C<k8s-ds-amdgpu-labeller.yaml> of the release
-L</deploy_amd_device_plugin> pins) on its own, without the device plugin:
+L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)"> pins) on its own, without the device plugin:
 the ClusterRole C<cr-node-labeller> (C<get>, C<list>, C<watch>, C<update> on
 nodes), the ClusterRoleBinding C<labeller>, the ServiceAccount
 C<node-labeller-sa> and the DaemonSet C<amdgpu-labeller-daemonset> in
@@ -460,7 +460,7 @@ Default: C<1.31.0.11>, as for the plugin.
 =item C<affinity>
 
 A pod C<affinity> (hashref, as in a pod spec) for the labeller's DaemonSet,
-on top of the C<amd64> C<nodeSelector>; see L</deploy_amd_device_plugin> for
+on top of the C<amd64> C<nodeSelector>; see L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)"> for
 an example and why a label of your own selects more safely than Node Feature
 Discovery's. Anything but a hashref dies before the cluster is touched.
 
@@ -494,10 +494,10 @@ sub deploy_amd_node_labeller {
 
 =method remove_amd_device_plugin(%opts)
 
-Delete what L</deploy_amd_device_plugin> deploys for the plugin itself: the
+Delete what L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)"> deploys for the plugin itself: the
 DaemonSet C<amdgpu-device-plugin-daemonset> in C<kube-system> (its pods go
 with it). The node labeller is left alone; see
-L</remove_amd_node_labeller>.
+L<remove_amd_node_labeller|/"remove_amd_node_labeller(%opts)">.
 
 Idempotent: an object that is not there (the API answers 404) is logged and
 skipped. Any other error (a 403, no connection) dies. Locally via
@@ -532,14 +532,14 @@ sub remove_amd_device_plugin {
 
 =method remove_amd_node_labeller(%opts)
 
-Delete what L</deploy_amd_node_labeller> deploys, the DaemonSet first so no
+Delete what L<deploy_amd_node_labeller|/"deploy_amd_node_labeller(%opts)"> deploys, the DaemonSet first so no
 labeller pod runs on without its rights: the DaemonSet
 C<amdgpu-labeller-daemonset> and the ServiceAccount C<node-labeller-sa> in
 C<kube-system>, then the ClusterRoleBinding C<labeller> and the ClusterRole
 C<cr-node-labeller>. The labels it set on the nodes are not removed. The
 device plugin is left alone.
 
-Idempotent like L</remove_amd_device_plugin>: an object that is not there is
+Idempotent like L<remove_amd_device_plugin|/"remove_amd_device_plugin(%opts)">: an object that is not there is
 logged and skipped, any other error dies (and leaves the objects after it in
 place).
 
@@ -581,7 +581,7 @@ C<k8s-gpu-dra-driver-role-binding>, the ValidatingAdmissionPolicy
 C<resourceslices-policy-k8s-gpu-dra-driver> and its binding of the same
 name, the DeviceClass C<gpu.amd.com> and the DaemonSet
 C<k8s-gpu-dra-driver-kubeletplugin> in C<kube-system>. Objects already in
-the cluster are updated, as for L</deploy_amd_device_plugin>. Locally via
+the cluster are updated, as for L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)">. Locally via
 L<Kubernetes::REST>, like the rest of this module.
 
 Instead of a count such as C<amd.com/gpu> in the node's capacity, the plugin
@@ -655,7 +655,7 @@ B<DRA and the device plugin exclude each other per node>: ROCm's device
 metrics exporter takes the GPU pods of a node to be served by one of the
 two, not both
 (L<https://github.com/ROCm/device-metrics-exporter/blob/v1.5.3/pkg/exporter/scheduler/k8s.go#L94-L97>),
-and each would hand out the node's GPUs on its own. L</deploy_amd_device_plugin>
+and each would hand out the node's GPUs on its own. L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)">
 runs on every amd64 node unless its C<affinity> says otherwise: give the two
 separate nodes.
 
@@ -714,7 +714,7 @@ cluster is touched.
 =item C<affinity>
 
 A pod C<affinity> (hashref, as in a pod spec) for the DaemonSet, on top of
-the C<amd64> C<nodeSelector>; see L</deploy_amd_device_plugin> for an
+the C<amd64> C<nodeSelector>; see L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)"> for an
 example and why a node label of your own selects more safely than Node
 Feature Discovery's. Default: none, every amd64 node, as upstream. Anything
 but a hashref dies before the cluster is touched.
@@ -750,12 +750,12 @@ sub deploy_amd_dra_driver {
 
 =method remove_amd_dra_driver(%opts)
 
-Delete what L</deploy_amd_dra_driver> deploys, in reverse order, the
+Delete what L<deploy_amd_dra_driver|/"deploy_amd_dra_driver(%opts)"> deploys, in reverse order, the
 DaemonSet first so no plugin runs on without its rights: the DaemonSet, the
 DeviceClass C<gpu.amd.com>, the admission policy's binding and the policy,
 the ClusterRoleBinding, the ClusterRole and the ServiceAccount.
 
-Idempotent like L</remove_amd_device_plugin>: an object that is not there is
+Idempotent like L<remove_amd_device_plugin|/"remove_amd_device_plugin(%opts)">: an object that is not there is
 logged and skipped, any other error dies (and leaves the objects after it in
 place). On a cluster that does not serve C<resource.k8s.io/v1> the
 DeviceClass counts as not there. Locally via L<Kubernetes::REST>.
@@ -822,7 +822,7 @@ C<amdgpu-metrics-exporter-config> with the exporter's C<config.json>, the
 DaemonSet and the Service. All but the ConfigMap are named
 C<amdgpu-metrics-exporter>; ServiceAccount, ConfigMap, DaemonSet and Service
 are in C<kube-system>. Objects already in the cluster are updated, as for
-L</deploy_amd_device_plugin>. Locally via L<Kubernetes::REST>, like the rest
+L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)">. Locally via L<Kubernetes::REST>, like the rest
 of this module.
 
 Each of its pods serves the GPU metrics of its node in Prometheus format at
@@ -844,8 +844,8 @@ missing or stay 0
 L<https://github.com/ROCm/device-metrics-exporter/issues/353>; the platforms
 as C<docs/index.md> at v1.5.3 lists them).
 
-It allocates no GPUs and runs next to L</deploy_amd_device_plugin> or
-L</deploy_amd_dra_driver>: it finds the pods of a node's GPUs through the
+It allocates no GPUs and runs next to L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)"> or
+L<deploy_amd_dra_driver|/"deploy_amd_dra_driver(%opts)">: it finds the pods of a node's GPUs through the
 kubelet, whether the device plugin (C<amd.com/> resources) or the DRA driver
 (claims of driver C<gpu.amd.com>, which upstream calls beta, Kubernetes 1.34
 on) allocated them
@@ -945,7 +945,7 @@ before the cluster is touched.
 =item C<affinity>
 
 A pod C<affinity> (hashref, as in a pod spec) for the DaemonSet, on top of
-the C<amd64> C<nodeSelector>; see L</deploy_amd_device_plugin> for an
+the C<amd64> C<nodeSelector>; see L<deploy_amd_device_plugin|/"deploy_amd_device_plugin(%opts)"> for an
 example and why a node label of your own selects more safely than Node
 Feature Discovery's. Default: none, every amd64 node, as upstream. Anything
 but a hashref dies before the cluster is touched.
@@ -978,11 +978,11 @@ sub deploy_amd_metrics_exporter {
 
 =method remove_amd_metrics_exporter(%opts)
 
-Delete what L</deploy_amd_metrics_exporter> deploys, in reverse order: the
+Delete what L<deploy_amd_metrics_exporter|/"deploy_amd_metrics_exporter(%opts)"> deploys, in reverse order: the
 Service, the DaemonSet (its pods go with it), the ConfigMap, the
 ClusterRoleBinding, the ClusterRole and the ServiceAccount.
 
-Idempotent like L</remove_amd_device_plugin>: an object that is not there is
+Idempotent like L<remove_amd_device_plugin|/"remove_amd_device_plugin(%opts)">: an object that is not there is
 logged and skipped, any other error dies (and leaves the objects after it in
 place). Locally via L<Kubernetes::REST>.
 
@@ -2012,18 +2012,18 @@ C<gpu =E<gt> 1> (which one: L<Rex::Rancher/GPU hardware support>)
 
 =back
 
-L<Rex::Rancher::Agent/install_agent> uses L</control_plane_version> to keep
+L<Rex::Rancher::Agent/install_agent> uses L<control_plane_version|/"control_plane_version(%opts)"> to keep
 an agent from a newer minor version than the control plane.
 
 It can also be used standalone for post-deploy operations such as removing
 control-plane taints on single-node clusters, or deploying and removing the
 AMD device plugin and node labeller on nodes of your choosing
-(L</deploy_amd_node_labeller>, L</remove_amd_device_plugin>,
-L</remove_amd_node_labeller>), ROCm's DRA driver for AMD GPUs
-(L</deploy_amd_dra_driver>, L</remove_amd_dra_driver>) and ROCm's device
-metrics exporter (L</deploy_amd_metrics_exporter>,
-L</remove_amd_metrics_exporter>). L<Rex::Rancher>
-re-exports only L</wait_for_api>, L</untaint_node> and the two
+(L<deploy_amd_node_labeller|/"deploy_amd_node_labeller(%opts)">, L<remove_amd_device_plugin|/"remove_amd_device_plugin(%opts)">,
+L<remove_amd_node_labeller|/"remove_amd_node_labeller(%opts)">), ROCm's DRA driver for AMD GPUs
+(L<deploy_amd_dra_driver|/"deploy_amd_dra_driver(%opts)">, L<remove_amd_dra_driver|/"remove_amd_dra_driver(%opts)">) and ROCm's device
+metrics exporter (L<deploy_amd_metrics_exporter|/"deploy_amd_metrics_exporter(%opts)">,
+L<remove_amd_metrics_exporter|/"remove_amd_metrics_exporter(%opts)">). L<Rex::Rancher>
+re-exports only L<wait_for_api|/"wait_for_api(%opts)">, L<untaint_node|/"untaint_node(%opts)"> and the two
 C<deploy_*_device_plugin> functions; the others come from
 C<use Rex::Rancher::K8s>.
 

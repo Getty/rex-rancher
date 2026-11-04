@@ -114,7 +114,7 @@ ConfigMap disagree.)
 
 =item * C<pending-upgrade> or C<pending-rollback>, or C<pending-install>
 over a C<deployed> revision: dies before the host is touched, with the
-message of L</upgrade_cilium>. An earlier run was interrupted or another is
+message of L<upgrade_cilium|/"upgrade_cilium(%opts)">. An earlier run was interrupted or another is
 still running, and the deployed revision still carries the pod network; the
 message names the Secret to delete once no other deploy is running.
 
@@ -174,7 +174,7 @@ behaviour applies: C<cilium install> runs, and its "cannot re-use a name"
 error (the release already exists) counts as success, with a warning that
 version and values were not reconciled. Helm refuses to install over the
 existing release, so nothing about the running Cilium changes on this path;
-changing it needs C<kubeconfig>, here or with L</upgrade_cilium>.
+changing it needs C<kubeconfig>, here or with L<upgrade_cilium|/"upgrade_cilium(%opts)">.
 
 On both distributions C<kubeProxyReplacement=true> is passed to enable
 Cilium's eBPF-based kube-proxy replacement, so the server config must have
@@ -428,24 +428,24 @@ sub install_cilium {
 
 Upgrade an existing Cilium installation to a new version using
 C<cilium upgrade>, unconditionally. The Cilium CLI is updated first if
-needed. The same Helm values generation logic as L</install_cilium> is used,
+needed. The same Helm values generation logic as L<install_cilium|/"install_cilium(%opts)"> is used,
 and C<gateway_api> applies the CRDs the same way (restarting a running
 C<cilium-operator> when they were applied).
 
 C<kubeconfig> is required: without it the function dies before anything
-touches the host. It does the same, pointing to L</install_cilium>, when
+touches the host. It does the same, pointing to L<install_cilium|/"install_cilium(%opts)">, when
 the Helm release C<cilium> in C<kube-system> has no C<deployed> revision:
 C<cilium upgrade> is a Helm upgrade and cannot install, so a ConfigMap
 C<kube-system/cilium-config> or a C<cilium> DaemonSet without a deployed
 release is not enough. A release left C<failed>, C<pending-install>,
-C<uninstalling> or C<uninstalled> without one is what L</install_cilium>
+C<uninstalling> or C<uninstalled> without one is what L<install_cilium|/"install_cilium(%opts)">
 removes and installs again. A release stuck in C<pending-upgrade> or
 C<pending-rollback> (or C<pending-install> over a deployed revision) dies
-before the host as well, with the message of L</install_cilium> naming the
+before the host as well, with the message of L<install_cilium|/"install_cilium(%opts)"> naming the
 Secret to delete. A C<failed> upgrade over a deployed revision is upgraded
 again. The running
 configuration is read and kept exactly as in
-L</install_cilium> (IPAM mode and pool from C<kube-system/cilium-config>,
+L<install_cilium|/"install_cilium(%opts)"> (IPAM mode and pool from C<kube-system/cilium-config>,
 K3s C<k8sServiceHost> from the DaemonSet, C<operator.replicas> from the
 C<cilium-operator> Deployment), so an upgrade needs no values the caller has
 to look up first, and a change of IPAM mode or pool asked for in
@@ -457,7 +457,7 @@ Without the API none of that can be checked, and the generated values would
 be applied as they stand -- on RKE2 the default C<ipam.mode: kubernetes>
 switches a C<cluster-pool> cluster and its pods lose their addresses.
 
-Options are the same as L</install_cilium>, C<wait> and C<wait_duration>
+Options are the same as L<install_cilium|/"install_cilium(%opts)">, C<wait> and C<wait_duration>
 included, except that C<kubeconfig> is not optional.
 
   upgrade_cilium(
@@ -512,7 +512,7 @@ sub upgrade_cilium {
 =method ensure_gateway_api_crds(%opts)
 
 Apply the Gateway API CRDs of one bundle version and channel, the same way
-C<gateway_api> does in L</install_cilium>, without touching Cilium's Helm
+C<gateway_api> does in L<install_cilium|/"install_cilium(%opts)">, without touching Cilium's Helm
 release: for a Gateway API pin that moved while Cilium did not. Everything
 runs from the local machine through L<Kubernetes::REST>; the remote host is
 not used.
@@ -541,7 +541,7 @@ running Cilium supports.
 =item C<channel>
 
 C<experimental> (default) or C<standard>; see C<gateway_api_channel> in
-L</install_cilium>.
+L<install_cilium|/"install_cilium(%opts)">.
 
 =back
 
@@ -570,7 +570,7 @@ sub ensure_gateway_api_crds {
 
 =method validate_cilium_opts(%opts)
 
-Check the options of L</install_cilium> without touching anything: dies
+Check the options of L<install_cilium|/"install_cilium(%opts)"> without touching anything: dies
 with the same message C<install_cilium> would for an unknown distribution,
 bad C<helm_values>, C<cluster_cidr>, C<ipam_mode> or C<gateway_api>
 settings, and -- also
@@ -1671,7 +1671,7 @@ C<helm_values> is merged over all of it. C<--set kubeProxyReplacement=true>
 is also passed on the command line and wins over any value file. With
 C<kubeconfig> and a running Cilium, its IPAM mode, pool, K3s
 C<k8sServiceHost> and C<operator.replicas> replace these defaults (see
-L</install_cilium>).
+L<install_cilium|/"install_cilium(%opts)">).
 
 =head2 Default versions
 
@@ -1679,7 +1679,7 @@ The module ships with pinned defaults for reproducibility:
 Cilium C<1.20.0> and Cilium CLI C<v0.19.7>, the pair kubernetes-ocp runs.
 Override with the C<version> and C<cli_version> options. The default
 version is that of a fresh install: a running Cilium of another minor
-version keeps its own (see C<version> in L</install_cilium>). The Gateway
+version keeps its own (see C<version> in L<install_cilium|/"install_cilium(%opts)">). The Gateway
 API version has no default; see C<gateway_api_version> (v1.6.1 or newer
 for Cilium 1.20).
 

@@ -77,6 +77,8 @@ Revision history for Rex-Rancher
     longer happens once RKE2/K3s is gone, and never removes _common; they
     stayed until the next reboot. No other file in /var/run/cdi goes,
     nothing in /etc/cdi.
+  - Point the documentation's links to functions at their full headings, so
+    podchecker and pod2html resolve them as MetaCPAN already did.
 
 0.004     2026-10-21 22:35:28Z
   - Requires IO::K8s 1.111 and Kubernetes::REST 1.110; recommends Rex::GPU
