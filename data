@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-11-05T23:49:35Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-05T23:49:35Z
+created: 2026-11-04T01:26:38Z
+id: 115
+priority: low
+started: 2026-11-05T23:17:45Z
+status: done
+tags:
+- pod
+- docs
+- amd
+title: 'POD remove_amd_dra_driver: auf uninstall_node für die CDI-Specs verweisen'
+updated: 2026-11-05T23:49:35Z
+---
+
+Gefunden bei der Prüfung von k105. Die POD von remove_amd_dra_driver (lib/Rex/Rancher/K8s.pm, um Zeile 769) nennt die CDI-Specs des Treibers in /var/run/cdi zu Recht als nicht entfernt. Seit k105 räumt uninstall_node sie ab; ein Verweis L<Rex::Rancher::Uninstall/uninstall_node> an dieser Stelle hilft dem Leser. Nur POD, kein Verhalten.
+
+Done in worktree-k109-k117 (not committed), POD only. remove_amd_dra_driver, item 'What the plugin left on the nodes': added 'The CDI specs are removed by L<Rex::Rancher::Uninstall/uninstall_node> when it takes RKE2 or K3s off the node.' Only the CDI specs are named; checkpoint and registration are not mentioned, since the Uninstall POD claims nothing about /var/lib/kubelet. Link form as in Distribution.pm; the woven Uninstall.pm has '=head2 uninstall_node', an exact match. podchecker -warnings on the woven K8s.pm and Uninstall.pm: pod syntax OK, 0 warnings. dzil build clean, build output removed. prove -lr t/: Files=46, Tests=1765, PASS (only skip: the by-design live-run subtest in t/eg-lan-rexfile.t). Changes: not needed in my view (a doc cross-reference, no behaviour).
+
+POD only: remove_amd_dra_driver points to uninstall_node for the CDI specs; anchor checked in the woven POD, podchecker -warnings clean, prove PASS 46/1765.
+
+Committed as 6b7587b (6b7587bd37c2763b36d89de59d9121dafac59aae)
