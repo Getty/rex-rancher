@@ -1,0 +1,28 @@
+---
+claimed_at: 2026-11-05T23:38:29Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-05T23:38:29Z
+created: 2026-10-31T02:40:54Z
+id: 110
+priority: low
+started: 2026-11-05T23:17:36Z
+status: done
+tags:
+- gpu
+- amd
+- nvidia
+- k8s
+- logging
+title: deploy_*_device_plugin meldet 'device plugin ready' auch nach abgelaufener
+  Wartezeit
+updated: 2026-11-05T23:38:29Z
+---
+
+Live gesehen 2026-10-31 auf amdlab beim k106-Check (lib aus 057cef4): deploy_amd_device_plugin mit wait, Plugin per Affinity ausgeschlossen. Nach 24 Zeilen No allocatable GPU yet kommt die Warnung amd.com/gpu resource did not appear, check device plugin, und direkt danach die INFO-Zeile AMD GPU device plugin ready. K8s.pm Zeile 408 (AMD) und 215 (NVIDIA, vorher schon so) loggen ready ohne Blick auf den Rueckgabewert von _wait_for_gpu_resource (1 gefunden, 0 nicht). Fertig heisst: ready nur bei gefundener Ressource, sonst eine Zeile, die sagt, dass das DaemonSet angewendet, die Ressource aber nicht erschienen ist; Test fuer beide Funktionen. Kein die, das bleibt Absicht.
+
+Done in worktree-k109-k117 (not committed). lib/Rex/Rancher/K8s.pm: deploy_nvidia_device_plugin and deploy_amd_device_plugin log '... device plugin ready' only if _wait_for_gpu_resource returned 1; on 0 the wait's warning stays and an INFO line follows: '<plugin> DaemonSet applied, but <resource> did not appear on any node' (AMD mixed: amd.com/*). Decision: a closing line rather than the warning alone, because the warning comes from the shared helper and names only the resource, while the closing line ends the plugin's own frame in place of the false ready and says the DaemonSet stays applied; INFO, not warn, so there is one warning per problem. No die. AMD's wait => 0 branch is unchanged. Return values: neither is documented; Rex::Rancher step 6 calls both in void context, kubernetes-ocp calls only the AMD one (wait => 0, logger silenced, return ignored). Both still return what the last Rex::Logger::info call returns, as before. POD of both functions: one sentence each on when ready is logged. New test t/device-plugin-ready.t, UNTRACKED, still to be staged: both functions, found -> ready, timed out -> no ready, the one warning, the closing line; AMD mixed both ways; wait => 0 unchanged. Red against the lib of commit 8d9f43f: 5 of 24 failed (no ready / closing line, for NVIDIA, AMD and AMD mixed). prove -lr t/: Files=46, Tests=1765, PASS, no skips. dzil build clean; woven K8s.pm passes podchecker. Unverified live: the real log sequence on a cluster where the plugin does not register (the amdlab case).
+
+ready only when the GPU resource appeared, otherwise a closing 'DaemonSet applied, but ... did not appear' line after the wait's warning; no die, wait => 0 unchanged. New t/device-plugin-ready.t is untracked and still to be staged. Red 5/24 against 8d9f43f, prove PASS 46/1765.
+
+Committed as 25ae8ae (25ae8aefab2ffb6fb6916a2dce9110cc040001cb)
