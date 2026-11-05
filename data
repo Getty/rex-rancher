@@ -1,0 +1,27 @@
+---
+claimed_at: 2026-11-05T23:53:18Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-05T23:53:18Z
+created: 2026-11-03T19:03:42Z
+id: 113
+priority: low
+started: 2026-11-05T23:17:50Z
+status: done
+tags:
+- skill
+- docs
+title: 'Skill rex-rancher-core: Pipeline-Schritt 5 schreibt den Rex::GPU-require _gpu_setup_if_requested
+  zu'
+updated: 2026-11-05T23:53:18Z
+---
+
+Gefunden in k104 (2026-11-03): Die Pipeline-Beschreibung im Skill rex-rancher-core schreibt Schritt 5 (_gpu_setup_if_requested) das eval { require Rex::GPU } samt die zu. Im Code passiert das in _check_gpu_module in Schritt 1 (Stand schon 7aed54e, also nicht vom AMD-Branch). Done, wenn der Skill-Text die Prüfung dort nennt, wo der Code sie macht. Skill-Text ist Lane des rex-rancher-worker.
+
+Nachtrag aus k104 (2026-11-04): Schritt 5 entfällt außerdem bei gpu_setup => 0; der Skill-Text sollte das mit nennen.
+
+Done in worktree-k109-k117 (not committed), skill text only (.claude/skills/rex-rancher-core/SKILL.md, link count 1, owned here). Step 1 now names _check_gpu_module and its condition (gpu => 1, gpu_setup not 0): require Rex::GPU, the 0.002 version check (bare config.toml.tmpl), gpu_amd_integrated without amd_class, each a die with an install hint, before the host. Step 5 now says what _gpu_setup_if_requested does: Rex::GPU->import, gpu_setup(containerd_config, reboot, amd_integrated with gpu_amd_integrated), its return into _gpu_device_plugins (picks step 10's plugins, logs warnings before the install); with gpu => 1, gpu_setup => 0 only the info line plus a warning each for ignored reboot / gpu_amd_integrated, and install_* default nvidia_runtime_path on. Agent sentence: it had no Rex::GPU check at all; now step 1's distribution and Rex::GPU checks + server/token -> _check_connection -> preflight_agent -> prepare_node -> step 5 (plan only logs) -> install_agent. Tarball (report only): the skill ships twice, as .claude/skills/rex-rancher-core/SKILL.md (tracked; @Author::GETTY sets include_dotfiles to 1 by default in code, while its own POD says 0 - drift for the Author::GETTY bundle's board) and as misc/agent-context/.claude/... (GatherAgentContext snapshot of the whole agent context from disk, incl. skilletor-installed skills and .local rules; not installed). Both copies matched the working file. No test (docs); prove not run, nothing outside the skill touched. Build output removed.
+
+Skill rex-rancher-core: the Rex::GPU check now sits at step 1 (_check_gpu_module), step 5 says what _gpu_setup_if_requested does incl. gpu_setup => 0, agent arm fixed. Tarball ships the skill (two copies), reported only.
+
+Committed as 0cee0df (0cee0dfa0dfb5066901db5af793f5d0c7eb99a31)
