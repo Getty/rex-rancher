@@ -33,8 +33,12 @@ replacement: `kubernetes-cilium-concepts`; the four things that must line up for
 
 `rancher_deploy_server` runs these steps in this order, and the order is load-bearing:
 
-1. Option checks — unknown `distribution`, missing `Rex::GPU` under `gpu => 1`, a bad
-   `cluster_cidr`, Cilium options contradicting `cilium => 0`: all die before the host is touched.
+1. Option checks — unknown `distribution`; `_check_gpu_module` when step 5 will run
+   (`gpu => 1`, `gpu_setup` not 0): `eval { require Rex::GPU }`, a version check (0.002 or
+   later; older ones write a bare containerd `config.toml.tmpl` every run) and
+   `gpu_amd_integrated` without `Rex::GPU->amd_class`, each a die with an install hint;
+   a bad `cluster_cidr`; Cilium options contradicting `cilium => 0`. All die before the
+   host is touched. GPU is an optional peer dist, not a hard dep.
 2. `_check_connection` — see "No SFTP" below.
 3. `preflight_server` — the host is asked everything `install_server` would refuse it for,
    in the same order (Cilium residue, version skew, an established server's
@@ -42,8 +46,13 @@ replacement: `kubernetes-cilium-concepts`; the four things that must line up for
    its GPU driver. `install_server` asks again, after node prep and GPU setup.
 4. `prepare_node(%opts)` — OS prep. Swap **off** and `br_netfilter`/`overlay` loaded are
    preconditions for kubelet; skipping them yields a cluster that half-comes-up.
-5. `_gpu_setup_if_requested` — only with `gpu => 1`; `eval { require Rex::GPU }` and
-   **die with an install hint** if it is absent. GPU is an optional peer dist, not a hard dep.
+5. `_gpu_setup_if_requested` — only with `gpu => 1` and `gpu_setup` not 0: `Rex::GPU->import`,
+   then `gpu_setup(containerd_config => $distribution, reboot => …)` (the driver, for NVIDIA
+   also toolkit and containerd config; a reboot with `reboot`; `amd_integrated => 1` with
+   `gpu_amd_integrated`). What it returns (the detected GPUs) goes to `_gpu_device_plugins`,
+   which picks step 10's plugins and logs its warnings now, before the install. With
+   `gpu => 1, gpu_setup => 0` only an info line, and a warning each for an ignored `reboot`
+   or `gpu_amd_integrated`; `install_*` then default `nvidia_runtime_path` on.
 6. `install_server(%opts)` — writes `config.yaml`, runs the installer, waits for the
    service to be active, then for the kubeconfig *file* to appear. **No** API readiness yet.
 7. `_save_kubeconfig_locally` — fetch the remote kubeconfig, **rewrite
@@ -59,8 +68,10 @@ replacement: `kubernetes-cilium-concepts`; the four things that must line up for
     `gpu_setup` set up an AMD GPU (NVIDIA's then only next to an NVIDIA GPU, and first),
     else NVIDIA's.
 
-`rancher_deploy_agent` is the short arm: `preflight_agent` → `prepare_node` → gpu →
-`install_agent`. No kubeconfig, no Cilium, no device plugin — the worker joins an
+`rancher_deploy_agent` is the short arm: step 1's `distribution` and `Rex::GPU` checks
+(plus `server` and `token` required) → `_check_connection` → `preflight_agent` →
+`prepare_node` → step 5 (its plugin plan only logs) → `install_agent`. No kubeconfig, no
+Cilium, no device plugin — the worker joins an
 existing cluster; its preflight reads the control plane's version through the API (with
 `kubeconfig_file`), and an agent is never taken to a newer minor than the control plane.
 
