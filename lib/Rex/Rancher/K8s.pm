@@ -783,7 +783,9 @@ It does not remove:
 =item * What the plugin left on the nodes: the CDI specs in C</var/run/cdi>
 (C<k8s.gpu.amd.com-gpu_*>), its checkpoint in
 C</var/lib/kubelet/plugins/gpu.amd.com/> and its registration in
-C</var/lib/kubelet/plugins_registry>.
+C</var/lib/kubelet/plugins_registry>. The CDI specs are removed by
+L<Rex::Rancher::Uninstall/uninstall_node> when it takes RKE2 or K3s off the
+node.
 
 =back
 
