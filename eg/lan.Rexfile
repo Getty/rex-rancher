@@ -267,7 +267,8 @@ task 'check', sub {
       $node->metadata->name,
       ( $ready && $ready->status eq 'True' ? 'Ready' : 'NotReady' ),
       $st->nodeInfo->kubeletVersion,
-      ( ( $st->capacity // {} )->{'nvidia.com/gpu'} // 0 ),
+      # allocatable, not capacity: the kubelet keeps capacity after the device plugin is gone
+      ( ( $st->allocatable // {} )->{'nvidia.com/gpu'} // 0 ),
       ( $taints || '-' );
   }
   for my $ds (qw( cilium nvidia-device-plugin-daemonset )) {
