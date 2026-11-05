@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-11-05T23:45:07Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-05T23:45:07Z
+created: 2026-10-31T02:18:23Z
+id: 109
+priority: low
+started: 2026-11-05T23:17:40Z
+status: done
+tags:
+- gpu
+- nvidia
+- eg
+- docs
+title: 'eg/lan: GPU-Check liest nvidia.com/gpu aus status.capacity statt allocatable'
+updated: 2026-11-05T23:45:07Z
+---
+
+Drift aus k106 (Commit cf10698): eg/lan.Rexfile Zeile 270 gibt nvidia.com/gpu aus status.capacity aus, eg/lan.RUNBOOK.md Zeile 70 beschreibt den GPU-Check als nvidia.com/gpu in der capacity des Nodes. Das kubelet laesst capacity nach dem Wegfall eines Device-Plugins stehen und setzt nur allocatable auf 0, beide zeigen dann einen veralteten Wert. eg/hetzner-gpu.Rexfile liest bereits allocatable. Fertig heisst: beide Stellen lesen bzw. nennen status.allocatable.
+
+Done in worktree-k109-k117 (not committed). eg/lan.Rexfile check task: the node line now reads nvidia.com/gpu from status.allocatable (as eg/hetzner-gpu.Rexfile does), plus a one-line comment why; eg/lan.RUNBOOK.md GPU row: names status.allocatable instead of capacity. Nothing else in eg/ or README reads capacity. Test: t/eg-lan-rexfile.t does not check the node line or capacity; its check probe deletes the kubeconfig first, so the cluster section returns at 'no kubeconfig'. That section can be tested offline (the probe could redefine Kubernetes::REST::Kubeconfig::new to hand back a fake API with a Node of capacity 1 / allocatable 0, plus an empty kubeconfig file) - only proposed, not added, as the brief allowed only these two places; so no red proof. Checked by hand: an IO::K8s Node with capacity 1 / allocatable 0 gives 0 through the new expression. prove -lr t/: Files=46, Tests=1765, PASS; the only skip is the by-design live-run subtest in t/eg-lan-rexfile.t. Changes: not needed in my view (eg/ is not API). Unverified live: the check output on a real GPU node.
+
+eg/lan check reads and the runbook names nvidia.com/gpu from status.allocatable; no test added (offline test of the cluster section proposed on the card), prove PASS 46/1765.
+
+Committed as e798a9d (e798a9dc76b949681de179baba32682d7b07225f)
