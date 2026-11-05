@@ -172,7 +172,9 @@ C<status.capacity>: the kubelet keeps that after a device plugin is gone and
 only drops C<status.allocatable> to 0, so a redeploy would take the old
 plugin's count for a ready plugin. When none appears, a warning says so (no
 die), naming the API error of the last attempt if that one failed (a 403, no
-connection).
+connection). The plugin is logged as ready only once the resource is there;
+otherwise the call ends saying that the DaemonSet is applied but the
+resource did not appear.
 
 Required options:
 
@@ -210,9 +212,13 @@ sub deploy_nvidia_device_plugin {
   _create_or_update($api, DaemonSet => _nvidia_device_plugin_daemonset_spec($version));
 
   Rex::Logger::info("  DaemonSet applied, waiting for GPU resources...");
-  _wait_for_gpu_resource($api, 'nvidia.com/gpu');
-
-  Rex::Logger::info("NVIDIA device plugin ready");
+  if (_wait_for_gpu_resource($api, 'nvidia.com/gpu')) {
+    Rex::Logger::info("NVIDIA device plugin ready");
+  }
+  else {
+    # After the wait's warning (k110): no ready, and still no die.
+    Rex::Logger::info("NVIDIA device plugin DaemonSet applied, but nvidia.com/gpu did not appear on any node");
+  }
 }
 
 =method deploy_amd_device_plugin(%opts)
@@ -276,7 +282,9 @@ C<resource_naming =E<gt> 'mixed'>, for any C<amd.com/> resource). Not its
 C<status.capacity>, which the kubelet keeps after the plugin is gone: a
 redeploy read the old plugin's count there while the new plugin pod was still
 in C<ContainerCreating>. When none appears, a warning says so (no die),
-naming the API error of the last attempt if that one failed.
+naming the API error of the last attempt if that one failed. As in
+L<deploy_nvidia_device_plugin|/"deploy_nvidia_device_plugin(%opts)">, the
+plugin is logged as ready only once the resource is there.
 
 Required options:
 
@@ -402,10 +410,16 @@ sub deploy_amd_device_plugin {
 
   # mixed: a partitioned GPU is amd.com/<compute>_<memory>, an unpartitioned
   # one still amd.com/gpu; the prefix takes either.
+  my $mixed = $naming eq 'mixed';
   Rex::Logger::info("  DaemonSet applied, waiting for GPU resources...");
-  _wait_for_gpu_resource($api, $naming eq 'mixed' ? 'amd.com/' : 'amd.com/gpu');
-
-  Rex::Logger::info("AMD GPU device plugin ready");
+  if (_wait_for_gpu_resource($api, $mixed ? 'amd.com/' : 'amd.com/gpu')) {
+    Rex::Logger::info("AMD GPU device plugin ready");
+  }
+  else {
+    # After the wait's warning (k110): no ready, and still no die.
+    Rex::Logger::info("AMD GPU device plugin DaemonSet applied, but "
+      . ( $mixed ? 'amd.com/*' : 'amd.com/gpu' ) . " did not appear on any node");
+  }
 }
 
 =method deploy_amd_node_labeller(%opts)

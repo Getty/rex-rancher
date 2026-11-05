@@ -81,6 +81,10 @@ Revision history for Rex-Rancher
     podchecker and pod2html resolve them as MetaCPAN already did.
   - Requires IO::K8s 1.112; recommends Rex::GPU 0.006, the first that sets up
     AMD GPUs (Rex::GPU->amd_class).
+  - deploy_nvidia_device_plugin and deploy_amd_device_plugin report the
+    plugin ready only once its GPU resource is allocatable on a node; when
+    the wait runs out they warn as before and end saying the DaemonSet is
+    applied but the resource did not appear (still no die).
 
 0.004     2026-10-21 22:35:28Z
   - Requires IO::K8s 1.111 and Kubernetes::REST 1.110; recommends Rex::GPU
