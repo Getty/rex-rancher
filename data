@@ -1,0 +1,24 @@
+---
+claimed_at: 2026-11-05T23:29:19Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-05T23:29:11Z
+created: 2026-11-04T01:44:10Z
+id: 117
+priority: medium
+started: 2026-11-05T23:17:30Z
+status: done
+tags:
+- release
+- cpanfile
+title: 'cpanfile: IO::K8s-Pin 1.111 auf die veröffentlichte 1.112 heben'
+updated: 2026-11-05T23:29:19Z
+---
+
+Gefunden im Release-Audit für 0.005 (2026-11-04, main 01fc3ef). cpanfile pinnt IO::K8s auf 1.111, CPAN hat seit 2026-10-30 die 1.112. Hausregel: Getty-eigene Abhängigkeiten, wenn gepinnt, auf die neueste veröffentlichte CPAN-Version. Kein funktionaler Befund: Ob lib/ etwas aus 1.112 braucht, ist ungeklärt; 1.111 heißt "1.111 oder höher". Done: Pin auf 1.112, prove -lr t/ grün, dzil build sauber. Kubernetes::REST 1.110 und Rex::LibSSH 0.005 sind aktuell. Rex::GPU bleibt recommends 0.004, bis das Rex::GPU mit amd_class veröffentlicht ist (gekoppeltes Release, Maintainer-Entscheidung).
+
+cpanfile pins raised (IO::K8s 1.112, Rex::GPU recommends 0.006), one stale comment in Rex/Rancher.pm fixed; prove PASS 45/1741, dzil build clean. Tree commit-ready, ready for release-manager.
+
+Done in worktree-k109-k117 (not committed): cpanfile requires IO::K8s 1.111 -> 1.112, recommends Rex::GPU 0.004 -> 0.006 (maintainer decision, coupled release with Rex::GPU 0.006 = first with amd_class; this replaces the card's earlier 'stays at 0.004' line). Comment-only edit in lib/Rex/Rancher.pm above _rex_gpu_sets_up_amd: the old text said the recommended version is not raised, which this change made false; the feature check by can('amd_class') stays, because recommends is not enforced. Version finding: _check_gpu_module hard-checks Rex::GPU >= 0.002 (the minimum for gpu_setup, against the bare config.toml.tmpl) - a different minimum from recommends, so left as is. t/gpu-vendor.t uses 0.005 as a stand-in for a Rex::GPU without amd_class - still valid. POD 'AMD GPUs' ('0.002 to 0.005 detect...') and README:71 ('released Rex::GPU (up to 0.005)') stay correct, and could name 0.006 once it is released - wording, release-manager/maintainer call. prove -lr t/: Files=45, Tests=1741, PASS, no skips. dzil build clean, no warnings; META.json has IO::K8s 1.112 and recommends Rex::GPU 0.006. Build dir and tarball removed. Unverified live: nothing in lib/ that needs 1.112 has been exercised against a cluster (locally installed IO::K8s is 1.112).
+
+Committed as 8d9f43f (8d9f43f040bef692c88e85c5f33582fd69dadd5f)
