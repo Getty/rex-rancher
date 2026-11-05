@@ -878,8 +878,8 @@ sub _gpu_setup_if_requested {
 
 # Whether the loaded Rex::GPU sets up AMD GPUs in gpu_setup (driver, then
 # its check): amd_class, next to its nvidia_class and detect_class, is the
-# sign (rex-gpu k1). Asked by feature, not by version: no released Rex::GPU
-# has it, and the recommended version is not raised for it.
+# sign (rex-gpu k1). Asked by feature, not by version: Rex::GPU is only
+# recommended (0.006, the first with amd_class), so an older one may be loaded.
 sub _rex_gpu_sets_up_amd { Rex::GPU->can('amd_class') ? 1 : 0 }
 
 # Pure: which device plugins step 6 deploys. device_plugin is the
