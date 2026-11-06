@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-11-06T00:12:05Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-06T00:12:05Z
+created: 2026-11-04T01:26:33Z
+id: 114
+priority: low
+started: 2026-11-05T23:17:56Z
+status: done
+tags:
+- uninstall
+- shell
+title: 'uninstall_cmd: Globs ohne Treffer brechen unter zsh als Login-Shell von root
+  ab'
+updated: 2026-11-06T00:12:05Z
+---
+
+Gefunden bei der Prüfung von k105. Die Uninstall-Zeile verlässt sich darauf, dass ein Glob ohne Treffer unverändert an rm weitergeht (POSIX sh, bash): /sys/fs/bpf/tc/globals/cilium_* schon vorher, seit k105 auch /var/run/cdi/k8s.gpu.amd.com-gpu_*. Unter zsh (NOMATCH) bricht ein Glob ohne Treffer die Befehlsliste ab, || true greift dann nicht. Nicht geprüft: hier ist keine zsh installiert, und ob Rex die Zeile über die Login-Shell von root oder ein festes sh -c schickt, ist offen. Zu klären: welche Shell die Zeile auf dem Host ausführt; falls die Login-Shell, die Zeile in sh -c einpacken oder die Globs anders schreiben.
+
+Shell geklaert: Rex::Interface::Exec::SSH::exec und Rex::LibSSH Exec::LibSSH::exec nehmen self->shell (Exec::Base::shell, Erkennung per echo SHELL); Shell::Zsh ist nur ein Bash-Praefix (LC_ALL, PATH), kein sh -c, das gibt es nur unter Exec::Sudo (set_inner_shell). sshd fuehrt die Zeile mit der Login-Shell aus; kubernetes-ocp OCP::SSH schickt sie als ssh-Kommando. Fix: uninstall_cmd = _sh_c(_uninstall_script), also /bin/sh -c mit dem Skript in single quotes (Quote-Escape eingebaut, Skript hat keine). _uninstall_script ist byte-gleich zur alten Zeile (cmp gegen 0cee0df). /bin/sh absolut: kubernetes-ocp Stub-Harness (PATH nur Stubs) bleibt gruen, t/29 t/190 t/50 gegen diese lib PASS. Neuer Test t/uninstall-shell.t (untracked). t/uninstall.t: unlike-single-quote ersetzt, run_line gibt -e an das innere /bin/sh (sonst waere der set-e-Claim leer, per Mutant belegt). zsh nicht installiert, zsh-Teil skipt. cilium_residue_probe_cmd ohne Globs; sonst keine Pfad-Globs in run-Zeilen in lib. Unverified live: echte zsh-Login-Shell, dash auf einem Host.
+
+Commit-ready: lib/Rex/Rancher/Uninstall.pm (uninstall_cmd wraps in /bin/sh -c, private _uninstall_script and _sh_c, POD), t/uninstall.t angepasst, neu t/uninstall-shell.t (untracked, stagen). prove -lr t/ PASS 47 files 1778 tests; skips: 4x zsh is not installed, eg-lan-rexfile LAN-Maschine. Rot-Beleg gegen 0cee0df: not ok 1 und 2. Changes-Vorschlag und Betreff im Bericht an den Hauptagenten.
+
+Committed as b8a7125 (b8a712569e0cdd448d1747a51f4aec3334ccc0d5)
