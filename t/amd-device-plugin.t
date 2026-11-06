@@ -28,6 +28,7 @@ my $slept = 0;
 BEGIN { *CORE::GLOBAL::sleep = sub { $slept++ } }
 
 use IO::K8s;
+use JSON::MaybeXS ();
 use Rex::Rancher::K8s;
 
 my ( @info, @warn );
@@ -185,6 +186,35 @@ is_deeply( $lpod->{volumes},
 
 round_trip( @$_, 'labeller' ) for @labeller;
 
+# --- the host's network ------------------------------------------------------------
+#
+# Both pods run in the host's network namespace: a hostNetwork pod gets no
+# CNI ADD, so on a freshly joined node amd.com/gpu and the labels do not
+# wait for the CNI's cold start (kubernetes-ocp on synapse, 2026-10-31: some
+# 5.5 minutes after the Cilium agent was Ready no new pod sandbox came up).
+# dnsPolicy Default, not ClusterFirstWithHostNet: neither resolves a name,
+# and CoreDNS waits for the CNI itself. That the pods do start before the
+# CNI on a fresh node only a real deploy shows.
+my $lds_struct = round_trip( DaemonSet => $lds, 'labeller DaemonSet' );
+for (
+  [ plugin   => $ds,  $ds_struct ],
+  [ labeller => $lds, $lds_struct ],
+) {
+  my ( $who, $spec, $struct ) = @$_;
+  my $p = $spec->{spec}{template}{spec};
+  is( ref $p->{hostNetwork}, 'SCALAR', "$who: hostNetwork is a JSON boolean" );
+  is( ${ $p->{hostNetwork} }, 1, "$who: hostNetwork true" );
+  is( $p->{dnsPolicy}, 'Default', "$who: dnsPolicy Default, the host's DNS" );
+
+  my $sp = $struct->{spec}{template}{spec};
+  ok( JSON::MaybeXS::is_bool( $sp->{hostNetwork} ) && $sp->{hostNetwork},
+    "$who: hostNetwork survives the typed classes as boolean true" );
+  is( $sp->{dnsPolicy}, 'Default', '... and dnsPolicy Default' );
+  my $json = $k8s->object_to_json( $k8s->new_object( DaemonSet => %$spec ) );
+  like( $json, qr/"hostNetwork":true[,}]/, '... sent as "hostNetwork":true' );
+  like( $json, qr/"dnsPolicy":"Default"/, '... and "dnsPolicy":"Default"' );
+}
+
 # --- affinity --------------------------------------------------------------------
 
 # The example from the POD: Node Feature Discovery's PCI labels for AMD.
@@ -301,6 +331,14 @@ is_deeply( \@calls,
     'list Node' ],
   '... plugin, then the labeller and its RBAC, then the wait' );
 like( $info[0], qr/1\.31\.0\.10/, '... the given version' );
+my @sent_ds = map { $_->[1] } grep { $_->[0] eq 'DaemonSet' } @created;
+is( scalar @sent_ds, 2, '... two DaemonSets sent' );
+for my $sent (@sent_ds) {
+  my $p = $sent->{spec}{template}{spec};
+  ok( JSON::MaybeXS::is_bool( $p->{hostNetwork} ) && $p->{hostNetwork}
+      && ( $p->{dnsPolicy} // '' ) eq 'Default',
+    "... $sent->{metadata}{name} sent with hostNetwork true, dnsPolicy Default" );
+}
 
 {
   local %exists = map { $_ => 1 }

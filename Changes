@@ -27,6 +27,10 @@ Revision history for Rex-Rancher
     wait => 0 to skip the wait for amd.com/gpu (mixed: any amd.com/
     resource). The node labeller comes with node_labeller => 1, or on
     nodes of its own with the new deploy_amd_node_labeller.
+  - The AMD device plugin and node labeller pods run in the host's network
+    (hostNetwork, dnsPolicy Default), so on a freshly joined node
+    amd.com/gpu and the GPU labels do not wait for the CNI's cold start
+    (with Cilium, minutes after its agent is Ready). Neither opens a port.
   - New remove_amd_device_plugin and remove_amd_node_labeller in
     Rex::Rancher::K8s: delete exactly what the deploys create; an object
     that is not there is logged, any other API error dies.

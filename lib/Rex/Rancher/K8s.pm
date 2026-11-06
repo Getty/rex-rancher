@@ -252,6 +252,13 @@ the program.
 =item * C<priorityClassName: system-node-critical> and a
 C<CriticalAddonsOnly> toleration.
 
+=item * C<hostNetwork: true> and C<dnsPolicy: Default>, which upstream
+leaves out: the pods run in the host's network namespace, with the host's
+DNS. They get no network from the CNI, so on a freshly joined node
+C<amd.com/gpu> does not wait for the CNI's cold start (with Cilium, no new
+pod got a network there for some five minutes after its agent was Ready).
+The plugin opens no port; it talks to the kubelet over Unix sockets.
+
 =back
 
 B<It runs on every amd64 node>, and on one without the C<amdgpu> driver
@@ -448,6 +455,13 @@ an RKE2 1.36 node with a Ryzen AI Max (gfx1151). It does not ask for the
 driver version label (nor does upstream's manifest); that one would stay
 empty with the kernel's own C<amdgpu> driver anyway, which has no
 C</sys/module/amdgpu/version>.
+
+Its pods run in the host's network namespace (C<hostNetwork: true>), with
+the host's DNS (C<dnsPolicy: Default>), as the plugin's do; upstream's
+manifest leaves both out. So on a freshly joined node its labels do not
+wait for the CNI's cold start. It needs only the API server, which it
+reaches by IP address (C<KUBERNETES_SERVICE_HOST>), not by name, and opens
+no port.
 
 Like the plugin it runs on every amd64 node unless C<affinity> says
 otherwise.
@@ -1215,7 +1229,7 @@ sub _nvidia_device_plugin_daemonset_spec {
 }
 
 # ROCm's device plugin DaemonSet, upstream's k8s-ds-amdgpu-dp.yaml at the
-# release AMD_DEVICE_PLUGIN_VERSION names, with four changes: the image
+# release AMD_DEVICE_PLUGIN_VERSION names, with five changes: the image
 # carries the tag; the securityContext is the Helm chart's (amd-gpu-helm
 # 0.22.0), not privileged: the plugin reads /sys, writes its socket to the
 # kubelet's device-plugins directory and hands the kubelet the device nodes
@@ -1224,9 +1238,34 @@ sub _nvidia_device_plugin_daemonset_spec {
 # is for its -pulse health checks, not used here) — a DaemonSet of this form
 # (kubernetes-ocp's own, not this code) registered amd.com/gpu: 1 on synapse,
 # RKE2 1.36.4 with a gfx1151, on 2026-10-31; the container's command and
-# arguments are given, to pass -resource_naming_strategy=$naming; and
-# $affinity, if given, is the pod affinity. A plain hashref like the NVIDIA
-# one, so its shape is unit-tested offline. The caller resolves the defaults.
+# arguments are given, to pass -resource_naming_strategy=$naming; the pod
+# runs in the host's network with dnsPolicy Default (below); and $affinity,
+# if given, is the pod affinity. A plain hashref like the NVIDIA one, so its
+# shape is unit-tested offline. The caller resolves the defaults.
+#
+# hostNetwork: a pod in the host's network namespace gets no CNI ADD, so on
+# a freshly joined node amd.com/gpu does not wait for the CNI's cold start.
+# On synapse (kubernetes-ocp, RKE2 1.36.4, Cilium 1.20.0, 2026-10-31) every
+# new pod sandbox failed for some 5.5 minutes after the Cilium agent was
+# Ready, while Cilium compiled its BPF programs, and amd.com/gpu appeared
+# some 7 minutes after the node registered. The pod is still scheduled only
+# once the node is Ready (its tolerations do not cover not-ready), that is
+# once the CNI's config is in place; the wait it skips is the one after
+# that, for a pod sandbox the CNI can set up. The plugin needs no pod network:
+# it talks gRPC to the kubelet over Unix sockets in
+# /var/lib/kubelet/device-plugins and opens no TCP port, so nothing listens
+# on the host and nothing collides with RKE2's, k3s' or Cilium's ports.
+# Upstream's manifests and its Helm chart set neither field; that is no
+# refusal: the AMD GPU Operator (v1.5.1) offers hostNetwork for this
+# DaemonSet (DeviceConfig spec.devicePlugin.hostNetwork). dnsPolicy Default,
+# the host's resolv.conf, not ClusterFirstWithHostNet: the plugin speaks to
+# no API and resolves no names, and ClusterFirstWithHostNet would tie it to
+# CoreDNS, which waits for the CNI itself. For a hostNetwork pod ClusterFirst
+# falls back to Default anyway; the field says what holds. PodSecurity:
+# hostNetwork asks for no laxer level than the pod already needs, since
+# baseline already refuses its hostPath volumes; kube-system is privileged
+# on RKE2 without a profile and exempt under its cis profile, and k3s sets
+# no PodSecurity at all.
 #
 # The image (config of rocm/k8s-device-plugin:1.31.0.11, Dockerfile at the
 # tag) has no Entrypoint, only Cmd ["./k8s-device-plugin", "-logtostderr=true",
@@ -1253,6 +1292,8 @@ sub _amd_device_plugin_daemonset_spec {
         },
         spec => {
           restartPolicy     => 'Always',
+          hostNetwork       => \1,
+          dnsPolicy         => 'Default',
           nodeSelector      => { 'kubernetes.io/arch' => 'amd64' },
           ( defined $affinity ? ( affinity => $affinity ) : () ),
           priorityClassName => 'system-node-critical',
@@ -1299,8 +1340,18 @@ sub _amd_device_plugin_daemonset_spec {
 # (Kubernetes' default for a tag other than latest is IfNotPresent; a pinned
 # tag needs no pull on every pod start, which would tie each restart to
 # Docker Hub); the ClusterRoleBinding loses upstream's namespace: default,
-# which a cluster-scoped object does not have; $affinity, if given, is the
-# pod affinity, as for the plugin.
+# which a cluster-scoped object does not have; the pod runs in the host's
+# network with dnsPolicy Default, as the plugin's does (see there), so a
+# freshly joined node's labels do not wait for the CNI's cold start either;
+# $affinity, if given, is the pod affinity, as for the plugin.
+#
+# The labeller needs only the API server, at KUBERNETES_SERVICE_HOST, an IP
+# address: it resolves no names. It opens no port: controller-runtime
+# (v0.19.0) runs its manager with the metrics server off (BindAddress "0")
+# and without health-probe, pprof or webhook listener. Upstream's manifest
+# sets neither field, and the AMD GPU Operator offers no hostNetwork for
+# its own labeller. PodSecurity as for the plugin: privileged and the
+# hostPath volumes already need more than hostNetwork does.
 sub _amd_node_labeller_specs {
   my ($version, $affinity) = @_;
   return (
@@ -1343,6 +1394,8 @@ sub _amd_node_labeller_specs {
           },
           spec => {
             serviceAccountName => 'node-labeller-sa',
+            hostNetwork        => \1,
+            dnsPolicy          => 'Default',
             nodeSelector       => { 'kubernetes.io/arch' => 'amd64' },
             ( defined $affinity ? ( affinity => $affinity ) : () ),
             priorityClassName  => 'system-node-critical',
