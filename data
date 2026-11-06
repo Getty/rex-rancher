@@ -1,0 +1,42 @@
+---
+claimed_at: 2026-11-06T00:40:45Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-06T00:40:45Z
+created: 2026-10-30T23:58:39Z
+id: 97
+priority: medium
+started: 2026-11-05T23:18:05Z
+status: done
+tags:
+- cilium
+- uninstall
+title: 'check_cilium_residue: opt-in cleanup without reboot'
+updated: 2026-11-06T00:40:45Z
+---
+
+check_cilium_residue (Rex::Rancher::Uninstall) only offers a reboot. On otho (2026-10-31, ex-cp-lab rke2 agent after rke2-uninstall.sh) the residue came out without a reboot, and the new RKE2+Cilium install then came up cleanly (OCP apply exit 0):
+
+1. rm -rf /sys/fs/bpf/cilium (dropping the pinned links detaches tcx from_netdev/to_netdev on the NICs and the socketlb cgroup links)
+2. bpftool cgroup tree / cgroup detach for remaining cil_* programs on /sys/fs/cgroup (the rest of the socket LB)
+3. rm /sys/fs/bpf/tc/globals/cilium_*
+4. umount /run/cilium/cgroupv2; rm -rf /run/cilium
+Verified: `bpftool net` and `bpftool cgroup tree` without cil_, no mount left, SSH stable.
+
+Proposal: an opt-in cleanup (e.g. `clean_cilium_residue => 1` or its own `clean_cilium_residue` method) that does exactly that and afterwards runs the probe again. The default stays die. The die message names the cleanup as an alternative to a reboot. Reason: hosts with other services (otho runs llama-swap, nvidia-persistenced) should not have to be rebooted for this.
+
+Done means: the method is idempotent, the probe comes back clean afterwards, tests for the command line, and the die text mentions the option. Live check only on a released test host.
+
+From kubernetes-ocp (k248 live test). OCP would expose the option later via its own card.
+
+2026-11-06 00:26 Start: form = check_cilium_residue(clean => 1) + pure cilium_residue_cleanup_cmd (option (a): no wiring into install_*/preflight_*/rancher_deploy_*). Kept 'Nothing was written or installed. Reboot the host' contiguous in the die text: kubernetes-ocp t/155 matches it.
+
+2026-11-06 00:37 Built, option (a): no wiring into install, preflight or rancher_deploy. check_cilium_residue takes optional clean => 1, plus the pure line cilium_residue_cleanup_cmd. Without arguments or with clean => 0 the behaviour is unchanged except the last sentence of the die text, which now names Rex::Rancher::Uninstall->check_cilium_residue(clean => 1) in a task on this host as the alternative to the reboot. The words Nothing was written or installed. Reboot the host stay contiguous for kubernetes-ocp t/155.
+
+2026-11-06 00:37 clean => 1: a probe that finds nothing returns 1 and nothing else runs (idempotent, also on a cluster host). Residue found: the cleanup line runs (auto_die 0), its marker warnings are logged, the probe runs again. Clean then: returns 1. Residue left: dies naming what is left and asking for a reboot only. Second probe cannot run: dies. The line is wrapped by _sh_c like uninstall_cmd and starts with the probe's own _distribution_present_cmd guard, then exactly the four card steps. The unmount and the removal of the runtime dir are shared with _cilium_cleanup_cmd through the new _cilium_run_dir_cmds, uninstall_cmd output checked byte-identical. Step 2 runs only with bpftool on PATH (a warning when missing) and lists again after the detach (a warning when cil_ programs are still listed), since the probe does not see cgroup programs.
+
+2026-11-06 00:38 Unverified (no bpftool or manpage on this machine, no live run): the text format of bpftool cgroup tree (taken from bpftool source as recalled: path lines, program lines ID AttachType AttachFlags Name, four-space indent below the root, attach type spelling by bpftool version) and the detach syntax. The bpf_link release after unpinning is deferred in the kernel, so the list after the detach could warn spuriously. On a host whose cgroup2 hierarchy is not at /sys/fs/cgroup (cgroup v1, e.g. a Rocky 8 default) step 2 reaches nothing and nothing says so: the card says /sys/fs/cgroup, kept. Also found, for the kubernetes-ocp board: its t/190 and t/219 carry a fixture copy of the old refusal text (Reboot the host, then run the install again.), still passing but no longer the library text.
+
+Commit-ready, not committed. Changed: lib/Rex/Rancher/Uninstall.pm (check_cilium_residue clean option, cilium_residue_cleanup_cmd, POD), Server.pm and Agent.pm POD sentence, t/cilium-residue.t (message claim now names both ways out), new t/cilium-residue-clean.t (untracked, needs git add), rex-rancher-core skill row. Verified offline only: prove -lr t/ Files=48 Tests=1790 PASS; new tests red against b8a7125 lib; mutations (guard removed, wrong cgroup, no list after detach, no second probe, steps reordered) each caught. Live run on a released test host still open.
+
+Committed as 8604a3a (8604a3a4ae4f2cd1e6790b822fe69512700d79a1)
