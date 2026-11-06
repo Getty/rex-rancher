@@ -155,8 +155,12 @@ If true, reboot the host after GPU driver installation and wait for it to
 come back before proceeding. Only meaningful when L<Rex::GPU>'s C<gpu_setup>
 runs (C<gpu =E<gt> 1> without C<gpu_setup =E<gt> 0>); otherwise it is ignored
 with a warning. Required on first deploy when C<nouveau> was previously
-loaded. A L<Rex::GPU> that sets up AMD GPUs reboots for them too, only after
-it installed the driver as a DKMS module. Default: C<0>.
+loaded. A L<Rex::GPU> that sets up AMD GPUs reboots for them too, inbox
+driver and DKMS alike, but only when C<amdgpu> did not already work on them
+and C<modprobe amdgpu> after the install is not enough (C<amdgpu> was loaded
+before, or the GPUs are still not usable); if they are still not usable
+after the reboot, the deploy dies, and without C<reboot> it warns that the
+driver is not active yet. Default: C<0>.
 
 =item C<gpu_amd_integrated>
 
