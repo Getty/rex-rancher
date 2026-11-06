@@ -1287,6 +1287,36 @@ C<gpu_amd_integrated> it dies instead, before the host is touched.
 
 =back
 
+With L<Rex::GPU> 0.006, C<gpu_amd_integrated> on a host where a
+ROCm-capable integrated AMD GPU sits next to an AMD GPU that needs
+C<amdgpu-dkms> makes C<gpu_setup> die, unless C<amdgpu> already works on
+all of them: AMD supports the Ryzen APUs only with the inbox driver, and
+one C<amdgpu> drives every GPU of a host. The message names the ways out,
+calling the option C<amd_integrated>: leave out C<gpu_amd_integrated> (the
+other AMD GPUs get the driver, the integrated one is skipped with a
+warning), or call L<Rex::GPU::AMD/install_driver> yourself before the
+deploy with what the message names for this host: C<method =E<gt> 'inbox'>
+(the inbox driver for every GPU) where the inbox driver is supported for
+all of them, else C<gpus> with only the C<amdgpu-dkms> GPUs. Once that
+driver is active (C<install_driver> loads it with C<modprobe> where that
+is enough, else C<reboot =E<gt> 1> or a reboot by hand activates it), the
+deploy finds C<amdgpu> working on the GPUs C<gpu_setup> passes on and
+leaves it as it is: with C<gpu_amd_integrated> after
+C<method =E<gt> 'inbox'>, without it after C<gpus>.
+
+Unlike the die for a L<Rex::GPU> without AMD support above, this one comes
+after the host has been touched: in step 2, in C<gpu_setup>, before
+anything is changed for AMD (no package source prepared, no package
+installed). By then C<gpu_setup> may have installed C<pciutils> for
+detection and, on a host that also has an NVIDIA GPU, set up NVIDIA
+(driver, container toolkit, CDI, containerd config), which comes first. The
+die is not caught: L<rancher_deploy_server|/"rancher_deploy_server(%opts)">
+and L<rancher_deploy_agent|/"rancher_deploy_agent(%opts)"> abort with it.
+It does, however, come after L<Rex::Rancher::Node/prepare_node> has already
+run, so base packages, hostname, timezone, locale, swap, kernel modules and
+sysctl are already changed; no Kubernetes distribution has been installed
+yet.
+
 ROCm's device plugin runs on every amd64 node and crash-loops on one
 without the C<amdgpu> driver. For a cluster with such nodes, pass
 C<gpu_device_plugin =E<gt> 0> and deploy it with an C<affinity> (see
