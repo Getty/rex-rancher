@@ -145,7 +145,18 @@ sub check_cilium_residue {
 =method uninstall_cmd
 
 The shell line L</uninstall_node> runs, for a caller that runs it through
-its own channel. Pure. In this order:
+its own channel. Pure.
+
+The line is one C</bin/sh -c '...'> command, handed to the channel as it
+is. An SSH server runs a command through the login shell of the user;
+whatever that shell is for root, the steps below run under C</bin/sh>. A
+pattern that matches nothing on the host
+(C</sys/fs/bpf/tc/globals/cilium_*>, C</var/run/cdi/k8s.gpu.amd.com-gpu_*>)
+reaches C<rm> as it is and is ignored there, also when root's login shell
+is zsh, which would otherwise stop the line at it. Exit status, stdout and
+stderr are those of the steps.
+
+The steps, in this order:
 
 =over
 
@@ -247,6 +258,12 @@ again afterwards, see L</uninstall_node>.
 =cut
 
 sub uninstall_cmd {
+  my ( $self ) = @_;
+  return $self->_sh_c($self->_uninstall_script);
+}
+
+# The steps uninstall_cmd hands to /bin/sh, in the order its POD gives them.
+sub _uninstall_script {
   my ( $self ) = @_;
   my @dists  = $self->_distributions;
   my $labels = $self->_distribution_labels;
@@ -427,6 +444,23 @@ sub _distribution_present_cmd {
       . ' 2>/dev/null';
 }
 
+# A script as one /bin/sh -c command (k114). sshd runs a command through the
+# login shell of the user ($SHELL -c), and nothing between uninstall_cmd and
+# the host puts an sh of its own in: Rex::Interface::Exec::SSH (and Rex::LibSSH's
+# Exec) only prefix LC_ALL and PATH for the shell `echo $SHELL` named -- for
+# zsh Rex::Interface::Shell::Zsh, a Bash -- and only Rex's sudo path wraps in
+# sh -c; kubernetes-ocp sends the line as the ssh command. Under zsh a pattern
+# that matches nothing (the pins in /sys/fs/bpf/tc/globals, the AMD CDI specs)
+# is an error that ends the whole line, || true or not. As one single-quoted
+# word the login shell hands the script on untouched, and /bin/sh leaves such
+# a pattern as it is. /bin/sh by path, as sshd and system(3) use it: the line
+# does not need an sh on the caller's PATH. Exit status, stdout and stderr are
+# the script's.
+sub _sh_c {
+  my ( $self, $script ) = @_;
+  return "/bin/sh -c '" . ( $script =~ s/'/'\\''/gr ) . "'";
+}
+
 # The PATH file ensure_nvidia_runtime_path writes for the NVIDIA runtime
 # lookup, which no vendor uninstaller removes (kubernetes-ocp, a GPU host
 # after destroy). The line also runs on hosts Rex::Rancher did not set up, so
@@ -468,8 +502,9 @@ sub _env_files_cmd {
 # distribution is gone, and never deletes _common: without this they stay
 # until the reboot clears /var/run. The pattern needs the "_": a spec of
 # that vendor without it is not one of the driver's transient specs.
-# Unmatched, the shell hands the pattern to rm as it is, and rm -f ignores a
-# path that is not there.
+# Unmatched, /bin/sh -- uninstall_cmd runs the steps under it, never under a
+# zsh -- hands the pattern to rm as it is, and rm -f ignores a path that is
+# not there.
 sub _leftover_paths {
   qw(
     /usr/local/bin/cilium /opt/cni /run/k3s
@@ -483,7 +518,7 @@ sub _leftover_paths {
 # A warning is one line on stderr, starting with the marker, so that
 # uninstall_warnings finds it among whatever else the channel carries. The
 # text goes between double quotes: no ", $, ` or backslash in it -- and no
-# single quote, which the line as a whole has none of.
+# single quote, which the script inside uninstall_cmd's quotes has none of.
 sub _warning_marker { 'rex-rancher-uninstall-warning' }
 
 sub _warning_cmd {

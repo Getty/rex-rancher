@@ -210,7 +210,10 @@ subtest 'the line: every step, in order' => sub {
   like( $cmd, qr/umount -l /, 'a busy cgroup2 mount is detached lazily' );
   like( $cmd, qr/\bipt_used="" ; for ipt in /, 'the backend flag starts empty right before the loop' );
   unlike( $cmd, qr{/etc/default/k3s}, 'no PATH file for K3s: it has no env_file' );
-  unlike( $cmd, qr/'/, 'no single quote in the line: a caller may wrap it in single quotes' );
+  # k114: the line single-quotes the script for /bin/sh -c itself (claims in
+  # t/uninstall-shell.t); no quote inside it, so the steps above are the
+  # script as it is.
+  like( $cmd, qr{\A/bin/sh -c '[^']*'\z}, 'one /bin/sh -c command, no single quote in the script inside it' );
   # k105: everything the line names under the CDI directories, anywhere in it.
   is_deeply( [ $cmd =~ m{((?:/var)?/run/cdi\b\S*)}g ], [qw(
       /var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json
@@ -314,8 +317,12 @@ sub machine_has_residue {
 sub run_uninstall { run_line( $cmd, @_ ) }
 
 # The same for another line (k85: one built by Local::Uninstall).
+#
+# k114: the line is /bin/sh -c '...'; the -e goes to that /bin/sh, the one
+# running the steps, so an unguarded step still ends it here.
 sub run_line {
   my ( $line, %stubs ) = @_;
+  $line =~ s{\A/bin/sh -c }{/bin/sh -e -c } or die "not a /bin/sh -c line: $line\n";
   my $dir = tempdir( CLEANUP => 1 );
   my $bin = "$dir/bin";
   mkdir $bin or die "$bin: $!";

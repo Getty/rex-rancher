@@ -85,6 +85,13 @@ Revision history for Rex-Rancher
     plugin ready only once its GPU resource is allocatable on a node; when
     the wait runs out they warn as before and end saying the DaemonSet is
     applied but the resource did not appear (still no die).
+  - uninstall_cmd, and with it uninstall_node, is one /bin/sh -c '...'
+    command: the uninstall runs under /bin/sh whatever root's login shell is,
+    so a CDI spec or bpffs pin pattern that matches nothing on the host
+    reaches rm as it is, also when root's shell is zsh. A caller that sends
+    the line through its own channel passes it on as it is; the line now
+    carries single quotes, so one that wraps it in '...' itself has to drop
+    that.
 
 0.004     2026-10-21 22:35:28Z
   - Requires IO::K8s 1.111 and Kubernetes::REST 1.110; recommends Rex::GPU
