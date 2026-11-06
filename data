@@ -1,0 +1,50 @@
+---
+claimed_at: 2026-11-06T19:57:08Z
+claimed_by: rex-rancher-worker
+class: standard
+completed: 2026-11-06T19:53:37Z
+created: 2026-10-31T04:22:50Z
+id: 112
+priority: medium
+started: 2026-11-06T19:33:10Z
+status: done
+tags:
+- amd
+- gpu
+- k8s
+title: 'AMD device plugin/labeller DaemonSets: consider hostNetwork so a fresh node
+  does not wait on the CNI'
+updated: 2026-11-06T19:57:08Z
+---
+
+From the OCP live acceptance on amdlab, 2026-10-31 (OCP card k286; Rex::Rancher worktree-k95-amd-gpu at 057cef4, RKE2 v1.36.4, Cilium 1.20.0).
+
+On a freshly joined node (synapse) the Cilium agent was Ready at 04:15:15, but every new pod sandbox on that node failed until 04:20:44: "Regeneration of endpoint failed … buildPermitAcquisition", "Cilium API client timeout exceeded", "[429] putEndpointIdTooManyRequests" — Cilium's first BPF compile after a fresh install. coredns, nfd-worker, the labeller and the device plugin all waited ~5.5 min; amd.com/gpu appeared ~7 min after registration. An earlier join failed OCP's 300 s readiness budget for exactly this reason.
+
+The device plugin talks to the kubelet over the unix socket in /var/lib/kubelet/device-plugins and needs no pod network; the labeller only needs the API server. With `hostNetwork: true` (plus `dnsPolicy: ClusterFirstWithHostNet` if anything resolves cluster names) neither would depend on the CNI's cold start, and the GPU resource would appear as soon as the driver is up.
+
+Check before deciding: what upstream ROCm k8s-device-plugin / the AMD GPU operator ship (they may deliberately not use hostNetwork), PodSecurity (OCP runs rke2 PSS — kube-system exemption?), port collisions (metrics/health ports on the host), and whether wait_for_*_ready budgets in Rex::Rancher::K8s should account for the CNI cold start instead. Decision is the maintainer's.
+
+Prüfung 2026-11-06 (Orchestrator, Quellen gelesen, nichts live):
+
+1. Upstream. ROCm k8s-device-plugin am Release-Tag v1.31.0.11 (byte-gleich mit master): k8s-ds-amdgpu-dp.yaml, k8s-ds-amdgpu-labeller.yaml, k8s-ds-amdgpu-dp-health.yaml und das Helm-Chart amd-gpu-helm-0.22.0 (helm/amd-gpu/templates/deviceplugin-daemonset.yaml, labeller.yaml) setzen kein hostNetwork, kein dnsPolicy, keine ports. Keine bewusste Ablehnung: Der AMD GPU Operator v1.5.1 hat DeviceConfig spec.devicePlugin.hostNetwork (*bool, optional; api/v1alpha1/deviceconfig_types.go:530-533), internal/plugin/plugin.go:266-268 setzt es aufs Device-Plugin-DaemonSet, ohne dnsPolicy. Eingeführt mit ROCm/gpu-operator PR 465 (merged 2026-03-13, Begründung: host networking statt Cluster-Netz). Der Labeller des Operators (internal/nodelabeller/nodelabeller.go) hat keine solche Option.
+
+2. PodSecurity. Beide DaemonSets laufen in kube-system (K8s.pm _amd_device_plugin_daemonset_spec, _amd_node_labeller_specs). RKE2 ohne profile: rke2-pss.yaml mit enforce privileged clusterweit; mit profile: cis enforce restricted, aber kube-system ausgenommen (rke2-docs docs/security/pod_security_standards.md). K3s bringt keine PSA-Konfiguration mit (k3s docs/security/hardening-guide.md: "By default, K3s does not include any pod security"), also gilt privileged; das CIS-Beispiel dort nimmt kube-system ebenfalls aus. Rex::Rancher setzt weder profile noch pod-security-admission-config-file. Dazu: baseline verbietet schon heute hostPath (Plugin: /sys, device-plugins) und privileged (Labeller). Jedes Level, das die DaemonSets heute zulässt, lässt auch hostNetwork zu.
+
+3. Ports. Das Plugin öffnet keinen TCP-Port: gRPC zum kubelet über Unix-Sockets in /var/lib/kubelet/device-plugins (kubevirt device-plugin-manager v1.19.5; cmd/k8s-device-plugin/main.go importiert weder net/http noch client-go); Health nur mit -pulse über den Unix-Socket des Metrics-Exporters (internal/pkg/exporter/health.go:36), hier nicht benutzt. Labeller: controller-runtime v0.19.0, Manager mit Metrics BindAddress "0" = aus (cmd/k8s-node-labeller/main.go:421-424); HealthProbeBindAddress und PprofBindAddress ungesetzt, Default "" = aus (controller-runtime pkg/manager/manager.go:226-242); der Webhook-Server startet nur über GetWebhookServer() (internal.go:270), den der Labeller nicht ruft. Keine containerPorts. Kein Listener auf dem Host, also keine Kollision mit RKE2 (9345, 6443, 10250, 2379/2380), k3s (6443, 10250) oder Cilium (4240, 4244, 9962-9964).
+
+4. DNS. Das Plugin spricht keine API und löst keine Namen auf. Der Labeller nimmt die In-Cluster-Config aus KUBERNETES_SERVICE_HOST/PORT (eine IP), keine DNS-Abfrage. ClusterFirstWithHostNet ist also nicht nötig und würde die Pods an CoreDNS binden, das selbst auf den CNI-Kaltstart wartet. Meine Wahl (nicht die des Maintainers): dnsPolicy Default ausdrücklich. Für hostNetwork-Pods ist das dasselbe wie der Fallback von ClusterFirst, aber das Objekt sagt, was gilt.
+
+Randnotizen: Mit hostNetwork erreicht der Labeller die API über die ClusterIP aus dem Host-Netz-Namespace. Die übersetzt Cilium (kubeProxyReplacement=true, Socket-LB) ab Start des Agents, nicht erst nach der Endpoint-Regeneration, an der die Pod-Sandboxes auf synapse hingen. Die Alternative der Karte (Wartebudgets an den CNI-Kaltstart anpassen) entfällt nach Gettys Entscheidung.
+
+kubernetes-ocp: Es kennt die beiden DaemonSets nur über Name, Namespace und Image-Tag (lib/OCP/Drift.pm:31-33, lib/OCP/Cmd/Apply/AMDGPU.pm), nichts zu hostNetwork oder dnsPolicy. Kein Code muss nachziehen. Aber der Reconcile-Hash ist call + options + $Rex::Rancher::K8s::VERSION (Apply/AMDGPU.pm:453-461). Ein Cluster, den OCP schon mit einem 0.005-Stand vor diesem Commit deployt hat (amdlab, worktree-k95-amd-gpu 057cef4 trägt 0.005), gilt als unchanged und behält die alten DaemonSets bis zu einem erneuten Deploy. Von 0.004 aus deployt OCP neu.
+
+Ergebnis: Nichts spricht dagegen, wird gebaut (hostNetwork true und dnsPolicy Default für Device Plugin und Labeller). Live unverifiziert.
+
+Gebaut (Worktree k112, uncommitted): K8s.pm _amd_device_plugin_daemonset_spec und das DaemonSet in _amd_node_labeller_specs mit hostNetwork true, dnsPolicy Default; Begründung in den Kommentaren über beiden Subs. POD von deploy_amd_device_plugin (neues item) und deploy_amd_node_labeller (neuer Absatz). Rex/Rancher.pm und README: nichts falsch geworden, unverändert. Test t/amd-device-plugin.t: 16 neue Assertions (Spec, IO::K8s-Round-Trip, JSON true, gesendete DaemonSets); rot gegen das alte lib des Haupt-Checkouts (33d4882): genau die 16; grün gegen das neue lib; prove -lr t/: Files=49, Tests=1844, PASS (Skips: eg-lan-rexfile live run, uninstall-shell zsh 10-13). Präzisierung im Kommentar: die Pods werden weiter erst bei Node Ready eingeplant (keine not-ready-Toleration); übersprungen wird die Wartezeit danach. Live unverifiziert.
+
+Bereit für Review: hostNetwork + dnsPolicy Default für AMD Device Plugin und Labeller, POD, Kommentare, Test. Commit und Changes-Eintrag durch den release-manager. Live unverifiziert (frisch gejointer Knoten über kubernetes-ocp).
+
+Committed e034c1c6d34d11a64eecf7874102b99f2218a5a1 on k112-amd-hostnetwork (main still 33d4882; ff-only merge not done by the release-manager, blocked by worktree isolation). Unverified live: ob die Pods auf einem frisch gejointen AMD-Knoten vor dem Ende des CNI-Kaltstarts laufen und amd.com/gpu früher erscheint; erst ein Deploy über kubernetes-ocp zeigt das. Ein Cluster, den OCP schon mit einem 0.005-Stand vor diesem Commit deployt hat, behält die alten DaemonSets bis zu einem erneuten Deploy (OCP-Hash = call + options + Rex::Rancher::K8s $VERSION). Folgekarte k122 (NVIDIA plugin / DRA kubelet plugin, ungeprüft).
+
+Orchestrator 2026-11-06: main per Fast-Forward auf e034c1c6d34d11a64eecf7874102b99f2218a5a1 (lokal, Push macht der Hub). Abschluss-Check auf dem Commit: prove -lr t/ Files=49, Tests=1844, Result: PASS (Skips: eg-lan-rexfile.t ohne LAN-Maschine, uninstall-shell.t 10-13 ohne zsh); dzil build sauber; podchecker auf alle 12 gebauten Module: pod syntax OK. Build-Verzeichnis entfernt.
