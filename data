@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-11-06T18:36:26Z
+created: 2026-11-06T18:17:11Z
+id: 120
+priority: low
+started: 2026-11-06T18:24:10Z
+status: done
+tags:
+- docs
+- amd
+title: 'POD AMD GPUs: Rex::GPU 0.006 stirbt mit gpu_amd_integrated auf APU plus amdgpu-dkms-GPU,
+  nach prepare_node'
+updated: 2026-11-06T18:36:26Z
+---
+
+Gefunden bei k119 (2026-11-06). lib/Rex/Rancher.pm, Abschnitt AMD GPUs (um Zeile 1252-1295): er sagt nicht, dass Rex::GPU 0.006 mit gpu_amd_integrated auf einem Host mit APU und einer GPU, die amdgpu-dkms braucht, im gpu_setup stirbt (Rex::GPU lib/Rex/GPU/AMD.pm _die_mixed_drivers). Rex::GPU meldet, am Host sei nichts geaendert, aber prepare_node ist da schon gelaufen, wie bei den NVIDIA-Fehlern um Zeile 1240 beschrieben. Das dies before the host is touched um Zeile 1283 ist ein anderer Fall (Rex::GPU ohne AMD). Fertig, wenn: die POD nennt diesen Abbruch, den Ausweg (gpu_amd_integrated weglassen) und dass prepare_node schon lief. Nur POD.
+
+Worker: Abschnitt AMD GPUs hat zwei neue Absaetze nach der Liste. Der erste nennt den Abbruch von Rex::GPU 0.006 bei gpu_amd_integrated mit APU und dkms-GPU und die Auswege: gpu_amd_integrated weglassen, oder install_driver direkt mit method inbox bzw. gpus mit den dkms-GPUs, mit Vorbehalt bis der Treiber aktiv ist. Der zweite sagt, dass der Abbruch in step 2 nach prepare_node kommt (und nach einem NVIDIA-Setup), aber vor jeder AMD-Aenderung. Nur POD, lib/Rex/Rancher.pm 30 Zeilen neu. Gebautes Rancher.pm: pod syntax OK ohne Warnung. prove -lr t/ mit Files 49, Tests 1825, PASS. Gestuetzt auf rex-gpu lib/Rex/GPU/AMD.pm 214-336 und lib/Rex/GPU.pm 364-420, auf Hardware nicht gesehen.
+
+Committed ac95bbc51d42f0aa1922b8206dbdb4861fd3a92d (Branch k118-k119-changes), main per ff auf ac95bbc. Gebautes Rex/Rancher.pm: pod syntax OK. Drift zur reboot-POD als k121 im Backlog.
