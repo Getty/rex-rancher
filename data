@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-06T19:53:15Z
+id: 122
+priority: low
+status: backlog
+tags:
+- gpu
+- k8s
+title: 'NVIDIA device plugin / AMD DRA kubelet plugin: check hostNetwork like the
+  AMD device plugin'
+updated: 2026-11-06T19:53:15Z
+---
+
+Befund aus der k112-Prüfung: Der NVIDIA-Device-Plugin und das DRA-Kubelet-Plugin (deploy_amd_dra_driver) könnten ebenso auf den CNI-Kaltstart eines frisch gejointen Knotens warten wie vorher das AMD Device Plugin (k112: etwa 5,5 Minuten nach Ready des Cilium-Agents kam keine Pod-Sandbox hoch). Beides ist ungeprüft: weder Upstream-Manifeste, PSS, Ports noch DNS wurden angesehen. Nichts entschieden; die Entscheidung trifft der Maintainer.
