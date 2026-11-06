@@ -103,6 +103,15 @@ Revision history for Rex-Rancher
     cilium_residue_cleanup_cmd is the same line for a caller with its own
     channel. Without clean the check refuses such a host as before, and its
     message now names this call next to the reboot.
+  - New option node_ip_from_route => 1 for rancher_deploy_agent,
+    rancher_deploy_server, install_agent, install_server, preflight_agent and
+    preflight_server: a joining node without node_ip takes as its node-ip
+    the source address its host uses to reach the join server. It is read on
+    the host with ip -o route get, a host name is resolved there, and the
+    result is one address, of the server's family, IPv4 first for a name.
+    What cannot be derived is left out with a warning, a given node_ip wins,
+    and a first server derives nothing. preflight_server and preflight_agent
+    return the derived address as node_ip.
 
 0.004     2026-10-21 22:35:28Z
   - Requires IO::K8s 1.111 and Kubernetes::REST 1.110; recommends Rex::GPU

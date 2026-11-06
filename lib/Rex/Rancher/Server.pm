@@ -274,6 +274,38 @@ C<config.yaml> by hand. Only C<config.yaml> is read: a C<node-ip> in a
 C<config.yaml.d> drop-in wins over it, as RKE2 and K3s merge them, and is
 left alone.
 
+=item C<node_ip_from_route>
+
+If true, a server that joins with C<server> and has no C<node_ip> given
+takes as its C<node_ip> the source address its host uses to reach the
+server in C<server>: the C<src> of C<ip -o route get> on the host, an
+address on one of its interfaces by construction (see
+L<Rex::Rancher::Distribution/node_ip_from_route>). For a multi-homed host
+whose default route does not point into the cluster network, without
+naming an address for each host. Default: C<0>, and nothing changes.
+
+The host in C<server> is an IPv4 address, an IPv6 address in brackets or a
+host name (C<https://10.230.30.52:9345>, C<https://[fd00::1]:9345>,
+C<https://cp.example:9345>); a C<server> of another form dies before the
+host is touched. A host name is resolved on the host, not on this machine,
+and its IPv4 address is taken, an IPv6 address only for a name without
+one. One address, of the server address's family: for dual-stack, pass
+both in C<node_ip>.
+
+The derived address counts as a given C<node_ip>: it is written to
+C<config.yaml>, and on a re-run where C<config.yaml> holds another one,
+with the warning above. When it cannot be derived (a name that does not
+resolve on the host, a route the host does not have, a route without a
+source address or with one that is no address of the server's family, a
+loopback or an unspecified one) nothing is guessed: the run has no
+C<node_ip>, a warning says why, and the C<node-ip> C<config.yaml> holds is
+kept, as above, else the node advertises the address of its default route.
+A C<node_ip> given wins: no route is asked, with a log line. A first
+server (no C<server>) joins no one, so nothing is derived, with a log line
+and without dying: the option can go to every server. The route is the
+last thing L<preflight_server|/"preflight_server(%opts)"> reads, which
+returns what it found as C<node_ip>.
+
 =item C<kubeconfig_mode>
 
 File mode of the kubeconfig the server writes on the node
@@ -437,7 +469,8 @@ exported.
 
 =item 1. the pure option checks: C<distribution>, C<install_method> (with
 C<version>), C<cluster_cidr>, C<kubeconfig_mode>, C<node_ip>,
-C<node_external_ip>;
+C<node_external_ip>, and with C<node_ip_from_route> the host in C<server>
+(L<Rex::Rancher::Options/join_server_host>);
 
 =item 2. Cilium datapath state an earlier cluster left on a host without
 RKE2 or K3s (L<Rex::Rancher::Uninstall/check_cilium_residue>), the first
@@ -451,7 +484,11 @@ read of the host;
 under C<hold_running>, else C<version>;
 
 =item 5. the C<cluster-cidr> of a server already set up on the host
-(L<Rex::Rancher::Distribution/check_established_cluster_cidr>).
+(L<Rex::Rancher::Distribution/check_established_cluster_cidr>);
+
+=item 6. with C<node_ip_from_route>, C<server> and no C<node_ip>, the route
+to the server (L<Rex::Rancher::Distribution/node_ip_from_route>), which
+never dies: what cannot be derived is left out, with a warning.
 
 =back
 
@@ -459,7 +496,10 @@ Dies as L<install_server|/"install_server(%opts)"> would. Returns a hashref: the
 installs (held, pinned, or C<undef> for the stable channel), the
 C<install_method>, the C<cluster_cidr>, the C<kubeconfig_mode>, and
 C<node_ip> and C<node_external_ip> as arrayrefs of addresses (each C<undef>
-when not given).
+when not given; C<node_ip> the derived one with C<node_ip_from_route>), so
+a caller that only runs the checks sees the C<node_ip> an install would
+write. L<install_server|/"install_server(%opts)"> asks the route again and
+writes what it finds then.
 
 =cut
 
@@ -476,6 +516,10 @@ sub preflight_server {
     map { ( $_ => scalar Rex::Rancher::Options->check_node_addresses($_ => $opts{$_}) ) }
       qw( node_ip node_external_ip ),
   );
+  # node_ip_from_route: the join server's host, from server; a URL it cannot
+  # read dies here, before the host is touched (k111).
+  my $route_host = $dist->node_ip_route_host(node_ip_from_route => $opts{node_ip_from_route},
+    node_ip => $checked{node_ip}, server => $opts{server});
   # The first read of the host: Cilium state an earlier cluster left on a host
   # without RKE2/K3s would hang every image pull of this install (k71).
   Rex::Rancher::Uninstall->check_cilium_residue;
@@ -489,6 +533,9 @@ sub preflight_server {
   # would carry it and the service be restarted onto it (k67).
   $dist->check_established_cluster_cidr(cluster_cidr => $checked{cluster_cidr},
     cilium => ( exists $opts{cilium} ? $opts{cilium} : 1 ));
+  # The last read, and one that never refuses: a refused host is not asked.
+  # What it finds is this run's node_ip, as if given (k111).
+  $checked{node_ip} = $dist->node_ip_from_route($route_host) if defined $route_host;
   return \%checked;
 }
 

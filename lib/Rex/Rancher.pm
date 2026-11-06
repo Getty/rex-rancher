@@ -57,9 +57,10 @@ cluster left on a host without RKE2 or K3s, the version skew against the
 running server or installed binary (with C<hold_running> against the held
 version), and the C<cluster-cidr> of a server already set up there. Any of
 them dies there, with nothing on the host changed: no packages, no swap or
-kernel module change, no GPU driver, no reboot. These only read the host;
-C<install_server> asks them again in step 3, on the host as node
-preparation and GPU setup left it.
+kernel module change, no GPU driver, no reboot. With C<node_ip_from_route>
+the route to the join server is read last, which never dies. These only
+read the host; C<install_server> asks them again in step 3, on the host as
+node preparation and GPU setup left it.
 
 The full pipeline for a GPU server deployment:
 
@@ -342,6 +343,19 @@ without it keeps what C<config.yaml> holds; one that changes it warns, and
 on a node that already registered the Cilium agent pod then needs a restart
 as well. See L<Rex::Rancher::Server/install_server>.
 
+=item C<node_ip_from_route>
+
+If true, a node that joins (an agent, or a server with C<server>) and has
+no C<node_ip> given takes as its C<node_ip> the source address its host
+uses to reach the host in C<server>, asked on the host (C<ip -o route get>;
+a host name is resolved there too), one address of the server address's
+family. A C<server> whose host is no IPv4 address, IPv6 address in
+brackets or host name dies before the node is prepared. What cannot be
+derived is left out with a warning, never guessed; a C<node_ip> given
+wins; a first server, which joins no one, derives nothing and does not
+die. Default: C<0>, and nothing changes. See
+L<Rex::Rancher::Server/install_server>.
+
 =item C<kubeconfig_mode>
 
 File mode of the kubeconfig the server writes on the node (C<rke2.yaml> /
@@ -561,7 +575,7 @@ L<Rex::Rancher::Server/get_token>. Required.
 
 Override the node name registered in Kubernetes (optional).
 
-=item C<distribution>, C<version>, C<hold_running>, C<install_method>, C<node_labels>, C<node_ip>, C<node_external_ip>, C<registries>, C<nvidia_runtime_path>
+=item C<distribution>, C<version>, C<hold_running>, C<install_method>, C<node_labels>, C<node_ip>, C<node_external_ip>, C<node_ip_from_route>, C<registries>, C<nvidia_runtime_path>
 
 As for L<rancher_deploy_server|/"rancher_deploy_server(%opts)">; passed to
 L<Rex::Rancher::Agent/install_agent>. With C<hold_running> the agent keeps
@@ -603,8 +617,9 @@ not answer dies too), then Cilium datapath state an earlier cluster left on
 a host without RKE2 or K3s, then the version skew against the running agent
 or installed binary and against the control plane (with C<hold_running>
 against the held version). Any of them dies with nothing on the host
-changed. These only read; C<install_agent> asks them again after node
-preparation and GPU setup.
+changed. With C<node_ip_from_route> the route to the server is read last,
+which never dies. These only read; C<install_agent> asks them again after
+node preparation and GPU setup.
 
 The server-only options have no effect on an agent and are ignored:
 C<tls_san>, C<disable>, C<cluster_cidr>, C<kubeconfig_mode>, C<kubeconfig_server>, C<cilium>, C<cilium_version>, C<cilium_cli_version>,

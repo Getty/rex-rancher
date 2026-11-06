@@ -10,6 +10,7 @@ use Rex::Commands::Run ();
 use Rex::Logger ();
 use Rex::Rancher::Checksum;
 use Rex::Rancher::Options;
+use Socket qw( AF_INET AF_INET6 inet_pton );
 use YAML::PP;
 use YAML::PP::Common qw( PRESERVE_ORDER );
 use namespace::autoclean;
@@ -1239,6 +1240,139 @@ sub _configured_node_addresses {
     $addr{$key} = \@ip if @ip;
   }
   return \%addr;
+}
+
+#
+# node_ip_from_route (k111, kubernetes-ocp k254): for a join, the node-ip is
+# the source address the host uses to reach the join server -- on a local
+# interface by construction, and on a single-homed host what RKE2 and K3s
+# pick anyway. Only the host can tell (a NAT or port-forward address the
+# caller reached it by is not on the host), so it is asked there; whatever
+# cannot be answered leaves node-ip out with a warning, never a guess.
+#
+
+=method node_ip_route_host
+
+  my $host = $dist->node_ip_route_host(node_ip_from_route => 1,
+    node_ip => $ips, server => 'https://10.230.30.52:9345');
+  # '10.230.30.52'
+
+The host C<node_ip_from_route> asks the route to, server and agent alike,
+from the options alone (no host is read): C<undef> when
+C<node_ip_from_route> is off; when C<node_ip> (as
+L<Rex::Rancher::Options/check_node_addresses> returns it) is given, which
+wins, with a log line; and without C<server>, a first server, which joins
+no one, with a log line that no C<node-ip> is derived. Otherwise the host
+of C<server> (L<Rex::Rancher::Options/join_server_host>), which dies for a
+URL it cannot read. For L</node_ip_from_route>.
+
+=cut
+
+sub node_ip_route_host {
+  my ( $self, %opts ) = @_;
+  return unless $opts{node_ip_from_route};
+  if ( $opts{node_ip} ) {
+    Rex::Logger::info('node_ip '.join(',', @{ $opts{node_ip} })
+      . ' is given, so node_ip_from_route asks no route');
+    return;
+  }
+  unless ( $opts{server} ) {
+    Rex::Logger::info('node_ip_from_route: no server to join, so no route to one; '
+      . $self->_node_ip_not_derived);
+    return;
+  }
+  return Rex::Rancher::Options->join_server_host($opts{server});
+}
+
+=method node_ip_from_route
+
+  my $ips = $dist->node_ip_from_route('10.230.30.52');
+  # [ '10.230.30.50' ]
+
+The C<node-ip> C<node_ip_from_route> derives for a node joining at
+C<$host> (from L</node_ip_route_host>): the source address the host uses to
+reach it, as an arrayref of one address the way
+L<Rex::Rancher::Options/check_node_addresses> returns one, or C<undef>.
+Only reads the host, over the exec channel, with two plain commands: no
+pattern, no expansion, the operand in single quotes, so that root's login
+shell runs them alike, C<sh>, C<bash>, C<dash> or C<zsh>:
+
+=over
+
+=item * a host name is resolved there, not on this machine: C<getent ahosts
+'NAME'>, the host's own resolver and F</etc/hosts>. Its first IPv4 address
+is taken, and only for a name without one its first IPv6 address;
+
+=item * C<ip -o route get 'ADDRESS' 2E<gt>&1>, and the C<src> it names.
+
+=back
+
+One family, the server address's: the C<src> has to be an address of that
+family. Dual-stack stays explicit: C<node_ip> with one IPv4 and one IPv6
+address. A name that does not resolve there, a route the host does not
+have (C<ip> fails, "Network is unreachable" for example), a route without
+C<src>, or a C<src> of the other family, a loopback or an unspecified
+address: C<undef>, with a warning naming what failed and that the
+C<node-ip> in L</config_file> is kept, else the address of the default
+route advertised. The address found is logged.
+
+=cut
+
+sub node_ip_from_route {
+  my ( $self, $host ) = @_;
+  # Plain lines, no /bin/sh -c as for uninstall_cmd (k114): nothing in them
+  # that zsh runs otherwise than sh (no pattern, no expansion), and the
+  # operand passed join_server_host or inet_pton and is quoted all the same.
+  my $not  = $self->_node_ip_not_derived;
+  my $addr = $host;
+  unless ( defined inet_pton( AF_INET, $host ) || defined inet_pton( AF_INET6, $host ) ) {
+    # IPv4 first, whatever the host's gai.conf sorts first: the clusters this
+    # builds are IPv4 (cluster_cidr takes one IPv4 CIDR), and every host
+    # picks the same family.
+    my $out   = Rex::Commands::Run::run('getent ahosts '.$self->_shell_quote($host), auto_die => 0);
+    my @found = $? == 0 ? ( map { /\A(\S+)/ ? $1 : () } split /\n/, $out // '' ) : ();
+    ($addr) = ( ( grep { defined inet_pton( AF_INET, $_ ) } @found ),
+      ( grep { defined inet_pton( AF_INET6, $_ ) } @found ) );
+    unless ( defined $addr ) {
+      Rex::Logger::info("node_ip_from_route: $host does not resolve to an IPv4 or IPv6 "
+        . "address on the host (getent ahosts), so $not", 'warn');
+      return;
+    }
+  }
+  my $family = defined inet_pton( AF_INET, $addr ) ? AF_INET : AF_INET6;
+  my $out    = Rex::Commands::Run::run('ip -o route get '.$self->_shell_quote($addr).' 2>&1',
+    auto_die => 0);
+  my $failed = $? != 0;
+  my ($said) = split /\n/, $out // '';
+  ( $said //= '' ) =~ s/\A\s+|\s+\z//g;
+  if ($failed) {
+    Rex::Logger::info("node_ip_from_route: ip -o route get $addr failed on the host"
+      . ( length $said ? " ($said)" : '' ) . ", so $not", 'warn');
+    return;
+  }
+  my ($src) = ( $out // '' ) =~ /(?:\A|\s)src\s+(\S+)/;
+  unless ( defined $src ) {
+    Rex::Logger::info("node_ip_from_route: the route to $addr names no source address"
+      . ( length $said ? " ($said)" : '' ) . ", so $not", 'warn');
+    return;
+  }
+  my $packed = inet_pton( $family, $src );
+  unless ( defined $packed && $packed =~ /[^\0]/
+    && ( $family == AF_INET ? $packed !~ /\A\x7f/ : $packed ne ( "\0" x 15 ) . "\1" ) ) {
+    Rex::Logger::info("node_ip_from_route: the route to $addr has the source address $src, "
+      . 'not an ' . ( $family == AF_INET ? 'IPv4' : 'IPv6' ) . ' address a node can '
+      . "advertise, so $not", 'warn');
+    return;
+  }
+  Rex::Logger::info("node_ip_from_route: node-ip $src, the source address of the route to "
+    . $addr . ( $addr eq $host ? '' : " ($host)" ));
+  return Rex::Rancher::Options->check_node_addresses(node_ip => $src);
+}
+
+sub _node_ip_not_derived {
+  my ( $self ) = @_;
+  return 'node-ip is not derived: a node-ip in '.$self->config_file.' is kept, else '
+    . $self->name.' advertises the address of its default route. Pass node_ip to set one';
 }
 
 #

@@ -150,6 +150,19 @@ that changes it warns, and the Cilium agent pod on the node then needs a
 restart as well. Same as L<Rex::Rancher::Server/install_server>'s
 C<node_ip> and C<node_external_ip>, which has the details.
 
+=item C<node_ip_from_route>
+
+If true and no C<node_ip> is given, the agent's C<node_ip> is the source
+address its host uses to reach the host in C<server> (an IPv4 address, an
+IPv6 address in brackets or a host name, resolved on the host; any other
+form dies before the host is touched): the C<src> of C<ip -o route get> on
+the host, one address of the server address's family, written as a given
+C<node_ip> would be. What cannot be derived is left out with a warning,
+never guessed, and C<config.yaml>'s C<node-ip> is kept as without
+C<node_ip>; a C<node_ip> given wins. Default: C<0>, and nothing changes.
+Same as L<Rex::Rancher::Server/install_server>'s C<node_ip_from_route>,
+which has the details.
+
 =item C<registries>
 
 Private registry mirror configuration hashref. Same structure as
@@ -232,7 +245,9 @@ is left as it was. Not exported.
 =over
 
 =item 1. the pure option checks: C<install_method> (with C<version>),
-C<distribution>, C<node_ip>, C<node_external_ip>;
+C<distribution>, C<node_ip>, C<node_external_ip>, and with
+C<node_ip_from_route> the host in C<server>
+(L<Rex::Rancher::Options/join_server_host>);
 
 =item 2. with C<kubeconfig>, the control plane's version through the API
 (from this machine, no host involved); an API that does not answer dies;
@@ -247,7 +262,11 @@ read of the host;
 =item 5. the version skew against the running agent or installed binary,
 and against the control plane's version from item 2
 (L<Rex::Rancher::Distribution/check_version_skew>), with the held version
-under C<hold_running>, else C<version>.
+under C<hold_running>, else C<version>;
+
+=item 6. with C<node_ip_from_route> and no C<node_ip>, the route to the
+server (L<Rex::Rancher::Distribution/node_ip_from_route>), which never
+dies: what cannot be derived is left out, with a warning.
 
 =back
 
@@ -255,7 +274,10 @@ Dies as L</install_agent> would. Returns a hashref: the C<version> this run
 installs (held, pinned, or C<undef> for the stable channel), the
 C<install_method>, the control plane's C<server_version> (C<undef>
 without C<kubeconfig>), and C<node_ip> and C<node_external_ip> as arrayrefs
-of addresses (each C<undef> when not given).
+of addresses (each C<undef> when not given; C<node_ip> the derived one
+with C<node_ip_from_route>), so a caller that only runs the checks sees the
+C<node_ip> an install would write. L</install_agent> asks the route again
+and writes what it finds then.
 
 =cut
 
@@ -267,6 +289,9 @@ sub preflight_agent {
   my $dist = Rex::Rancher::Distribution->new_for($opts{distribution}, role => 'agent');
   $checked{$_} = Rex::Rancher::Options->check_node_addresses($_ => $opts{$_})
     for qw( node_ip node_external_ip );
+  # node_ip_from_route: the server's host, before the host is touched (k111).
+  my $route_host = $dist->node_ip_route_host(node_ip_from_route => $opts{node_ip_from_route},
+    node_ip => $checked{node_ip}, server => $opts{server});
 
   # An agent never goes to a newer minor than the control plane, nor skips
   # or goes back a minor itself.
@@ -281,6 +306,9 @@ sub preflight_agent {
     ? $dist->held_version(version => $opts{version}) : $opts{version};
   $dist->check_version_skew(version => $checked{version},
     server_version => $checked{server_version});
+  # The last read, never a refusal; what it finds is this run's node_ip, as
+  # if given, as on the server (k111).
+  $checked{node_ip} = $dist->node_ip_from_route($route_host) if defined $route_host;
   return \%checked;
 }
 

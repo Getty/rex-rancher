@@ -20,7 +20,7 @@ API is **plain functions** via `Rex::Exporter`; rke2 and k3s differ in one Moo o
 | `Rex::Rancher::K8s` | `wait_for_api`, `control_plane_version`, `deploy_nvidia_device_plugin`, `untaint_node`, `deploy_amd_device_plugin`, `deploy_amd_node_labeller`, `deploy_amd_dra_driver`, `deploy_amd_metrics_exporter`, `remove_amd_device_plugin`, `remove_amd_node_labeller`, `remove_amd_dra_driver`, `remove_amd_metrics_exporter` | local K8s API ops: API wait, control-plane version, taints; the GPU objects — NVIDIA's device plugin, ROCm's device plugin, node labeller, DRA driver (`resource.k8s.io/v1` only, `_serves_dra_v1`), metrics exporter — created or updated by `_create_or_update`, removed by `_delete_if_present` (404 skipped, any other error dies); `_wait_for_gpu_resource` (`status.allocatable`, not capacity) |
 | `Rex::Rancher::Distribution` (+ `::RKE2`, `::K3s`) | — (Moo, `new_for($name, role => 'server'\|'agent')`, class loaded via `use_module`) | per-distribution paths, service, installer lines, start verb, version skew, the host steps server and agent share; `cilium_helm_defaults`, `needs_k8s_service_host`, `gateway_api_crd_chart`, `live_verified`, `unknown_distribution` |
 | `Rex::Rancher::Uninstall` | `uninstall_node` | `uninstall_cmd` (the uninstaller one-liner incl. Cilium state: ip rules IPv4 and IPv6, `/run/cilium`; GPU Operator leftovers `/usr/local/nvidia` + `/var/run/cdi/{k8s.device-plugin.nvidia.com-gpu.json,management.nvidia.com-gpu.yaml}`; ROCm DRA driver's transient CDI specs `/var/run/cdi/k8s.gpu.amd.com-gpu_*` (`_common` + one per prepared claim; the `_` keeps that vendor's other specs out); never `/etc/cdi` or `/var/run/cdi` whole), `uninstall_failure`, `check_cilium_residue` / `cilium_residue` (install guard: Cilium datapath state an earlier cluster left behind; opt-in `clean => 1`, never passed by an install, clears it without a reboot through `cilium_residue_cleanup_cmd` — the probe's no-distribution guard inside the line, then pins, `bpftool` cgroup detach of `cil_*`, tc globals, `/run/cilium` — and probes again) |
-| `Rex::Rancher::Options` | — | pure option checks: `resolve_install_method`, `check_cluster_cidr`, `check_kubeconfig_mode`, `check_ipam_mode`, `check_node_addresses` |
+| `Rex::Rancher::Options` | — | pure option checks: `resolve_install_method`, `check_cluster_cidr`, `check_kubeconfig_mode`, `check_ipam_mode`, `check_node_addresses`, `join_server_host` |
 | `Rex::Rancher::Checksum` | — | `expected_sha256`, `sha256_of`, `verify_sha256` for the artifact install |
 
 The distribution just wires these steps; the domain knowledge behind each step lives in
@@ -42,8 +42,11 @@ replacement: `kubernetes-cilium-concepts`; the four things that must line up for
 2. `_check_connection` — see "No SFTP" below.
 3. `preflight_server` — the host is asked everything `install_server` would refuse it for,
    in the same order (Cilium residue, version skew, an established server's
-   `cluster-cidr`). It only reads: a refused host keeps its packages, its swap setting,
-   its GPU driver. `install_server` asks again, after node prep and GPU setup.
+   `cluster-cidr`), then, with `node_ip_from_route` on a join, the route to the join
+   server (`$dist->node_ip_from_route`: `getent ahosts`, `ip -o route get`), last and never a
+   refusal: what it cannot derive is left out with a warning. It only reads: a refused
+   host keeps its packages, its swap setting, its GPU driver. `install_server` asks
+   again, after node prep and GPU setup.
 4. `prepare_node(%opts)` — OS prep. Swap **off** and `br_netfilter`/`overlay` loaded are
    preconditions for kubelet; skipping them yields a cluster that half-comes-up.
 5. `_gpu_setup_if_requested` — only with `gpu => 1` and `gpu_setup` not 0: `Rex::GPU->import`,

@@ -121,6 +121,52 @@ sub check_node_addresses {
   return [@ip];
 }
 
+=method join_server_host
+
+  my $host = Rex::Rancher::Options->join_server_host($server);
+  # 'https://10.230.30.52:9345' => '10.230.30.52'
+  # 'https://[fd00::1]:9345'    => 'fd00::1'
+  # 'https://cp.example:9345'   => 'cp.example'
+
+The host of the join URL C<server>, for C<node_ip_from_route>: an IPv4
+address, an IPv6 address (in brackets in the URL, returned without them) or
+a host name, as the URL has it. C<$server> is C<https://HOST> (the scheme
+in any case) with an optional port, 1 to 65535, and an optional C</> at the
+end. A host name has labels of letters, digits and hyphens, neither first
+nor last in a label (RFC 1123), at most 253 characters and an optional dot
+at the end; one of digits and dots only has to be an IPv4 address. Dies
+naming C<node_ip_from_route> and the forms it takes for anything else: no
+C<$server> or a reference, another scheme, a user, a path or a query, an
+IPv6 address without brackets or with a zone (C<%eth0>), any other
+character in a name. What it returns is safe as one shell word on the
+host. Only the syntax is checked: a host name is resolved on the host, see
+L<Rex::Rancher::Distribution/node_ip_from_route>.
+
+=cut
+
+sub join_server_host {
+  my ( $self, $server ) = @_;
+  my $want = 'node_ip_from_route needs server as https://HOST or https://HOST:PORT, HOST an '
+    . 'IPv4 address, an IPv6 address in brackets or a host name';
+  die "$want, got ".( ref $server ? 'a '.ref($server).' reference' : 'nothing' )."\n"
+    if ref $server || !defined $server;
+  my $bad = "$want, got '$server'\n";
+  my ( $host, $port ) = $server =~ m{\A(?i:https)://(\[[^\]]*\]|[^/:\[\]]+)(?::([0-9]{1,5}))?/?\z}
+    or die $bad;
+  die $bad if defined $port && ( $port < 1 || $port > 65535 );
+  if ( $host =~ /\A\[(.*)\]\z/s ) {
+    my $v6 = $1;
+    die $bad unless defined inet_pton( AF_INET6, $v6 );
+    return $v6;
+  }
+  return $host if defined inet_pton( AF_INET, $host );
+  my $label = qr/[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?/;
+  ( my $name = $host ) =~ s/\.\z//;
+  die $bad unless length $name <= 253 && $name =~ /\A$label(?:\.$label)*\z/
+    && $name !~ /\A[0-9.]+\z/;
+  return $host;
+}
+
 1;
 
 =head1 SYNOPSIS
@@ -132,6 +178,7 @@ sub check_node_addresses {
   my $kcmode = Rex::Rancher::Options->check_kubeconfig_mode($opts{kubeconfig_mode});
   my $mode   = Rex::Rancher::Options->check_ipam_mode($opts{ipam_mode});
   my $ips    = Rex::Rancher::Options->check_node_addresses(node_ip => $opts{node_ip});
+  my $host   = Rex::Rancher::Options->join_server_host($opts{server});
 
 =head1 DESCRIPTION
 
