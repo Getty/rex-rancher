@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-11-06T00:17:46Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-06T00:17:46Z
+created: 2026-11-04T01:40:28Z
+id: 116
+priority: low
+started: 2026-11-05T23:18:01Z
+status: done
+tags:
+- pod
+- docs
+title: 'POD: mehrdeutige =item-Linkziele (kubeconfig, version, server …) unter mehreren
+  Funktionen'
+updated: 2026-11-06T00:17:46Z
+---
+
+Gefunden in k98. podchecker -warnings -warnings meldet am gewebten POD 13x "multiple occurrences of link target" in Rex::Rancher, ::Cilium, ::K8s und ::Server: Optionen wie kubeconfig, version oder server stehen als =item unter mehreren Funktionen. Ein L</kubeconfig> ist dadurch mehrdeutig. Auf main vor und nach k98 dieselben 13. Zu klären: ob überhaupt Links auf solche Items zeigen, und falls ja, ob die Link-Form oder die Item-Texte etwas ändern sollen. Nur POD.
+
+Befund (dzil build auf b8a7125, podchecker -warnings -warnings über alle 12 gebauten .pm): 0 Fehler, alle "pod syntax OK", 13x "multiple occurrences of link target", dieselben 13 wie in k98. Rex::Rancher: kubeconfig_file x2, node_name x2, server x2, token x2 (unter rancher_deploy_server und rancher_deploy_agent). Cilium: kubeconfig x2, version x2 (install_cilium, ensure_gateway_api_crds). K8s: affinity x4 (die vier deploy_amd_ Funktionen), init_image x2 (deploy_amd_dra_driver, deploy_amd_metrics_exporter), kubeconfig x12 (alle 12 Funktionen mit opts), version x5 (deploy_nvidia_device_plugin und die vier deploy_amd_ Funktionen). Server: distribution x3 (install_server, update_registries, fetch_kubeconfig), registries x2 (install_server, update_registries), server x2 (install_server, fetch_kubeconfig). Linkprüfung: alle 367 POD-Links mit Sektion in lib/ mit Pod::Simple geparst, intern und modulübergreifend, auch mehrzeilige Links und solche mit eigenem Linktext. Je Link gezählt, wie viele Knoten im Zielmodul auf die Sektion passen: wörtlicher head- oder item-Text, podcheckers abgeleiteter Knoten (erstes Wort) und der MetaCPAN-Zusatzanker "name" zu einer Überschrift "name(SIG)". Mehrdeutig: 0. Keiner der 10 doppelten Texte ist Ziel eines Links, und keiner kollidiert mit einer Überschrift oder einem Funktionsnamen. Ein Grep in lib/ und README.md nach Links auf diese 10 Texte findet ebenfalls nichts. README.md enthält keine POD-Anker-Links, nur Links auf Seitenebene. Ergebnis: alle 13 Doppelungen sind unverlinkt. Nichts zu ändern, kein Commit, kein Changes-Eintrag. Ohne Bezug zu dieser Karte: die 74 modulübergreifenden Links der Form Modul/name ohne Signatur lösen nur über den MetaCPAN-Zusatzanker auf. k98 hat sie absichtlich so gelassen, deshalb hier nicht aufgegriffen. Build-Reste und Hilfsskripte sind gelöscht. prove ist nicht gelaufen, weil nichts geändert wurde.
+
+Kein Link zeigt auf eines der 13 doppelten Items, alle sind unverlinkt. Nichts geändert, kein Commit. Die Karte kann mit dem Befund auf done.
+
+Done ohne Commit (Festlegung des Auftrags): Kein Link in lib/ oder README.md zeigt auf eines der 13 doppelten item-Ziele (367 Links mit Sektion geparst, 0 mehrdeutig). Die Items bleiben; die 13 podchecker-Warnungen multiple occurrences of link target sind unverlinkte Doppelungen. Stand main b8a7125.
