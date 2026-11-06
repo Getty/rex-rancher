@@ -1,0 +1,22 @@
+---
+class: standard
+completed: 2026-11-06T18:18:03Z
+created: 2026-11-06T01:21:40Z
+id: 119
+priority: low
+started: 2026-11-06T18:12:59Z
+status: done
+tags:
+- docs
+- amd
+title: 'POD gpu_amd_integrated: Rex::GPU-Meldungen nennen die Option amd_integrated'
+updated: 2026-11-06T18:18:12Z
+---
+
+Rex::GPU 0.006 nennt in der Meldung für APU plus amdgpu-dkms-GPU unter gpu_setup den Ausweg "Leave out gpu_setup's amd_integrated => 1". Aus Rex::Rancher heraus heißt die Option gpu_amd_integrated (lib/Rex/Rancher.pm, =item C<gpu_amd_integrated>, dort steht schon, dass sie als amd_integrated an gpu_setup geht).
+
+Fertig, wenn: die POD von gpu_amd_integrated sagt, dass Rex::GPU-Meldungen sie als amd_integrated nennen und sie in Rex::Rancher gpu_amd_integrated heißt. Nur POD, kein Verhalten. Ohne Kartennummer in der POD.
+
+Worker: Die POD von gpu_amd_integrated sagt jetzt, dass Rex::GPU-Meldungen die Option amd_integrated nennen (pass oder leave out), in Rex::Rancher heisst sie gpu_amd_integrated; ein an Rex::Rancher gegebenes amd_integrated wird ignoriert. Nur POD in lib/Rex/Rancher.pm, 4 Zeilen neu, 1 weg. podchecker unveraendert, prove -lr t/ mit Files 49, Tests 1825, PASS.
+
+Committed 93316fdb9a2734a0f8c9c0268c89b394cdd43dd8 (Branch k118-k119-changes), main per ff auf 93316fd. Drift als k120 im Backlog.
