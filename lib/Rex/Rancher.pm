@@ -169,7 +169,10 @@ AMD device plugin for them (see L</AMD GPUs>). Default: C<0>: an integrated
 AMD GPU gets neither driver nor device plugin, so a host with a Ryzen iGPU
 sees L<Rex::GPU>'s warning, plus an info line naming this option for a
 ROCm-capable one, and deploys as before; C<gpu_setup> is called without
-C<amd_integrated>. Needs a L<Rex::GPU> that sets up AMD
+C<amd_integrated>. Messages from L<Rex::GPU> name this option by its
+C<gpu_setup> name, C<amd_integrated>: where one says to pass or leave out
+C<amd_integrated =E<gt> 1>, pass or leave out C<gpu_amd_integrated> — an
+C<amd_integrated> given to Rex::Rancher is ignored. Needs a L<Rex::GPU> that sets up AMD
 GPUs; with one that does not, the deploy dies before the host is touched.
 Ignored with a warning with C<gpu_setup =E<gt> 0>.
 
