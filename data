@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-11-06T18:12:51Z
+created: 2026-11-06T01:16:38Z
+id: 118
+priority: low
+started: 2026-11-06T18:09:29Z
+status: done
+tags:
+- agents
+- docs
+- release
+title: 'Agentendatei release-manager: Rex::GPU steht als recommends im cpanfile'
+updated: 2026-11-06T18:12:51Z
+---
+
+Gefunden im Release-Audit 0.005 (2026-11-06, main 4cbdb98). .claude/agents/rex-rancher-release-manager.md, Punkt 3 der Audit-Liste (um Zeile 47), sagt: Rex::GPU sei deliberately absent from the cpanfile, ihr Fehlen nicht melden, nicht als Abhaengigkeit eintragen. Seit 0.004 steht Rex::GPU als recommends im cpanfile, seit k117 auf 0.006 (gekoppeltes Release, Maintainer-Entscheidung); geladen wird es weiter nur per eval require unter gpu => 1. Done: der Satz sagt, dass Rex::GPU ein recommends ist (nie requires) und die recommends-Version der Maintainer bei gekoppelten Releases setzt. Kein Code, keine Nutzerwirkung.
+
+Worker: Audit-Punkt 3 sagt jetzt, Rex::GPU ist recommends, nie requires; Version setzt der Maintainer beim gekoppelten Release (nicht gegen CPAN melden, nicht selbst anheben); geladen per eval require unter gpu => 1. Nur .claude/agents/rex-rancher-release-manager.md, 5+/3-. Kein Code, kein Test noetig. Am Rand: die Today-Liste nennt die Pins von Kubernetes::REST 1.110 / IO::K8s 1.112 nicht (unvollstaendig, nicht falsch).
+
+Committed b7ef8f49e68b3a420950378d56c5735fa3f4dd2b (Branch k118-k119-changes), main per ff auf b7ef8f4.
