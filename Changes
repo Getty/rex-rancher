@@ -38,10 +38,9 @@ Revision history for Rex-Rancher
     an older cluster before creating anything. Its GPUs show as
     ResourceSlices of driver gpu.amd.com, not as amd.com/gpu; a node runs
     either this or the device plugin. Its admission policy matches
-    ResourceSlices in resource.k8s.io/v1 as well as the chart's v1beta1:
-    with v1beta1 alone, as the chart has it, it checked no write on a
-    cluster that serves only v1 (Kubernetes 1.36), and the plugin of one
-    node could change every node's ResourceSlices.
+    ResourceSlices in resource.k8s.io/v1 and v1beta1 (the chart names only
+    v1beta1), so the plugin of a node may change only that node's
+    ResourceSlices, also on a cluster that serves only v1 (Kubernetes 1.36).
   - New deploy_amd_metrics_exporter and remove_amd_metrics_exporter in
     Rex::Rancher::K8s (not re-exported by Rex::Rancher): ROCm's
     device-metrics-exporter v1.5.3 as its Helm chart deploys it with the
@@ -56,29 +55,29 @@ Revision history for Rex-Rancher
     Default as upstream's charts write it: docker.io/busybox:1.36 for the
     DRA driver, busybox:1.36 for the exporter. Anything but a non-empty
     string without whitespace dies before the cluster is touched.
-  - An agent (or joining server) that cannot reach its server address no
-    longer waits out the full 600 s: while the unit is not active the
-    journal is read along, and once it has shown nothing but "Failed to
-    validate connection to cluster" for 120 s (rke2 and k3s alike) the wait
-    dies with the usual message -- address, hint, journal excerpt. Any other
-    journal line starts the count over; wait_for_service takes
-    unreachable_after to change the threshold, 0 to turn it off.
+  - While an agent (or joining server) waits for its service, the journal
+    is read along: once it has shown nothing but "Failed to validate
+    connection to cluster" for 120 s (rke2 and k3s alike) -- the node cannot
+    reach its server address -- the wait stops instead of running out the
+    full 600 s and dies with that reason and a journal excerpt; an agent's
+    message also names the server address it joins via. Any other journal
+    line starts the count over; wait_for_service takes unreachable_after to
+    change the threshold, 0 to turn it off.
   - deploy_nvidia_device_plugin and deploy_amd_device_plugin wait for the
-    GPU resource in the node's status.allocatable instead of
-    status.capacity: the kubelet keeps capacity after a device plugin is
-    gone and only drops allocatable to 0, so a redeploy reported
-    "[ok] amd.com/gpu: 1" at the first poll while the new plugin pod was
-    still ContainerCreating. The log line while waiting now reads "No
-    allocatable GPU yet". Seen live on RKE2 v1.36.4.
+    GPU resource in the node's status.allocatable, not status.capacity: the
+    kubelet keeps capacity after a device plugin is gone and only drops
+    allocatable to 0, so on a redeploy the old plugin's count does not end
+    the wait before the new plugin pod runs. The log line while waiting
+    reads "No allocatable GPU yet".
   - uninstall_node also removes the CDI specs ROCm's DRA driver
     (deploy_amd_dra_driver) leaves in /var/run/cdi, k8s.gpu.amd.com-gpu_*:
     its _common spec and one for each claim it prepared. The driver removes
     a claim's spec only when the kubelet unprepares the claim, which no
-    longer happens once RKE2/K3s is gone, and never removes _common; they
-    stayed until the next reboot. No other file in /var/run/cdi goes,
-    nothing in /etc/cdi.
-  - Point the documentation's links to functions at their full headings, so
-    podchecker and pod2html resolve them as MetaCPAN already did.
+    longer happens once RKE2/K3s is gone, and never removes _common; left
+    alone they stay until the next reboot. No other file in /var/run/cdi
+    goes, nothing in /etc/cdi.
+  - The documentation's links to functions point at their full headings, so
+    podchecker and pod2html resolve them as MetaCPAN does.
   - Requires IO::K8s 1.112; recommends Rex::GPU 0.006, the first that sets up
     AMD GPUs (Rex::GPU->amd_class).
   - deploy_nvidia_device_plugin and deploy_amd_device_plugin report the
