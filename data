@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-11-06T18:42:48Z
+created: 2026-11-06T18:35:06Z
+id: 121
+priority: low
+started: 2026-11-06T18:37:08Z
+status: done
+tags:
+- docs
+- amd
+title: 'POD reboot: Rex::GPU startet fuer AMD nicht nur nach einer DKMS-Installation
+  neu'
+updated: 2026-11-06T18:42:48Z
+---
+
+Gefunden bei k120 (2026-11-06). lib/Rex/Rancher.pm, Item reboot (um Zeile 158) sagt: A Rex::GPU that sets up AMD GPUs reboots for them too, only after it installed the driver as a DKMS module. Laut rex-gpu lib/Rex/GPU/AMD.pm _activate (um Zeile 315-336) haengt der Neustart nicht von inbox oder dkms ab: war amdgpu vorher nicht geladen, versucht install_driver modprobe amdgpu und prueft; reicht das, kein Neustart. Sonst (amdgpu war schon geladen, oder die GPUs sind nach modprobe nicht nutzbar) Neustart nur mit reboot 1, ohne reboot eine Warnung not active yet. Fertig, wenn: die POD von reboot sagt das so. Nur POD, ohne Kartennummer.
+
+Worker: Das Item reboot sagt jetzt, dass Rex::GPU fuer AMD neu startet, inbox und DKMS gleich, aber nur wenn amdgpu nicht schon lief und modprobe nach der Installation nicht reicht; nach dem Neustart nicht nutzbar heisst die, ohne reboot eine Warnung not active yet. Nur POD, lib/Rex/Rancher.pm 6 Zeilen neu, 2 weg. Gebautes Rancher.pm pod syntax OK ohne Warnung, prove -lr t/ mit Files 49, Tests 1825, PASS. Gestuetzt auf rex-gpu AMD.pm 216-228 und 315-337, GPU.pm 411-421.
+
+Committed 33d4882e2c18af97d4019576584c52e26f19713d (Branch k118-k119-changes), main per ff auf 33d4882. Gebautes Rex/Rancher.pm: pod syntax OK.
