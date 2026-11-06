@@ -1617,7 +1617,7 @@ C<config.toml> is still that template's output (the same check
 L</start_verb> makes), one C<systemctl restart> so it renders its own
 containerd config again. A service that hangs in C<activating> or ended
 C<failed> is restarted the same way: containerd 2.x exits on that bare
-config, so such a node never gets to C<active> (k91). A service stopped on
+config, so such a node never gets to C<active>. A service stopped on
 purpose (C<inactive>) is not started: its next start renders a fresh one. Returns a hash with C<removed> and
 C<restarted> (each C<1> or C<0>); dies when the removal or the restart fails.
 
