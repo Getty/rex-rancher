@@ -92,9 +92,12 @@ for my $dist (qw( rke2 k3s )) {
       like( $err, qr/no RKE2\/K3s is installed/, 'and that no distribution owns it' );
       like( $err, qr/socket load balancer/, 'the cause' );
       like( $err, qr/image pull/, 'the consequence' );
-      like( $err, qr/Reboot the host, then run the install again\.\n\z/, 'and what to do' );
+      # k97: what to do names both ways out; the cleanup as the call that
+      # does it, since install_* take no option for it.
+      like( $err, qr/Reboot the host, or clear that state without a reboot with Rex::Rancher::Uninstall->check_cilium_residue\(clean => 1\) in a task on this host, then run the install again\.\n\z/,
+        'and what to do: reboot, or the cleanup without one' );
       like( $err, qr/Nothing was written or installed/, 'and that the host is as it was' );
-      is( scalar @log, 1, 'the probe is the only command that ran' );
+      is( scalar @log, 1, 'the probe is the only command that ran: an install never clears the state' );
       like( $log[0] // '', qr{/sys/fs/bpf/cilium}, 'and it is the probe' );
     };
 

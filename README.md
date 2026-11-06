@@ -54,7 +54,7 @@ task 'deploy_agents', group => 'workers', sub {
 | `Rex::Rancher::Node` | Node preparation (kernel, swap, modules) |
 | `Rex::Rancher::Cilium` | Cilium CNI installation |
 | `Rex::Rancher::K8s` | Local Kubernetes API ops (NVIDIA and AMD device plugins, AMD node labeller, AMD DRA driver, AMD GPU metrics exporter, removing the AMD ones again, readiness wait) |
-| `Rex::Rancher::Uninstall` | `uninstall_node`: RKE2/K3s uninstall plus Cilium datapath cleanup; the Cilium-leftover check `install_server`/`install_agent` run first |
+| `Rex::Rancher::Uninstall` | `uninstall_node`: RKE2/K3s uninstall plus Cilium datapath cleanup; the Cilium-leftover check `install_server`/`install_agent` run first, and `check_cilium_residue(clean => 1)` to clear such leftovers without a reboot |
 | `Rex::Rancher::Distribution` | What RKE2 and K3s differ in (`::RKE2`, `::K3s`), used by the modules above |
 
 ## Requirements

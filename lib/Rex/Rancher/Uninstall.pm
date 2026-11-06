@@ -106,40 +106,161 @@ sub cilium_residue_in {
 =method check_cilium_residue
 
   Rex::Rancher::Uninstall->check_cilium_residue;
+  Rex::Rancher::Uninstall->check_cilium_residue(clean => 1);
 
 Run L</cilium_residue_probe_cmd> on the host (the exec channel, no SFTP)
 and die when it finds anything, naming what it found, what it does to a new
-install, and that the host has to be rebooted first. Returns C<1> on a clean
-host or one with RKE2 or K3s on it. A probe that cannot run at all (a
-non-zero exit with nothing found) only warns that the host was not checked.
+install, and the two ways out: reboot the host, or clear that state without
+a reboot with C<< Rex::Rancher::Uninstall->check_cilium_residue(clean => 1) >>
+in a task on that host. Returns C<1> on a clean host or one with RKE2 or K3s
+on it. A probe that cannot run at all (a non-zero exit with nothing found)
+only warns that the host was not checked.
+
+With C<< clean => 1 >> a host the probe finds that state on is cleared
+instead, without a reboot: L</cilium_residue_cleanup_cmd> runs on it, every
+L</uninstall_warnings> in its output is logged as a warning, and the probe
+runs again. Returns C<1> when it finds nothing then. Dies when it still
+finds something, naming what is left and asking for a reboot, and when it
+cannot run, since nothing then shows the state gone. B<Destructive> on such
+a host: Cilium's pins and the programs they held, its programs on the
+cgroups, the C</run/cilium/cgroupv2> mount and C</run/cilium> go. On a
+clean host, or one with RKE2 or K3s on it, nothing runs but the probe, so a
+second call changes nothing.
 
 L<Rex::Rancher::Server/install_server> and
 L<Rex::Rancher::Agent/install_agent> call it before anything is written or
-installed; a caller that prepares the node first can call it earlier.
+installed, without C<clean>: an install only ever checks; a caller that
+prepares the node first can call it earlier, and only a caller that passes
+C<clean> clears anything.
 
 =cut
 
 sub check_cilium_residue {
-  my ( $self ) = @_;
-  # auto_die => 0: the probe ends in `true`, so a non-zero exit means it did
-  # not run; that is warned about below, not mistaken for a clean host.
-  my $out   = Rex::Commands::Run::run($self->cilium_residue_probe_cmd, auto_die => 0);
-  my $exit  = $? >> 8;
-  my @found = $self->cilium_residue_in($out);
+  my ( $self, %opts ) = @_;
+  my ( $exit, @found ) = $self->_probe_cilium_residue;
   if (!@found) {
     Rex::Logger::info("Could not check this host for Cilium datapath state left by an "
       . "earlier cluster (the probe exited $exit): going on without that check", 'warn')
       if $exit;
     return 1;
   }
-  my $labels = $self->_distribution_labels;
-  die "This host still carries Cilium datapath state from an earlier cluster ("
-    . join(', ', @found) . "), and no $labels is installed on it. Until the host is "
+  die $self->_cilium_residue_refusal(
+    "This host still carries Cilium datapath state from an earlier cluster (" . join(', ', @found) . ")",
+    "Nothing was written or installed. Reboot the host, or clear that state without a reboot with "
+      . "Rex::Rancher::Uninstall->check_cilium_residue(clean => 1) in a task on this host, "
+      . "then run the install again.") unless $opts{clean};
+  return $self->_clean_cilium_residue(@found);
+}
+
+# check_cilium_residue's clean => 1 (k97, from kubernetes-ocp k248): the
+# steps that cleared such a host by hand (an ex-rke2 agent after
+# rke2-uninstall.sh, which then took a new RKE2 with Cilium), then the probe
+# again. The probe above found the state and no distribution; the line checks
+# the latter once more itself.
+sub _clean_cilium_residue {
+  my ( $self, @found ) = @_;
+  Rex::Logger::info("Clearing the Cilium datapath state an earlier cluster left on this host ("
+    . join(', ', @found) . ") without a reboot");
+  my ( $stdout, $stderr ) = ( '', '' );
+  # auto_die => 0: every step is guarded, so the exit status says nothing
+  # about the host; the probe below does.
+  Rex::Commands::Run::run($self->cilium_residue_cleanup_cmd,
+    sub { my ( $out, $err ) = @_; $stdout = $out // ''; $stderr = $err // ''; return $out },
+    auto_die => 0);
+  Rex::Logger::info($_, 'warn') for $self->uninstall_warnings($stdout, $stderr);
+  my ( $exit, @left ) = $self->_probe_cilium_residue;
+  die $self->_cilium_residue_refusal(
+    "This host still carries Cilium datapath state from an earlier cluster (" . join(', ', @left) . ")"
+      . " after clearing it without a reboot",
+    "Nothing was installed. Reboot the host, then run the install again.") if @left;
+  die "Cleared the Cilium datapath state an earlier cluster left on this host ("
+    . join(', ', @found) . ") without a reboot, but could not check the host afterwards (the probe "
+    . "exited $exit). Nothing was installed. Reboot the host, then run the install again.\n" if $exit;
+  Rex::Logger::info("Cleared the Cilium datapath state an earlier cluster left on this host, none is left");
+  return 1;
+}
+
+# The probe over Rex: its exit status, then the residue it found.
+sub _probe_cilium_residue {
+  my ( $self ) = @_;
+  # auto_die => 0: the probe ends in `true`, so a non-zero exit means it did
+  # not run; the callers say so, it is not mistaken for a clean host.
+  my $out = Rex::Commands::Run::run($self->cilium_residue_probe_cmd, auto_die => 0);
+  my $exit = $? >> 8;
+  return ( $exit, $self->cilium_residue_in($out) );
+}
+
+sub _cilium_residue_refusal {
+  my ( $self, $state, $todo ) = @_;
+  return $state . ", and no " . $self->_distribution_labels . " is installed on it. Until the host is "
     . "rebooted, Cilium's socket load balancer keeps translating the old cluster's "
     . "service addresses to pods that are gone: connections to them hang instead of "
     . "being refused, a registry mirror among them, so every image pull of the new "
-    . "install stalls and it does not come up in time. Nothing was written or "
-    . "installed. Reboot the host, then run the install again.\n";
+    . "install stalls and it does not come up in time. " . $todo . "\n";
+}
+
+=method cilium_residue_cleanup_cmd
+
+The shell line L</check_cilium_residue> runs with C<clean>, for a caller
+that runs it through its own channel. Pure. One C</bin/sh -c '...'>
+command, as L</uninstall_cmd> is: it runs the same under any login shell of
+root, and a pattern that matches nothing reaches C<rm> as it is.
+
+It carries the probe's guard itself: with a distribution on the host (an
+L<Rex::Rancher::Distribution/binary> on C<PATH>, or one of their server and
+agent units active) it does nothing, as the state then belongs to that
+cluster. Without one, in this order:
+
+=over
+
+=item 1. the pins in C</sys/fs/bpf/cilium> go: unpinning a link no agent
+holds any more detaches its program, the tcx programs on the host's devices
+and the socket load balancer's cgroup links among them;
+
+=item 2. with C<bpftool> installed, every program whose name starts with
+C<cil_> that C<bpftool cgroup tree /sys/fs/cgroup> still lists is detached
+from its cgroup (C<bpftool cgroup detach CGROUP ATTACH_TYPE id ID>), the
+rest of the socket load balancer;
+
+=item 3. Cilium's maps pinned as C</sys/fs/bpf/tc/globals/cilium_*>;
+
+=item 4. the C</run/cilium/cgroupv2> mount (lazily when it is busy), then
+C</run/cilium> with C<--one-file-system>.
+
+=back
+
+Nothing else: Cilium's devices, iptables chains, tc qdiscs and ip rules stay
+(L</uninstall_cmd> removes those as well). Each step is guarded: one with
+nothing to do is not a failure, the line exits C<0> whatever it found, and
+on a clean host it changes nothing. Two things it says as a warning (see
+L</uninstall_warnings>): C<bpftool> is not installed, so step 2 did not run;
+C<bpftool> still lists C<cil_> programs after step 2. A reboot clears
+either. Whether the host is clean afterwards is the probe's to say: run
+L</cilium_residue_probe_cmd> after it. That probe does not look at cgroup
+programs, hence the second warning. Step 2 reaches the cgroup2 hierarchy
+mounted at C</sys/fs/cgroup>, which is where it is on a host with cgroup v2
+alone.
+
+=cut
+
+sub cilium_residue_cleanup_cmd {
+  my ( $self ) = @_;
+  return $self->_sh_c($self->_cilium_residue_cleanup_script);
+}
+
+# The four steps cilium_residue_cleanup_cmd hands to /bin/sh (k97), in the
+# order of the card that measured them, behind the probe's own guard.
+sub _cilium_residue_cleanup_script {
+  my ( $self ) = @_;
+  # In the order _cilium_pins gives them: the pin dir, then the tc globals.
+  my ( $pin_dir, $tc_globals ) = $self->_cilium_pins;
+  return 'if ' . $self->_distribution_present_cmd . '; then :; else '
+    . join(' ; ',
+      "rm -rf $pin_dir 2>/dev/null || true",
+      $self->_cilium_cgroup_detach_cmd,
+      "rm -rf $tc_globals 2>/dev/null || true",
+      $self->_cilium_run_dir_cmds,
+    ) . ' ; fi';
 }
 
 =method uninstall_cmd
@@ -313,9 +434,9 @@ sub _uninstall_script {
 
   my @warnings = Rex::Rancher::Uninstall->uninstall_warnings($stdout, $stderr);
 
-The warnings in the output of L</uninstall_cmd>, in the order written,
-each its text without the marker, trimmed; empty when every cleanup step
-could run. Pure. Takes any number of outputs -- pass stdout and stderr: the
+The warnings in the output of L</uninstall_cmd> or of
+L</cilium_residue_cleanup_cmd>, in the order written, each its text without
+the marker, trimmed; empty when every cleanup step could run. Pure. Takes any number of outputs -- pass stdout and stderr: the
 line writes its warnings to stderr, a channel with a pty merges them into
 stdout. Only whole lines starting with C<rex-rancher-uninstall-warning: >
 and a text count; the vendor uninstallers' output, a login banner, a
@@ -563,7 +684,6 @@ sub _iptables {
 # Taken over as kubernetes-ocp runs it (OCP::Role::Provider::ExistingHost).
 sub _cilium_cleanup_cmd {
   my ( $self ) = @_;
-  my $cgroup = $self->_cilium_cgroup_root;
   return join ' ; ',
     'if command -v tc >/dev/null 2>&1; then'
       . ' for d in /sys/class/net/*; do d=${d##*/};'
@@ -591,8 +711,46 @@ sub _cilium_cleanup_cmd {
     '[ -n "$ipt_used" ] || ' . $self->_warning_cmd('no iptables backend with both -save and -restore'
       . ' is installed: the CILIUM_* iptables chains Cilium left were not checked or removed;'
       . ' a reboot clears them'),
+    $self->_cilium_run_dir_cmds;
+}
+
+# The cgroup2 mount, then Cilium's runtime dir -- with --one-file-system, so
+# a mount that refused to go is never recursed into. The last two steps of
+# the uninstall's datapath cleanup and of cilium_residue_cleanup_cmd alike.
+sub _cilium_run_dir_cmds {
+  my ( $self ) = @_;
+  my $cgroup = $self->_cilium_cgroup_root;
+  return (
     "umount $cgroup 2>/dev/null || umount -l $cgroup 2>/dev/null || true",
-    'rm -rf --one-file-system ' . $self->_cilium_run_dir . ' 2>/dev/null || true';
+    'rm -rf --one-file-system ' . $self->_cilium_run_dir . ' 2>/dev/null || true',
+  );
+}
+
+# Step 2 of cilium_residue_cleanup_cmd (k97): what unpinning did not detach
+# of the socket LB -- programs attached without a link -- goes with bpftool,
+# which not every host has: without it a warning, as for tc above.
+#
+# cil_progs prints "CGROUP ATTACH_TYPE ID" for every cil_* program `bpftool
+# cgroup tree` lists. A line starting with / is the cgroup the program lines
+# below it are attached to; a program line is ID, attach type, attach flags
+# (often none), name -- indented below the root, not at it, which read
+# drops. The type goes back to the bpftool that printed it, so its spelling
+# (connect4 or cgroup_inet4_connect, by bpftool version) does not matter;
+# one it cannot name ("type 42") fails the detach and is listed again below.
+# Listed again after the detach, since the probe sees no cgroup programs: one
+# left is said, not silently taken for gone. Shell builtins only, and no
+# single quote (no awk), so the script stays plain inside _sh_c's quotes.
+sub _cilium_cgroup_detach_cmd {
+  my ( $self ) = @_;
+  return 'if command -v bpftool >/dev/null 2>&1; then'
+    . ' cil_progs() { bpftool cgroup tree /sys/fs/cgroup 2>/dev/null | { c=""; while read -r i t r; do'
+    . ' case $i in /*) c=$i;; ""|*[!0-9]*) ;; *) case " $r " in *" cil_"*) echo "$c $t $i";; esac;; esac;'
+    . ' done; }; };'
+    . ' cil_progs | while read -r c t i; do bpftool cgroup detach "$c" "$t" id "$i" 2>/dev/null || true; done;'
+    . ' [ -z "$(cil_progs)" ] || ' . $self->_warning_cmd('bpftool still lists Cilium programs (cil_*)'
+      . ' on the cgroups below /sys/fs/cgroup after detaching them; a reboot clears them') . ';'
+    . ' else ' . $self->_warning_cmd('bpftool is not installed: Cilium programs (cil_*) left on the'
+      . ' cgroups below /sys/fs/cgroup were not checked or detached; a reboot clears them') . '; fi';
 }
 
 1;
@@ -616,6 +774,11 @@ sub _cilium_cleanup_cmd {
   # Refuse a host Cilium left state on, before preparing it
   Rex::Rancher::Uninstall->check_cilium_residue;
 
+  # Or clear that state without a reboot (destructive), then check again
+  task 'clear_cilium', 'old-node.example.com', sub {
+    Rex::Rancher::Uninstall->check_cilium_residue(clean => 1);
+  };
+
 =head1 DESCRIPTION
 
 Cilium's datapath outlives the vendor uninstall scripts. C<rke2-uninstall.sh>
@@ -632,7 +795,11 @@ L</check_cilium_residue> is the guard L<Rex::Rancher::Server/install_server>
 and L<Rex::Rancher::Agent/install_agent> run first: a host with that state
 and no RKE2 or K3s on it is refused before anything is written. With a
 distribution on the host the state belongs to its running cluster (a
-re-run, an upgrade) and is left alone.
+re-run, an upgrade) and is left alone. Called with C<clean>, it clears that
+state without a reboot instead and checks again, for a host that runs
+other services and should not be rebooted for it; the steps are those that
+cleared such a host by hand, after which a new RKE2 with Cilium came up on
+it. Run through Rex::Rancher they have not been verified live.
 
 L</uninstall_node> is the other side: it runs the vendor uninstall scripts
 and then clears the datapath as Cilium's own cleanup does, and says when a

@@ -37,8 +37,11 @@ Dies before anything is written or installed if the host carries Cilium
 datapath state from an earlier cluster (the pins in C</sys/fs/bpf/cilium>,
 the C</run/cilium/cgroupv2> mount or the C<cilium_host> device) but neither
 RKE2 nor K3s: until a reboot, that state makes every image pull of the new
-agent stall. The message names what was found and asks for a reboot. With
-RKE2 or K3s on the host it is not checked. Same check as
+agent stall. The message names what was found and asks for a reboot, or
+for clearing it without one with
+L<Rex::Rancher::Uninstall/check_cilium_residue> and C<clean> in a task of
+its own; C<install_agent> only checks. With RKE2 or K3s on the host it is
+not checked. Same check as
 L<Rex::Rancher::Server/install_server>'s, see
 L<Rex::Rancher::Uninstall/check_cilium_residue>. It comes after the
 C<kubeconfig> check (below) and before the version skew rules, which die

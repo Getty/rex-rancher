@@ -58,8 +58,10 @@ C<k3s> on C<PATH>, none of their server and agent units active). The vendor
 uninstall scripts leave that state until a reboot, and its socket load
 balancer makes connections to the old cluster's service addresses hang, so
 every image pull of the new install stalls on a registry mirror among them.
-Such a host dies naming what was found and asking for a reboot; see
-L<Rex::Rancher::Uninstall/check_cilium_residue>. With RKE2 or K3s on the
+Such a host dies naming what was found and asking for a reboot, or for
+clearing it without one with L<Rex::Rancher::Uninstall/check_cilium_residue>
+and C<clean> in a task of its own; C<install_server> only checks, it never
+clears that state. With RKE2 or K3s on the
 host the state is its running cluster's (a re-run, an upgrade) and is not
 checked.
 
