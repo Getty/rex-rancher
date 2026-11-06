@@ -43,9 +43,11 @@ code goes back to the worker as a note on its card, not as your own fix. **Never
 3. **`cpanfile`** — every runtime dependency actually used is declared and every declared
    one is used. Today: `Rex` (pinned `1.14.0`), `Kubernetes::REST`, `IO::K8s`; `Rex::LibSSH`
    is a **`recommends`, not a `requires`** (the SFTP-less path) and belongs there, not in
-   `requires`. `Rex::GPU` is loaded only under `gpu => 1` via `eval require` and is
-   deliberately **absent** from the cpanfile — do not flag its absence, and do not "fix" it
-   into a dependency. `YAML::PP` is used for config serialisation; confirm it is declared.
+   `requires`. `Rex::GPU` is likewise a **`recommends`, never a `requires`** — it is loaded
+   only under `gpu => 1` via `eval require`; do not promote it into `requires`. Its version
+   is the maintainer's call, not the pin rule below: `Rex::GPU` and `Rex::Rancher` ship as a
+   coupled release, so do not flag it against `Rex::GPU`'s latest CPAN version, and do not
+   raise it yourself. `YAML::PP` is used for config serialisation; confirm it is declared.
    **`Kubernetes::REST`, `IO::K8s` and `Rex::LibSSH` are Getty-authored** — if any is
    pinned, it must be to its latest *released* CPAN version (`cpanm --info <Dist>`), never
    to an unreleased `$VERSION` in a local `~/dev` checkout.
