@@ -1,0 +1,43 @@
+---
+claimed_at: 2026-11-06T01:10:46Z
+claimed_by: k109-k117
+class: standard
+completed: 2026-11-06T01:10:46Z
+created: 2026-10-31T02:45:41Z
+id: 111
+priority: medium
+started: 2026-11-05T23:18:10Z
+status: done
+tags:
+- node-ip
+- multi-homed
+- feature
+title: Derive node_ip from the route to the join server when none is given
+updated: 2026-11-06T01:10:46Z
+---
+
+Request from kubernetes-ocp (k254).
+
+Problem: on a multi-homed host, RKE2/K3s without node-ip register the address of the default-route interface. synapse (default route 192.168.0.165 on eno1, cluster VLAN 10.230.30.50 on vlan30) joined a cluster whose server is 10.230.30.52 and registered 192.168.0.165, which the server cannot reach, so the Cilium tunnel broke.
+
+k100 (cb950e5) added explicit node_ip / node_external_ip. OCP passes it only when the operator names one (ocp.yaml control_planes[].node_ip, ocp node add --node_ip). A caller-side default does not work. OCP considered "the address OCP reached the host by over ssh", and that can be a NAT or port-forward address that is not on the host. A node-ip that is not on a local interface breaks silently: the node registers an address nobody routes to. OCP worker pools (one hosts list per pool) cannot carry a per-host node_ip either.
+
+The safe default can only be computed on the host. For a join, it is the source address the host uses to reach the join server: the `src` of `ip -o route get <server address>` (the server host from the join URL). It is on a local interface by construction. On a single-homed host it is what RKE2 picks anyway, and on synapse it gives 10.230.30.50.
+
+Ask: an opt-in for agent joins and joining servers (the lib already gets the server URL), for example node_ip => "route" or a separate option. The lib decides the name and shape. OCP would then pass it for every join without an explicit node_ip. Points to settle in the lib:
+- a server given as a hostname: resolve on the host, not on the caller
+- IPv4 vs IPv6 server address: one family; dual-stack stays explicit
+- what happens when `ip route get` fails: leave node-ip out and warn, never guess
+- preflight, check-only and dry-run behaviour, consistent with check_node_addresses
+
+Opt-in, not a new default: other lib users would see a changed config.yaml otherwise.
+
+2026-11-06 00:50 Design (worker): option node_ip_from_route => 1 (boolean, opt-in; joins only: install_agent, install_server with server). Pure part in preflight_* before any host read: explicit node_ip wins (info line, no route asked); no server (first server) -> info line, node-ip not derived; server URL parsed by new Rex::Rancher::Options->join_server_host (https://IPv4|[IPv6]|RFC1123-name[:port][/]), anything else dies before the host is touched. Host part is the LAST read of preflight_* (never refuses): hostname -> getent ahosts 'NAME' on the host, first IPv4 else first IPv6 (IPv4 preferred: Rex::Rancher clusters are IPv4 single-stack, cluster_cidr takes one IPv4 CIDR; deterministic across gai.conf); then ip -o route get 'ADDR' 2>&1; src of the server's family, not loopback/unspecified, through check_node_addresses. Any failure -> warn, node_ip stays undef, so node_addresses keeps config.yaml's node-ip (that is the node's earlier address, not a guess) else default route. Derived value counts as given (preflight return == config.yaml value; a change vs config.yaml gets node_addresses' existing warning).
+
+2026-11-06 01:05 Implemented. Options.pm join_server_host (pure parse of the server URL). Distribution.pm node_ip_route_host (pure: off, or node_ip given = info line and no route, or no server = info line, nothing derived) and node_ip_from_route (host read: getent ahosts NAME, then ip -o route get ADDR 2>&1; plain lines, no /bin/sh -c needed: no pattern or expansion, operand validated and single-quoted). preflight_server and preflight_agent: pure part next to the other option checks, the route as the LAST read (never refuses), result returned as node_ip; install_* bodies unchanged (they write what their own preflight returns). POD: Server/Agent install_* and preflight_*, Rancher.pm both deploy option lists and preflight paragraphs; skill rex-rancher-core (link count 1): Options row and step 3. New t/node-ip-route.t (untracked).
+
+Verified: red proof against the 8604a3a lib (old modules confirmed via INC): top-level not ok 1-29 and 34, 228 nested failures; ok 30-33 (golden config.yaml without the option, as before) and 35. Mutations caught: IPv6-first for a name, loopback/unspecified check removed, server route read moved before the Cilium residue probe. prove -lr t/: Files=49, Tests=1825, PASS; skips only eg-lan-rexfile.t (needs the LAN machine) and uninstall-shell.t 10-13 (zsh not installed). Unverified live: real ip -o route get and getent ahosts output on Debian, Rocky and Hetzner, a real join with the derived node-ip. For the kubernetes-ocp board (dispatcher files it): OCP should probe whether Rex::Rancher::Distribution can node_ip_from_route before passing the option, the way _node_ip_opt probes node_addresses; an older Rex::Rancher ignores the option silently.
+
+Ready for review: node_ip_from_route => 1 (boolean, default off) on joins derives node-ip from the source address of the route to the join server, read last in preflight_*, written by install_*. Tree commit-ready, 6 files modified plus untracked t/node-ip-route.t; suite PASS; unverified live.
+
+Committed as 4cbdb98 (4cbdb9827663e1b43f97e401b5838a838eb350e8)
