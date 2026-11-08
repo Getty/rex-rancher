@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-11-08T01:09:19Z
+id: 123
+priority: low
+status: todo
+tags:
+- api
+- versions
+title: 'release_suffix: say whether a Kubernetes version suffix belongs to rke2 or
+  k3s'
+updated: 2026-11-08T01:09:19Z
+---
+
+From kubernetes-ocp k376 (2026-11-06). OCP validate() now refuses the suffix of the other distribution: +k3sN under rke2 and +rke2rN under k3s; a version without a suffix stays valid. General RKE2/K3s rules belong in Rex::Rancher.
+
+Maintainer decision (Getty, 2026-11-08, hub decision page): Rex::Rancher gets a public function release_suffix that names the distribution a version suffix belongs to (or none), documented and tested; OCP then uses it instead of its own pattern. Build after the release.
