@@ -1,0 +1,18 @@
+{"action":"edit","agent":"Torsten Raudssus","detail":"review","task_id":120,"ts":"2026-11-06T18:36:21Z"}
+{"action":"move","agent":"Torsten Raudssus","detail":"done","task_id":120,"ts":"2026-11-06T18:36:26Z"}
+{"action":"move","agent":"Torsten Raudssus","detail":"todo","task_id":121,"ts":"2026-11-06T18:37:08Z"}
+{"action":"move","agent":"k118-k119-changes","detail":"in-progress","task_id":121,"ts":"2026-11-06T18:37:12Z"}
+{"action":"handoff","agent":"k118-k119-changes","detail":"review","task_id":121,"ts":"2026-11-06T18:41:34Z"}
+{"action":"edit","agent":"k118-k119-changes","detail":"review","task_id":121,"ts":"2026-11-06T18:42:38Z"}
+{"action":"edit","agent":"Torsten Raudssus","detail":"review","task_id":121,"ts":"2026-11-06T18:42:43Z"}
+{"action":"move","agent":"Torsten Raudssus","detail":"done","task_id":121,"ts":"2026-11-06T18:42:48Z"}
+{"action":"move","agent":"Torsten Raudssus","detail":"todo","task_id":112,"ts":"2026-11-06T19:33:10Z"}
+{"action":"move","agent":"rex-rancher-worker","detail":"in-progress","task_id":112,"ts":"2026-11-06T19:33:15Z"}
+{"action":"edit","agent":"rex-rancher-worker","detail":"in-progress","task_id":112,"ts":"2026-11-06T19:40:03Z"}
+{"action":"edit","agent":"rex-rancher-worker","detail":"in-progress","task_id":112,"ts":"2026-11-06T19:50:57Z"}
+{"action":"handoff","agent":"rex-rancher-worker","detail":"review","task_id":112,"ts":"2026-11-06T19:51:05Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":122,"ts":"2026-11-06T19:53:15Z"}
+{"action":"edit","agent":"rex-rancher-worker","detail":"review","task_id":112,"ts":"2026-11-06T19:53:32Z"}
+{"action":"move","agent":"rex-rancher-worker","detail":"done","task_id":112,"ts":"2026-11-06T19:53:37Z"}
+{"action":"edit","agent":"rex-rancher-worker","detail":"done","task_id":112,"ts":"2026-11-06T19:57:08Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"todo","task_id":123,"ts":"2026-11-08T01:09:19Z"}
