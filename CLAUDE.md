@@ -18,8 +18,8 @@ hazards are in `.claude/rules/rex-rancher-rules.md`.
 
 The agents carry their skills via `briefing.skills` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
-`rex-rancher-core` is owned here, the rest are hardlinks (`manage-skills sync` after a
-clone). Shared house rules and the delegation lock: skilletor bundle
+`rex-rancher-core` and `rex-rancher-traps` are owned here, the rest are installed by
+skilletor from `.claude/skilletor.json`. Shared house rules and the delegation lock: skilletor bundle
 `getty-cpan-dist@getty`; repo-specific rules: `.claude/rules/rex-rancher-rules.md`.
 
 ## Build and test
