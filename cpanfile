@@ -9,7 +9,7 @@ requires 'Moo';
 requires 'namespace::autoclean';
 requires 'Rex', '1.14.0';
 recommends 'Rex::GPU', '0.006';
-recommends 'Rex::LibSSH', '0.005';
+recommends 'Rex::LibSSH', '0.006';
 requires 'Scalar::Util';
 requires 'YAML::PP', '0.027';
 
