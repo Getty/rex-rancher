@@ -16,7 +16,7 @@ hazards are in `.claude/rules/rex-rancher-rules.md`.
 | Implement / refactor / debug anything under `lib/` | `rex-rancher-worker` (default) |
 | Commits, `Changes`, card → done, pre-release audit | `rex-rancher-release-manager` |
 
-The agents carry their skills via `briefing.skills` (see `.claude/agents/`); the main
+The agents carry their skills via `skills:` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
 `rex-rancher-core` and `rex-rancher-traps` are owned here, the rest are installed by
 skilletor from `.claude/skilletor.json`. Shared house rules and the delegation lock: skilletor bundle

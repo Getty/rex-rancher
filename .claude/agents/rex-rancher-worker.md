@@ -2,17 +2,16 @@
 name: rex-rancher-worker
 description: "Default Rex::Rancher worker — implement, refactor and debug the RKE2/K3s deploy pipeline (node prep, control-plane and agent install, Cilium CNI, GPU device plugin) and its local Kubernetes::REST API calls. Every task here provisions a real Kubernetes node over SSH as root, and the pipeline steps are order-dependent. Pre-loaded with the pipeline invariants, the RKE2/Cilium/GPU domain skills and Getty's Perl conventions. Leaves a commit-ready tree; never commits — commits belong to rex-rancher-release-manager."
 model: inherit
-briefing:
-  skills:
-    - rex-rancher-core
-    - rex-rancher-traps
-    - rex
-    - getty-perl-core
-    - kubernetes-rke2
-    - kubernetes-cilium-concepts
-    - kubernetes-gpu
-    - perl-io-k8s-kubernetes-classes
-    - kanban-issues-karr-ticket
+skills:
+  - rex-rancher-core
+  - rex-rancher-traps
+  - rex
+  - getty-perl-core
+  - kubernetes-rke2
+  - kubernetes-cilium-concepts
+  - kubernetes-gpu
+  - perl-io-k8s-kubernetes-classes
+  - kanban-issues-karr-ticket
 ---
 
 You are the rex-rancher-worker for **Rex::Rancher**, the Rex-based zero-touch RKE2/K3s
