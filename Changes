@@ -1,6 +1,7 @@
 Revision history for Rex-Rancher
 
 {{$NEXT}}
+  - Requires Kubernetes::REST 1.111.
   - New options node_ip and node_external_ip for install_server,
     install_agent, rancher_deploy_server and rancher_deploy_agent, written
     as node-ip / node-external-ip (a YAML list) to config.yaml on RKE2 and

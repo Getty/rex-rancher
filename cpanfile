@@ -3,7 +3,7 @@ requires 'HTTP::Tiny';
 requires 'IO::K8s', '1.112';
 requires 'IO::Socket::SSL';
 requires 'JSON::MaybeXS';
-requires 'Kubernetes::REST', '1.110';
+requires 'Kubernetes::REST', '1.111';
 requires 'Module::Runtime';
 requires 'Moo';
 requires 'namespace::autoclean';
