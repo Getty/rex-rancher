@@ -1,0 +1,18 @@
+---
+class: standard
+created: 2026-11-26T05:01:08Z
+id: 124
+priority: medium
+status: backlog
+tags:
+- gpu
+- upstream
+- rex-gpu
+title: 'Rex::GPU k100/k106: gpu => 1 can now die after the NVIDIA driver packages
+  are installed'
+updated: 2026-11-26T05:22:06Z
+---
+
+From Rex::GPU k100 and k106 (next Rex::GPU release, after 0.005). On Debian 12/13 and on the RHEL family open driver (cuda-open-dkms), gpu_setup now checks the installed driver branch against what the GPUs need, right after the package install (new setup step verify_driver_branch). It dies when a held package, a dnf version lock or an older module stream keeps an unsuitable branch. At that point the driver packages and the package source are installed, and there is no nouveau blacklist, no initramfs, no reboot and no container toolkit. With Rex::GPU k107 the read also runs on Ada and Hopper hosts (they get a minimum branch); there it dies only when the branch does not fit. To do here: Rex::Rancher error handling and the docs for gpu => 1 should say that the host was changed but is not GPU-ready, and that a retry only helps once the hold or lock is released. Not exercised against hardware on the Rex::GPU side.
+
+2026-11-26 05:22 Nachtrag aus Rex::GPU k107 (Commit 9660d33): Ada und Hopper brauchen jetzt Branch 520 oder neuer, 88 einzelne Turing- bis Hopper-IDs einen höheren. Ein Ada- oder Hopper-Host auf Debian 11 (non-free 470) oder auf einer Debian-Version ohne bekannten non-free-Branch (sid) bekam bisher non-free 470 und stirbt jetzt über gpu => 1 im plan, vor jedem Treiberpaket und ohne Änderung am Host. Auf Debian 12 (und auf 13 für 10de:2689, H200 NVL, H20 NVL16) bekommen IDs, deren Untergrenze über dem non-free-Branch liegt (z. B. RTX 4070 SUPER, H200), jetzt NVIDIAs CUDA-Repo mit dem Open-Modul statt non-free. Ubuntu, RHEL und openSUSE wählen wie bisher. Rancher-Doku für gpu => 1 auf Debian sollte das nennen.
